@@ -102,7 +102,7 @@
               "id": "switch",
               "type": "block",
               "size": {
-                "px": 252
+                "px": 330
               },
               "window_drag": true,
               "content": {
@@ -206,6 +206,16 @@
                   ]
                 }
               ]
+            },
+            {
+              "id": "work",
+              "type": "block",
+              "content": {
+                "mod": "bot-herdr",
+                "props": {
+                  "view": "work"
+                }
+              }
             },
             {
               "id": "settings",

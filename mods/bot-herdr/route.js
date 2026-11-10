@@ -5,6 +5,8 @@
 /** Our own commands. Any other `/word` at the start of a message goes to the agent as typed
  *  (Claude Code's /compact, Codex's /model, ...). */
 export const COMMANDS = [
+  { name: "task", hint: "Hand this to the team as a task" },
+  { name: "plan", hint: "Plan this with the team before building" },
   { name: "new", hint: "Start an agent with this message" },
   { name: "settings", hint: "Set up agents: harness, model and effort" },
   { name: "all", hint: "Send to every agent in this space" },
@@ -134,8 +136,9 @@ export function tokenFor(row) {
  * goes to the Orchestrator, starting one if the space has none.
  * Returns `{ error }` or `{ steps }`, each step one of
  *   { do: "send", address, text, files }   paste into a running agent and press Enter
- *   { do: "start", run, name, text, files, role? } a new tab running that agent, with this first
- *                                          message; role "orchestrator" makes it the Orchestrator
+ *   { do: "start", run, name, text, files, role?, entry? } a new tab running that agent, with this
+ *                                          first message; role "orchestrator" makes it the
+ *                                          Orchestrator, entry is its id in the roster
  *   { do: "interrupt", address }         the agent's stop key
  *   { do: "peek", address }              terminal.peek
  *   { do: "brief", address }             send the child-agent brief again
@@ -166,6 +169,11 @@ export function plan(content, ctx) {
   }
   if (command === "all") ids.push("all");
   if (command === "settings") return { steps: [{ do: "settings" }] };
+  // /task and /plan go to the Orchestrator (or whoever is named) marked, so it takes that track.
+  if (command === "task" || command === "plan") {
+    if (!text) return { error: `Say what to ${command} after /${command}.` };
+    text = `[${command}] ${text}`;
+  }
 
   const files = ctx.files ?? [];
 
@@ -200,7 +208,7 @@ export function plan(content, ctx) {
   return {
     steps: [
       ...unique.map((address) => ({ do: "send", address, text, files })),
-      ...starts.map((k) => ({ do: "start", run: k.run, name: k.name, text, files, ...(k.tab ? { tab: k.tab } : {}) })),
+      ...starts.map((k) => ({ do: "start", run: k.run, name: k.name, text, files, ...(k.tab ? { tab: k.tab } : {}), ...(k.entry ? { entry: k.entry } : {}) })),
     ],
   };
 }

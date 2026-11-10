@@ -75,8 +75,32 @@ export const MOTION = {
 export const ICON = (name) => `mods/bot-herdr/icons/${name}.svg`;
 
 /** A row's or chip's colour: our commands the accent, agents their program's tile. */
+/** Relative luminance of a #rrggbb colour (WCAG). */
+function luminance(hex) {
+  const m = /^#?([0-9a-f]{6})/i.exec(String(hex ?? ""));
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  const ch = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => {
+    const s = v / 255;
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2];
+}
+
+/**
+ * An agent's colour, if it reads on our surface; else the ink. herdr gives most agents a
+ * near-black tile, which vanishes on the dark theme.
+ */
+export function readable(c, color) {
+  const a = luminance(color);
+  const b = luminance(c.fill);
+  if (a === null || b === null) return c.ink;
+  const ratio = (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+  return ratio >= 3 ? color : c.ink;
+}
+
 export function tint(c, row) {
-  if (row?.color) return row.color;
+  if (row?.color) return readable(c, row.color);
   if (row?.tag === "start") return c.muted;
   return c.accent;
 }

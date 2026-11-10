@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { roster, argvOf, runnable, runningAs, effortsOf, blank, slug } from "../mods/bot-herdr/roster.js";
+import { roster, argvOf, runnable, runningAs, effortsOf, modelsOf, findAgent, parseModelList, blank, slug } from "../mods/bot-herdr/roster.js";
 import { replyFile, push, shown, isNew, outcome, KEEP, SHOWN } from "../mods/bot-herdr/feed.js";
 import { teamBrief, orchestratorBrief } from "../mods/bot-herdr/brief.js";
 
@@ -10,17 +10,38 @@ const known = [
   { key: "pi", name: "pi", run: ["pi"], installed: false },
 ];
 
-test("with nothing set up there is one Orchestrator on the first installed harness", () => {
-  assert.deepEqual(roster(undefined, known), [{ id: "orchestrator", name: "Orchestrator", harness: "claude", model: "", effort: "", args: "", lead: true }]);
+test("the six roles are always there, in order, on the first installed harness", () => {
+  const list = roster(undefined, known);
+  assert.deepEqual(list.map((a) => a.name), ["Orchestrator", "Design", "Dev", "QA", "Research", "Scout"]);
+  assert.deepEqual(list.map((a) => a.harness), Array(6).fill("claude"));
+  assert.deepEqual(list.map((a) => a.lead), [true, false, false, false, false, false]);
   assert.equal(roster(null, [])[0].harness, "claude");
 });
 
-test("exactly one agent leads", () => {
-  const two = roster([{ id: "a", name: "A", harness: "codex" }, { id: "b", name: "B", harness: "claude" }], known);
-  assert.deepEqual(two.map((a) => a.lead), [true, false]);
-  const both = roster([{ id: "a", name: "A", lead: true }, { id: "b", name: "B", lead: true }], known);
-  assert.deepEqual(both.map((a) => a.lead), [true, false]);
-  assert.deepEqual(roster([{ id: "a", name: "A" }, { id: "b", name: "B", lead: true }], known).map((a) => a.lead), [false, true]);
+test("saved choices stick to their role; own agents follow; an old lead becomes the Orchestrator", () => {
+  const list = roster([
+    { id: "x", role: "dev", name: "Backend person", harness: "codex", model: "gpt-6.1-sol", effort: "high" },
+    { id: "mine", role: "custom", name: "Reviewer", harness: "codex" },
+    { id: "old", name: "Boss", harness: "codex", lead: true },
+  ], known);
+  const dev = list.find((a) => a.role === "dev");
+  assert.equal(dev.name, "Dev"); // role names are fixed
+  assert.equal(dev.model, "gpt-6.1-sol");
+  assert.equal(list[0].harness, "codex"); // the old lead's choices
+  assert.equal(list[0].name, "Orchestrator");
+  assert.deepEqual(list.slice(6).map((a) => [a.name, a.role, a.lead]), [["Reviewer", "custom", false]]);
+  assert.equal(findAgent(list, "@backend")?.role, "dev");
+  assert.equal(findAgent(list, "frontend")?.role, "design");
+  assert.equal(findAgent(list, "reviewer")?.id, "mine");
+});
+
+test("models and effort levels come from the harness, and for Claude Code from the model", () => {
+  assert.ok(modelsOf("claude").some((m) => m.id === "claude-opus-5-5" && m.current));
+  assert.deepEqual(modelsOf("aider"), []);
+  assert.deepEqual(effortsOf("claude", "claude-opus-4-6"), ["low", "medium", "high", "max"]);
+  assert.deepEqual(effortsOf("claude", "something-else"), ["low", "medium", "high", "xhigh", "max"]);
+  assert.deepEqual(effortsOf("omp"), ["off", "minimal", "low", "medium", "high", "xhigh"]);
+  assert.deepEqual(parseModelList("provider   model            context\nanthropic  claude-opus-5-5  1M\nopenai     gpt-6.1-sol      400k\n"), ["anthropic/claude-opus-5-5", "openai/gpt-6.1-sol"]);
 });
 
 test("the command carries the model, the effort and the extra arguments in each harness's own flags", () => {
@@ -39,8 +60,9 @@ test("installed, running, new and named", () => {
   const agents = [{ address: "t1", space: "s1", tab_name: "Reviewer", seq: 3 }, { address: "t2", space: "s2", tab_name: "reviewer", seq: 1 }];
   assert.equal(runningAs({ name: "reviewer" }, agents, "s1").address, "t1");
   assert.equal(runningAs({ name: "Coder" }, agents, "s1"), null);
-  const next = blank([{ name: "Agent 2" }], known);
+  const next = blank([{ name: "Agent 1" }, { name: "Agent 2" }], known);
   assert.equal(next.name, "Agent 3");
+  assert.equal(next.role, "custom");
   assert.equal(next.harness, "claude");
   assert.equal(slug(" Code Reviewer! "), "code-reviewer");
 });

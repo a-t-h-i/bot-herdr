@@ -2,7 +2,7 @@
 // herdr-core, it may start child agents with `hc`, and exactly how. Pure text, tested.
 
 /** The terminal label that records an agent has had the brief. */
-export const BRIEFED = "bot-herdr.briefed2"; // 2: the brief now says where to write replies
+export const BRIEFED = "bot-herdr.briefed3"; // 3: roles, the team and the bh tool
 
 /**
  * The brief. `known` are the agents installed here (from herdr's `knownAgents()`), so the agent

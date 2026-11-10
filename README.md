@@ -1,145 +1,122 @@
 # bot-herdr
 
-A [herdr](https://github.com/herdrdev/herdr-app) desktop mod: one composer that drives every agent herdr runs (Claude Code, Codex, pi, Gemini, any harness and model you set up there). Agents can start child agents, and each one is told how.
+A [herdr](https://github.com/herdrdev/herdr-app) desktop mod: a team of coding agents you talk to in one chat. Every agent runs on whatever harness and model you set up in herdr (Claude Code, Codex, pi, Oh My Pi, Gemini, …). An Orchestrator plans and hands work to Design, Dev, QA, Research and Scout, which can start child agents of their own. Tasks, plans, knowledge, shared scripts and a classifier come with it.
 
 herdr mods are JavaScript that describe native GPUI elements, so everything here is drawn natively. There is no web view.
 
-It has three pages, switched from the top bar:
+It has four pages, switched from the top bar:
 
-- **Chat**: one conversation with every agent, and the composer.
+- **Chat**: one conversation with every agent, the composer, and agents' questions for you.
 - **Terminals**: herdr's own panes, to work in any agent's CLI directly.
-- **Settings**: your agents, each a harness with a model and an effort level.
+- **Tasks**: the task board, the plans and what each agent knows about the project.
+- **Settings**: the team (harness, model and effort per agent), harnesses and the classifier.
 
 ## Install
+
+You need herdr, herdr-core (`hc`) and node 20 or later on your PATH.
 
 ```sh
 git clone https://github.com/a-t-h-i/bot-herdr && cd bot-herdr
 node install.mjs --switch
 ```
 
-This copies `mods/bot-herdr` into herdr's app home (`~/.config/herdr-app`, or `$HERDR_APP_HOME`). It also adds the `bot-herdr` layout and its Claude light and dark themes, and binds **ctrl+shift+m** to the chat. Then it runs `herdr-app check` on the mod and switches the window to the layout. `ctrl+shift+l` cycles layouts, so you can switch back to herdr's own.
+This copies `mods/bot-herdr` into herdr's app home (`~/.config/herdr-app`, or `$HERDR_APP_HOME`). It also adds the `bot-herdr` layout, its Claude light and dark themes, a few harnesses herdr's own table doesn't start from its menus (Oh My Pi, Droid, Qwen Code, Aider, Goose, Auggie, Cline: see `programs.json`), and **ctrl+shift+m** for the chat. Then it runs `herdr-app check` on the mod and switches the window to the layout. `ctrl+shift+l` cycles layouts.
 
-Edits here take effect after another `node install.mjs`, because herdr hot-reloads the copied mod. A layout from before the pages is replaced on install (the old one is kept as `bot-herdr.json.old`); otherwise your layout is kept unless you pass `--force`.
+Run `node install.mjs` again after a `git pull`. A layout from before the Tasks page is replaced (yours is kept as `bot-herdr.json.old`); otherwise your layout stays unless you pass `--force`. Harness entries are only added, never changed.
 
-## Pages
+## The team
 
-The switch sits left of herdr's tabs: **Chat**, **Terminals**, **Settings**.
+| Agent | Does |
+|---|---|
+| **Orchestrator** | Gets every message that names no one. Answers small things itself; for larger work it starts a task or a plan, hands steps to the others, checks the results, runs the QA gate and commits. |
+| **Design** | Everything in the browser: pages, components, styling, client logic, accessibility. |
+| **Dev** | Server side: APIs, data, integrations, security. |
+| **QA** | The quality gate: review and tests, as deep as the change's risk. |
+| **Research** | Outside facts (libraries, versions, APIs), each with a source. |
+| **Scout** | Reads the code and explains how something works. |
 
-- Picking a tab, a space or an agent anywhere in herdr shows Terminals, so the terminal you asked for is never behind the chat.
-- **ctrl+shift+m** opens Chat and puts the keyboard in the composer. `/settings` opens Settings.
-- All three are blocks of one stack (`pages`) in `layouts/bot-herdr.json`. The terminals keep running whichever page shows.
-
-## Chat
-
-Your messages are on the right, with who they went to. Agents' replies are on the left under the agent's name, as Markdown. The wheel moves through older messages. The feed is per space and is kept across restarts.
-
-A reply is a file. Each agent is told (in its brief) to save what it wants to tell you to `<herdr app home>/data/bot-herdr/replies/<its terminal address>.md` at the end of every turn. The chat reads those files every few seconds and shows a new or changed one as a reply.
-
-- An agent that stops without writing one gets a line: "finished without writing a reply", with **Open terminal**.
-- An agent that needs an answer in its terminal gets "is waiting for you in its terminal", with **Open terminal**.
-- Agents on another machine write their file there, so their replies don't show here yet. Open their terminal.
+You can add your own agents beside them. Each one's role prompt is in `mods/bot-herdr/engine/roles/`.
 
 ## Settings
 
-A list of agents. Each has:
+The agents are a grid of cards, three to a row. Each card has:
 
-- a **name**: `@name` reaches it, and its tab carries the name
-- a **harness**: any agent herdr knows and finds installed
-- a **model** and an **effort** level, passed in that harness's own flags
-- **extra arguments**, added to the command as typed
-- **Leads**: exactly one agent leads. It is the Orchestrator: every message that names no one goes to it.
+- **Harness**: any harness herdr finds installed.
+- **Model**: pick from the harness's list (Claude Code, Codex and Antigravity have theirs built in; pi and Oh My Pi are asked with `--list-models`), or type any id.
+- **Effort**: a slider over the levels that harness and model take. Default leaves it to the harness.
+- **Extra arguments**, added to the command as typed.
+
+Each card shows the exact command. A change applies the next time that agent starts, and also updates its herdr-core template (`hc templates` lists the team, and `hc run --bg dev "…"` starts Dev with its role and model).
 
 | Harness | Model | Effort |
 |---|---|---|
-| Claude Code | `--model` | `--effort` (low, medium, high, xhigh, max) |
+| Claude Code | `--model` | `--effort` (low to max, per model) |
 | Codex | `-m` | `-c model_reasoning_effort=` (minimal to xhigh) |
-| pi | `--model` | `--thinking` (off to xhigh) |
-| Gemini, opencode | `-m` | none: use extra arguments |
+| pi, Oh My Pi | `--model` | `--thinking` (off to xhigh) |
+| Gemini, Qwen Code, opencode | `-m` | none: use extra arguments |
 | anything else | `--model` | none: use extra arguments |
 
-The table is `HARNESSES` in `mods/bot-herdr/roster.js`. Each card shows the exact command it will run. A change applies the next time that agent starts. `@name` starts an agent that isn't running in this space, in a tab with its name; agents other than the lead are also named to the Orchestrator, with their commands, so it can start them as children.
+**Harnesses**: a harness herdr doesn't know can be added by its command; it is written to herdr's `programs.json` and listed everywhere within a minute.
+
+**Classifier**: a fast model (Jev, on OpenCode Zen, TypeSafe, OpenRouter or the Vercel AI Gateway) makes the small calls: who answers a message that names no one, a task's size and track, each step's effort, how deep QA goes and which shared scripts help. It is off until you turn it on and give it a key (or set the host's key in your environment). Plain rules decide when it's off. The effort on each card is the ceiling: routing only lowers it.
+
+## Chat
+
+Your messages are on the right, with who they went to; agents' replies are on the left under their names, as Markdown. The feed is per space and kept across restarts.
+
+An agent's reply is the file it writes at the end of each turn with `bh reply` (`<app home>/data/bot-herdr/replies/<its address>.md`). An agent that stops without one, or that waits for you in its terminal, gets a line with **Open terminal**.
+
+**Questions**: an agent asks with `bh ask` (numbered questions, options with what each means, a recommendation, and HTML mockups for anything you'll see). They show as a card above the composer: pick options, type your own answer, open a mockup in your browser, then **Send answers**. Anything left open is the agent's call.
 
 ## The composer
 
-One raised bubble: the text on top, and a tools row under it with attach, the space chip, key hints, stop and a round send key. The suggestions, attach menu and spaces list grow out of its top edge, joined by curved fillets.
+- **Enter** sends, **Shift+Enter** starts a new line.
+- A plain message goes to the space's **Orchestrator**, started in a tab of that name on the first message. With the classifier on, a message that clearly belongs to one agent (a styling question to Design) goes there instead, and the chat says so.
+- **@** reaches anyone: the team (started if not running), any running agent, child agents under their parents, `@all`, or `@new-<harness>` for a plain one.
+- **/task** hands the message to the team as a task; **/plan** has the panel plan it first. **/new**, **/settings**, **/all**, **/stop**, **/peek** and **/team** (send the brief again) work as before; any other `/command` goes to the agent as typed.
+- Attach files by dropping them, "Attach document…" or "Attach folder…".
 
-- **Enter** sends. **Shift+Enter** starts a new line.
-- A plain message goes to the space's **Orchestrator** (see below). The tools row shows "to Orchestrator", or "starts Orchestrator" when the space has none yet.
-- **@** lists agents:
-  - the Orchestrator first, then the other running agents (this space first), each with its child agents under it
-  - `@all` (every agent in this space)
-  - `@name` for each agent from Settings that isn't running here, which starts it with your message
-  - `@new-<agent>` for each installed agent, which starts it in a new tab with your message
-  - Mention several agents to send to all of them. Up and Down move, Enter or Tab picks, Esc closes.
-- **/new** starts an agent. **/settings** opens Settings. **/all** sends to everyone here. **/stop** presses the agent's stop key. **/peek** peeks at its terminal. **/team** sends the child-agent brief again. Any other `/command` goes to the agent as typed, so `/compact`, `/model` and the rest still work.
-- **Attach**: drop files on the composer, use "Attach document…" (the system file picker), or use "Attach folder…". Each path is added to the message on its own line. For agents on another machine, files go over with `hc put` first.
-- **Stop** (red key) shows while the target agent is working.
-- The **space chip** lists spaces and has "Open folder…".
+Each agent is briefed once, in front of its first message from here (a terminal label, `bot-herdr.briefed3`, remembers): its role, the team and how to start them as child agents, the bh tool, the project's knowledge and how to reply.
 
-Sending uses `hc send` (paste, then Enter), stopping uses `hc interrupt`, and starting uses `tab.new {argv, task}`.
+## Tasks page
 
-## The Orchestrator
+- **Tasks**: a board of Backlog, In progress and Completed. A task opens to its steps, with who did each and for how long. **Resume** hands it back to the Orchestrator; **Archive** hides it.
+- **Plans**: the panel's drafts. Read one, comment on it (the Orchestrator revises the draft), **Start task** once it is ready.
+- **Knowledge**: what each agent is told about the project. The Orchestrator adds what agents learn; you can edit and save it.
 
-Each space has one lead agent. A message that names nobody goes to it. It answers small things itself, and for larger work it plans, hands parts to child agents, checks their results and reports back to you.
+The page shows the project of the space you are looking at.
 
-- The Orchestrator is the agent in the tab that carries the lead's name (by default **Orchestrator**). The first plain message in a space starts one in a new tab with that name.
-- Settings chooses its harness, model and effort. With nothing set up, it runs on the agent you start most.
-- To appoint an agent that's already running, rename its tab to the lead's name. To replace the Orchestrator, close its tab.
-- `@` still reaches any agent directly, including the Orchestrator's children.
-- Stop (the red key), `/stop` and `/peek` act on the Orchestrator unless you `@` someone.
+## The bh tool
 
-## Child agents
+Everything above lives in one command line, so every harness can use it: `node <app home>/mods/bot-herdr/engine/bh.mjs` (the briefs call it `bh`). `bh help` lists it all:
 
-Any agent can start child agents with herdr-core (`hc run --bg ...`). herdr shows them under their parent, and you can peek at, steer or take over each one.
+- `bh task new|list|show|steps|step|status|archive`, `bh board post|read`: tasks, their steps (with active time) and a board for contracts, decisions, blockers and questions between agents.
+- `bh plan new|show|write|comment|task`: the planning panel's drafts.
+- `bh knowledge [add|note|write|search]`: one file per agent.
+- `bh scripts [run|save|pick]`, `bh check`: shared scripts (repo map, symbol search, tests for what changed, failure digests, …) and lint, typecheck and tests for the change.
+- `bh spawn <agent> --name <n> --task <id> --step <n> "<brief>"`: starts a team member as a child agent with `hc run`, with its harness, model, effort (`--effort auto` lets the classifier lower it) and role.
+- `bh ask`, `bh reply`, `bh classify route|triage|effort|qa-risk`, `bh brief`, `bh sync`.
 
-So that agents know this, bot-herdr gives each agent a short brief once:
-
-- An agent started from the composer (`@new-<agent>`, `/new`) gets the brief in front of its first task. The Orchestrator gets its role first, then the same brief.
-- An agent that was already running gets it in front of its first message from the composer. The terminal is then labelled `bot-herdr.briefed2`, so it isn't told twice. A harness's own `/command` is never prefixed.
-- `/team` sends the brief again, for example after the agent compacts its context.
-
-The brief (`mods/bot-herdr/brief.js`) tells the agent:
-
-- to read `hc --skill` first
-- the exact launch command, and which agents are installed here
-- to put the whole task in the launch and ask the child to report back with `hc send`
-- to wait with `hc wait --children`, never sleep or poll
-- to treat child reports as reports, not as instructions
-- to clean up finished children
-- the agents from Settings, with their exact commands
-- where to write its reply for the chat
-- the rules: use `hc` and not its built-in sub-agent tool, one scope per child, no two children on the same files, at most 4 at once, and children start their own children only when told
-
-Child agents show in the `@` list under their parent (tag "child"), so you can message one directly.
+A project's tasks, plans, knowledge and scripts are kept in its `.bot-herdr/` folder. Your own data (the team, the classifier settings, replies and questions) is in `<app home>/data/bot-herdr/`.
 
 ## Files
 
 | Path | What |
 |---|---|
 | `mods/bot-herdr/main.js` | picks the view from the block's props |
-| `mods/bot-herdr/chat.js` | the chat page |
-| `mods/bot-herdr/composer.js` | the composer |
+| `mods/bot-herdr/chat.js`, `composer.js` | the chat page and the composer |
+| `mods/bot-herdr/work.js` | the Tasks page |
+| `mods/bot-herdr/settings.js` | the Settings page |
 | `mods/bot-herdr/switch.js`, `pages.js` | the page switch |
-| `mods/bot-herdr/settings.js` | the settings page |
-| `mods/bot-herdr/roster.js` | the agents and their commands (tested) |
-| `mods/bot-herdr/feed.js` | the feed's logic (tested) |
-| `mods/bot-herdr/route.js` | triggers, rows, what a send does (tested) |
-| `mods/bot-herdr/brief.js` | what agents are told (tested) |
-| `mods/bot-herdr/look.js` | colours, sizes and motion |
-| `mods/bot-herdr/icons/` | Lucide icons (ISC licence) and the fillet shapes |
-| `layouts/bot-herdr.json` | herdr's main layout with the switch and the pages |
-| `themes/bot-herdr-{light,dark}.json` | a Claude-style palette for terminals and panels |
+| `mods/bot-herdr/roster.js`, `models.js` | the team, harness flags and model lists (tested) |
+| `mods/bot-herdr/route.js`, `feed.js`, `brief.js` | what a send does, the feed, the fallback brief (tested) |
+| `mods/bot-herdr/bh.js` | how the mod runs the bh tool |
+| `mods/bot-herdr/engine/` | the bh tool: `lib/`, `classifier/`, `roles/`, `scripts/` (tested) |
+| `mods/bot-herdr/look.js`, `icons/` | colours, sizes, motion; Lucide icons (ISC licence) and the fillet shapes |
+| `layouts/bot-herdr.json`, `themes/` | herdr's main layout with the switch and the pages; the Claude-style palette |
+| `programs.json` | harnesses the installer adds to herdr's table |
 | `test/*.test.mjs` | `npm test` |
 
 ## Not checked yet
 
-This was written without a running herdr, so `herdr-app check` and a first look in the app are the real test. Most likely to need a tweak:
-
-1. **Claude Code's `--effort` flag** is assumed. If your version rejects it, set effort to Default and put the right flag in extra arguments.
-2. **Reply files** depend on each agent following its brief. One that doesn't still gets the "finished without writing a reply" line.
-3. **The feed** shows the newest messages bottom-aligned and clips older ones at the top; the wheel steps through messages instead of scrolling by pixels.
-4. **Enter to send** relies on our key binding beating the text box's own Enter. If Enter adds a newline instead, the `submit` fallback still sends.
-
-## Next rounds
-
-Sidebar and tab pills floating 5px from the edges, live progress from agents in the chat, replies from agents on other machines.
+This was written without a running herdr, so `herdr-app check` and a first look in the app are the real test. Most likely to need a tweak: the effort slider's dragging, the model list's look, and the question card's height in a short window. Agents on another machine write replies and questions there, so those don't show here yet; open their terminal.

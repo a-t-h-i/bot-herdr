@@ -37,8 +37,8 @@ for (const name of ["bot-herdr-light.json", "bot-herdr-dark.json"]) {
 console.log(`themes   ${join(appHome, "themes")}/bot-herdr-{light,dark}.json`);
 
 const layout = join(appHome, "layouts", "bot-herdr.json");
-// A layout from before the pages (chat, terminals, settings) can't show them: replace it.
-const old = existsSync(layout) && !readFileSync(layout, "utf8").includes('"id": "pages"');
+// A layout from before the pages (chat, terminals, tasks, settings) can't show them: replace it.
+const old = existsSync(layout) && !readFileSync(layout, "utf8").includes('"view": "work"');
 if (old) cpSync(layout, `${layout}.old`);
 if (!existsSync(layout) || old || args.has("--force")) {
   mkdirSync(dirname(layout), { recursive: true });
@@ -76,6 +76,39 @@ if (keys) {
   if (added) {
     writeFileSync(keysFile, JSON.stringify(keys, null, 2) + "\n");
     console.log(`keys     added ${added} to ${keysFile}`);
+  }
+}
+
+// Harnesses herdr's own table doesn't list, so they show in Settings: add each one you don't
+// have, and give an entry you have a way to start it if it has none. Nothing of yours is replaced.
+const programsFile = join(appHome, "programs.json");
+const extra = JSON.parse(readFileSync(join(here, "programs.json"), "utf8")).programs;
+let programs = { programs: {} };
+let programsOk = true;
+if (existsSync(programsFile)) {
+  try {
+    programs = JSON.parse(readFileSync(programsFile, "utf8"));
+    programs.programs ??= {};
+  } catch {
+    programsOk = false;
+    console.error(`programs ${programsFile} isn't valid JSON; left alone`);
+  }
+}
+if (programsOk) {
+  const added = [];
+  for (const [key, entry] of Object.entries(extra)) {
+    const mine = programs.programs[key];
+    if (!mine) {
+      programs.programs[key] = entry;
+      added.push(key);
+    } else if (!mine.run) {
+      mine.run = entry.run;
+      added.push(key);
+    }
+  }
+  if (added.length) {
+    writeFileSync(programsFile, JSON.stringify(programs, null, 2) + "\n");
+    console.log(`programs added ${added.join(", ")} to ${programsFile}`);
   }
 }
 

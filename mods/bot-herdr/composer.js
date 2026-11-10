@@ -20,12 +20,13 @@ import {
   shared, appHome, window as appWindow,
 } from "herdr";
 import { showPage, hold } from "./pages.js";
-import { LIGHT, DARK, SIZE, MOTION, ICON, tint, textWidth, rowsFor } from "./look.js";
+import { LIGHT, DARK, SIZE, MOTION, ICON, tint, readable, textWidth, rowsFor } from "./look.js";
 import {
   triggerAt, caretAfterEdit, slashRows, mentionRows, tokenFor, plan, orchestratorOf, withoutEnter, messageText,
 } from "./route.js";
 import { ROSTER_KEY, roster, argvOf, runnable, runningAs, slug } from "./roster.js";
-import { BRIEFED, teamBrief, orchestratorBrief, withBrief, briefed } from "./brief.js";
+import { BRIEFED, teamBrief, orchestratorBrief, briefed } from "./brief.js";
+import { bh, enc, projectDir, ROUTING_KEY } from "./bh.js";
 
 const PLACEHOLDER = "Write a message, run a command, or ask an agent";
 const CLEAR = "#00000000";
@@ -147,7 +148,7 @@ export class Composer {
       .map((a) => {
         const k = this.known.find((k) => k.key === a.harness);
         return {
-          key: `cfg:${a.id}`, name: a.name, handle: slug(a.name), run: argvOf(a, this.known), installed: true, tab: a.name, tile: k?.tile ?? null,
+          key: `cfg:${a.id}`, entry: a.id, name: a.name, handle: slug(a.name), run: argvOf(a, this.known), installed: true, tab: a.name, tile: k?.tile ?? null,
           hint: `Start ${a.name} · ${[k?.name ?? a.harness, a.model, a.effort].filter(Boolean).join(" · ")}`,
         };
       });
@@ -174,6 +175,46 @@ export class Composer {
       space: this.space()?.name,
       ...extra,
     };
+  }
+
+  /** The roster entry a running agent is: the Orchestrator, or the one whose tab carries its name. */
+  entryAt(address) {
+    if (this.target()?.address === address) return this.leadEntry();
+    const name = this.names()[address];
+    return name ? this.roster().find((a) => a.name === name) ?? null : null;
+  }
+
+  /**
+   * What an agent is told before its first message from here. A roster agent gets its role's
+   * brief from bh (the role, the team and how to start them, the project's knowledge, how to
+   * reply); any other agent, or when node can't run, brief.js's team brief.
+   */
+  async briefFor(entry, opts) {
+    if (entry) {
+      const r = await bh(["brief", slug(entry.name), "--mode", "lead"], { cwd: projectDir(this.space()) });
+      if (r.code === 0 && r.stdout.trim()) return r.stdout.trim();
+    }
+    return opts?.role === "orchestrator" ? orchestratorBrief(opts) : teamBrief(opts);
+  }
+
+  /**
+   * With the classifier on, a message that names no one may suit one agent better than the
+   * Orchestrator (a styling question → Design). Returns the steps to run and a note, or null.
+   */
+  async reroute(step) {
+    const r = await bh(["classify", "route", "--json", "--data", enc(step.text)], { cwd: projectDir(this.space()), timeout: 12000 });
+    let routed = null;
+    try {
+      routed = JSON.parse(r.stdout);
+    } catch {
+      return null;
+    }
+    const entry = this.roster().find((a) => a.role === routed?.route);
+    if (!entry || entry.lead || !runnable(entry, this.known)) return null;
+    const running = runningAs(entry, agents(), this.space()?.id ?? null);
+    const note = `To ${entry.name}: the classifier picked it${routed.probability ? ` (${Math.round(routed.probability * 100)}%)` : ""}.`;
+    if (running) return { note, steps: [{ do: "send", address: running.address, text: step.text, files: step.files }] };
+    return { note, steps: [{ do: "start", run: argvOf(entry, this.known), name: entry.name, tab: entry.name, entry: entry.id, text: step.text, files: step.files }] };
   }
 
   /** Agents we started carry the brief in their task: once one shows up, mark it as briefed. */
@@ -391,6 +432,18 @@ export class Composer {
 
   // ── Sending ────────────────────────────────────────────────────────────────────────────────
 
+  /** Sends text from another page (Resume on a task, a plan comment) as if typed here; a draft stays. */
+  sendText(text, cx) {
+    const draft = this.input.value();
+    this.input.set_value(text);
+    this.text = text;
+    this.send(cx);
+    if (draft) {
+      this.input.set_value(draft);
+      this.text = draft;
+    }
+  }
+
   send(cx) {
     if (this.sending) return;
     const content = this.input.content();
@@ -424,10 +477,22 @@ export class Composer {
     this.dismissed = null;
     this.sending = true;
     cx.notify();
+    // A plain message (no @, no /command) to the Orchestrator may go to one agent instead.
+    const first = result.steps[0];
+    const plain = !(content.tokens ?? []).length && !/^\s*\//.test(content.text) && result.steps.length === 1
+      && ((first.do === "send" && first.address === target?.address) || first.role === "orchestrator");
     cx.spawn(async (cx) => {
       const failed = [];
       const to = [];
-      for (const step of result.steps) {
+      let steps = result.steps;
+      if (plain && shared(ROUTING_KEY)) {
+        const routed = await this.reroute(first);
+        if (routed) {
+          steps = routed.steps;
+          this.say(routed.note, cx, "info");
+        }
+      }
+      for (const step of steps) {
         try {
           await this.runStep(step, all);
           if (step.do === "send") to.push({ address: step.address, name: this.nameOf(step.address) });
@@ -466,20 +531,22 @@ export class Composer {
       // Orchestrator's tab carries its name: that name is what makes it the Orchestrator.
       const space = this.space();
       const lead = step.role === "orchestrator";
+      const entry = lead ? this.leadEntry() : step.entry ? this.roster().find((a) => a.id === step.entry) ?? null : null;
+      const brief = await this.briefFor(entry, this.briefing({ role: step.role }));
       this.starts.push({ space: space?.id ?? null, before: new Set(agents().map((a) => a.address)), at: Date.now(), lead, name: step.tab ?? step.name });
       // Starting a tab moves herdr's focus; tell the page switch this was us, so it stays on Chat.
       hold();
       run("tab.new", {
         ...(step.tab ? { name: step.tab } : {}),
         argv: step.run,
-        task: withBrief(messageText(step.text, step.files), this.briefing({ role: step.role })),
+        task: `${brief}\n\n${messageText(step.text, step.files)}`.trimEnd(),
         space: space?.id,
       });
       return;
     }
     if (step.do === "brief") {
       const lead = this.target()?.address === step.address;
-      const text = lead ? orchestratorBrief(this.briefing()) : teamBrief(this.briefing({ self: step.address }));
+      const text = await this.briefFor(this.entryAt(step.address), this.briefing({ self: step.address, role: lead ? "orchestrator" : null }));
       const r = await hc(["send", step.address, text]);
       if (r.code !== 0) throw new Error(`Couldn't brief ${name}: ${(r.stderr || r.stdout).trim()}`);
       await this.markBriefed(step.address);
@@ -500,7 +567,7 @@ export class Composer {
     const brief = !body.startsWith("/") && this.needsBrief(step.address);
     // A tab the person named "Orchestrator" themselves gets the Orchestrator's brief here.
     const role = this.target()?.address === step.address ? "orchestrator" : null;
-    const r = await hc(["send", step.address, brief ? withBrief(body, this.briefing({ self: step.address, role })) : body]);
+    const r = await hc(["send", step.address, brief ? `${await this.briefFor(this.entryAt(step.address), this.briefing({ self: step.address, role }))}\n\n${body}` : body]);
     if (r.code === 0 && brief) await this.markBriefed(step.address);
     if (r.code !== 0) {
       const why = (r.stderr || r.stdout).trim();
@@ -554,12 +621,12 @@ export class Composer {
       .w(width)
       .text_color(c.ink)
       // Painted first, so the pane above (painted after) covers the box's top edge where they join.
-      .child(this.box(c, width))
+      .child(this.box(c, width, Boolean(menu)))
       .when(Boolean(menu), (el) => el.child(menu));
   }
 
   // The composer box: attachments, the text, the tools row.
-  box(c, width) {
+  box(c, width, joined = false) {
     const target = this.target();
     const busy = target?.status === "working";
     const empty = !this.text.trim() && !this.files.length;
@@ -581,8 +648,9 @@ export class Composer {
       .shadow_md()
       .on_drop((e, cx) => this.addFiles(e.paths, cx))
       .on_mouse_down("left", () => this.input.focus())
-      // The bevel: a lit top edge inside the outline.
-      .child(div().absolute().top(0).left(SIZE.radius).right(SIZE.radius).h(1).bg(c.rim))
+      // The bevel: a lit top edge inside the outline. Not while a pane is joined on top: it
+      // would draw a line across the join.
+      .when(!joined, (el) => el.child(div().absolute().top(0).left(SIZE.radius).right(SIZE.radius).h(1).bg(c.rim)))
       .when(this.files.length > 0, (el) => el.child(this.filesRow(c)))
       .child(
         div()
@@ -615,7 +683,7 @@ export class Composer {
 
   chip(c, token) {
     const agent = token.id.startsWith("agent:") ? agents().find((a) => a.address === token.id.slice(6)) : null;
-    const color = agent?.program?.tile ?? (token.id.startsWith("start:") ? c.muted : c.accent);
+    const color = agent?.program?.tile ? readable(c, agent.program.tile) : token.id.startsWith("start:") ? c.muted : c.accent;
     return h_flex()
       .px(6)
       .h(20)

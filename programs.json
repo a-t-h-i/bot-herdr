@@ -1,0 +1,11 @@
+{
+  "programs": {
+    "omp": { "name": "Oh My Pi", "run": ["omp"], "match": ["oh-my-pi"], "tile": "#1c1d21", "color": "#ffffff" },
+    "droid": { "name": "Droid", "run": ["droid"], "match": ["factory-droid"], "tile": "#1c1d21", "color": "#ffffff" },
+    "qwen": { "name": "Qwen Code", "run": ["qwen"], "match": ["qwen-code"], "tile": "#1c1d21", "color": "#ffffff" },
+    "aider": { "name": "Aider", "run": ["aider"], "tile": "#1c1d21", "color": "#ffffff" },
+    "goose": { "name": "Goose", "run": ["goose"], "tile": "#1c1d21", "color": "#ffffff" },
+    "auggie": { "name": "Auggie", "run": ["auggie"], "tile": "#1c1d21", "color": "#ffffff" },
+    "cline": { "name": "Cline", "run": ["cline"], "tile": "#1c1d21", "color": "#ffffff" }
+  }
+}

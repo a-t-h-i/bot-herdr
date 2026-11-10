@@ -1,0 +1,46 @@
+// Each harness's own models, newest first (current ones before older ones). For Claude Code,
+// the effort levels each model takes. From a model manifest dated 2026-10-21T06:20:00Z; any other id
+// can still be typed in Settings.
+
+export const MODELS = {
+  claude: [
+    {"id": "claude-opus-5-5", "name": "Claude Opus 5.5", "current": true, "efforts": ["low", "medium", "high", "xhigh", "max"]},
+    {"id": "claude-sonnet-5-5", "name": "Claude Sonnet 5.5", "current": true, "efforts": ["low", "medium", "high", "xhigh", "max"]},
+    {"id": "claude-fable-5-1", "name": "Claude Fable 5.1", "current": true, "efforts": ["low", "medium", "high", "xhigh", "max"]},
+    {"id": "claude-fable-5", "name": "Claude Fable 5", "current": false, "efforts": ["low", "medium", "high", "xhigh", "max"]},
+    {"id": "claude-opus-5", "name": "Claude Opus 5", "current": false, "efforts": ["low", "medium", "high", "xhigh", "max"]},
+    {"id": "claude-opus-4-8", "name": "Claude Opus 4.8", "current": false, "efforts": ["low", "medium", "high", "xhigh", "max"]},
+    {"id": "claude-opus-4-7", "name": "Claude Opus 4.7", "current": false, "efforts": ["low", "medium", "high", "xhigh", "max"]},
+    {"id": "claude-opus-4-6", "name": "Claude Opus 4.6", "current": false, "efforts": ["low", "medium", "high", "max"]},
+    {"id": "claude-opus-4-5", "name": "Claude Opus 4.5", "current": false, "efforts": ["low", "medium", "high", "max"]},
+    {"id": "claude-sonnet-5", "name": "Claude Sonnet 5", "current": false, "efforts": ["low", "medium", "high", "xhigh", "max"]},
+    {"id": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6", "current": false, "efforts": ["low", "medium", "high", "max"]},
+    {"id": "claude-haiku-5-5", "name": "Claude Haiku 5.5", "current": true, "efforts": ["low", "medium", "high", "xhigh", "max"]},
+    {"id": "claude-haiku-4-5", "name": "Claude Haiku 4.5", "current": false, "efforts": []},
+  ],
+  codex: [
+    {"id": "gpt-6.1-sol", "name": "GPT-6.1 Sol", "current": true},
+    {"id": "gpt-6-astra", "name": "GPT-6 Astra", "current": true},
+    {"id": "gpt-6-luna", "name": "GPT-6 Luna", "current": true},
+    {"id": "gpt-6-sol", "name": "GPT-6 Sol", "current": false},
+    {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol", "current": false},
+    {"id": "gpt-5.6-terra", "name": "GPT-5.6 Terra", "current": false},
+    {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna", "current": false},
+    {"id": "gpt-5.5", "name": "GPT-5.5", "current": false},
+    {"id": "gpt-5.4-mini", "name": "GPT-5.4 Mini", "current": false},
+    {"id": "gpt-5.3-codex-spark", "name": "GPT-5.3 Codex Spark", "current": false},
+  ],
+  antigravity: [
+    {"id": "gemini-3.8-flash-high", "name": "Gemini 3.8 Flash (High)", "current": true},
+    {"id": "gemini-3.8-flash-medium", "name": "Gemini 3.8 Flash (Medium)", "current": true},
+    {"id": "gemini-3.8-flash-low", "name": "Gemini 3.8 Flash (Low)", "current": true},
+    {"id": "gemini-3.7-flash-high", "name": "Gemini 3.7 Flash (High)", "current": false},
+    {"id": "gemini-3.7-flash-medium", "name": "Gemini 3.7 Flash (Medium)", "current": false},
+    {"id": "gemini-3.7-flash-low", "name": "Gemini 3.7 Flash (Low)", "current": false},
+    {"id": "gemini-3.6-flash-high", "name": "Gemini 3.6 Flash (High)", "current": false},
+    {"id": "gemini-3.6-flash-medium", "name": "Gemini 3.6 Flash (Medium)", "current": false},
+    {"id": "gemini-3.6-flash-low", "name": "Gemini 3.6 Flash (Low)", "current": false},
+    {"id": "gemini-pro-agent", "name": "Gemini 3.1 Pro (High)", "current": false},
+    {"id": "gemini-3.1-pro-low", "name": "Gemini 3.1 Pro (Low)", "current": false},
+  ],
+};

@@ -7,13 +7,17 @@
 // answer in its terminal, gets a line here with a way to its terminal.
 
 import { div, svg } from "gpui-kit";
-import { v_flex, h_flex, TextView } from "gpui-base";
+import { v_flex, h_flex, TextView, InputState, Input } from "gpui-base";
 import { agents, terminals, spaces, focused, settings, shared, readTextFile } from "herdr";
 import * as fs from "fs/promises";
-import { LIGHT, DARK, SIZE, ICON } from "./look.js";
+import { LIGHT, DARK, SIZE, ICON, readable } from "./look.js";
 import { Composer, outboxDir } from "./composer.js";
-import { FOCUS, activePage, openTerminal } from "./pages.js";
+import { FOCUS, OUTGOING, activePage, openTerminal } from "./pages.js";
 import { replyFile, push, shown, isNew, outcome, clock } from "./feed.js";
+import { bh, enc } from "./bh.js";
+
+/** Where agents' questions for the person wait (bh ask writes them; answered ones move aside). */
+const questionsDir = () => `${outboxDir().replace(/\/replies$/, "")}/questions`;
 
 const POLL_MS = 2500;
 const WHEEL_STEP = 70; // px of wheel per entry
@@ -42,8 +46,13 @@ export class Chat {
     this.back = 0; // entries scrolled up from the newest
     this.wheel = 0;
     this.focusAt = shared(FOCUS) ?? 0;
+    this.outAt = shared(OUTGOING)?.at ?? 0; // the last message another page asked us to send
     this.page = null;
     this.reading = false;
+    this.questions = []; // open questions from agents, oldest first (bh ask)
+    this.qfiles = {}; // file name → its question, read once
+    this.answers = {}; // question id → [{ picks: [labels], text: InputState }] per question
+    this.answering = null; // the question id being sent
     this.composer = new Composer({
       sent: (message, cx) => this.sent(message, cx),
       born: (address, name) => this.expect(address, name),
@@ -138,9 +147,79 @@ export class Chat {
           }
           if (status !== "blocked") wait.blocked = false;
         }
+        await this.readQuestions(cx);
       } finally {
         this.reading = false;
       }
+    });
+  }
+
+  /** Reads new question files; a file that went (answered) drops its card. */
+  async readQuestions(cx) {
+    let names = [];
+    try {
+      names = (await fs.readdir(questionsDir())).map((d) => (typeof d === "string" ? d : d.name)).filter((n) => /^q-.*\.json$/.test(n));
+    } catch {
+      names = [];
+    }
+    let changed = false;
+    for (const name of names) {
+      if (name in this.qfiles) continue;
+      let q = null;
+      try {
+        q = JSON.parse((await readTextFile(`${questionsDir()}/${name}`)) ?? "null");
+      } catch {
+        q = null;
+      }
+      this.qfiles[name] = q?.status === "open" ? q : null;
+      if (q?.status === "open") {
+        this.answers[q.id] = q.questions.map(() => ({ picks: [], text: InputState.new({ placeholder: "Or answer in your own words" }) }));
+      }
+      changed = true;
+    }
+    for (const name of Object.keys(this.qfiles)) {
+      if (names.includes(name)) continue;
+      delete this.qfiles[name];
+      changed = true;
+    }
+    if (!changed) return;
+    this.questions = Object.values(this.qfiles).filter(Boolean).sort((a, b) => String(a.created).localeCompare(String(b.created)));
+    cx.notify();
+  }
+
+  pick(q, i, label, cx) {
+    const a = this.answers[q.id]?.[i];
+    if (!a) return;
+    if (q.questions[i].multi) a.picks = a.picks.includes(label) ? a.picks.filter((x) => x !== label) : [...a.picks, label];
+    else a.picks = a.picks[0] === label ? [] : [label];
+    cx.notify();
+  }
+
+  submit(q, cx) {
+    if (this.answering) return;
+    const answers = (this.answers[q.id] ?? []).map((a) => ({ picks: a.picks, text: a.text.value().trim() }));
+    this.answering = q.id;
+    cx.notify();
+    cx.spawn(async (cx) => {
+      const r = await bh(["answer", q.id, "--json", "--data", enc(answers)]);
+      this.answering = null;
+      let sent = null;
+      try {
+        sent = JSON.parse(r.stdout);
+      } catch {
+        sent = null;
+      }
+      if (r.code !== 0 || !sent) {
+        this.add({ kind: "note", text: `Couldn't send your answers: ${(r.stderr || r.stdout || "node didn't run").trim().split("\n")[0]}` }, cx);
+        return;
+      }
+      const who = q.fromName ?? this.composer.nameOf(q.from);
+      const summary = q.questions.map((x, i) => `${i + 1}. ${[answers[i].picks.join(", "), answers[i].text].filter(Boolean).join(" — ") || "your call"}`).join("\n");
+      this.add({ kind: "me", text: summary, files: [], to: [who] }, cx);
+      if (!sent.ok) this.add({ kind: "note", text: `Saved, but ${who} didn't get them: ${sent.error}`, address: q.from }, cx);
+      this.questions = this.questions.filter((x) => x.id !== q.id);
+      for (const [name, x] of Object.entries(this.qfiles)) if (x?.id === q.id) this.qfiles[name] = null;
+      cx.notify();
     });
   }
 
@@ -153,6 +232,11 @@ export class Chat {
     if (stamp !== this.focusAt || (page === "chat" && this.page !== "chat" && this.page !== null)) this.composer.focus();
     this.focusAt = stamp;
     this.page = page;
+    const out = shared(OUTGOING);
+    if (out?.at > this.outAt) {
+      this.outAt = out.at;
+      cx.timer.after(1, (cx) => this.composer.sendText(String(out.text ?? ""), cx));
+    }
 
     const c = settings().dark ? DARK : LIGHT;
     const width = Math.max(320, Math.min(SIZE.maxWidth, this.size.width - SIZE.gutter * 2));
@@ -184,8 +268,8 @@ export class Chat {
           .justify_end()
           .items_center()
           .on_scroll_wheel((e, cx) => this.scroll(e, view.total, cx))
-          .when(view.total === 0, (el) => el.child(this.empty(c, width)))
-          .when(view.total > 0, (el) =>
+          .when(view.total === 0 && !this.questions.length, (el) => el.child(this.empty(c, width)))
+          .when(view.total > 0 || this.questions.length > 0, (el) =>
             el.child(
               v_flex()
                 .flex_none()
@@ -194,6 +278,7 @@ export class Chat {
                 .pt(16)
                 .children(view.list.map((e) => this.entry(c, e, width)))
                 .when(view.back > 0, (col) => col.child(this.newer(c, view.back)))
+                .children(this.questions.map((q) => this.question(c, q, width, this.size.height - foot - 32)))
                 .when(view.back === 0 && working.length > 0, (col) => col.child(this.working(c, working))),
             )),
       )
@@ -274,7 +359,7 @@ export class Chat {
           .gap(8)
           .items_center()
           // Agents are named in their own colour, no icon and no dot.
-          .child(div().text_size(12.5).font_semibold().text_color(e.from?.tile ?? c.accent).child(e.from?.name ?? "Agent"))
+          .child(div().text_size(12.5).font_semibold().text_color(e.from?.tile ? readable(c, e.from.tile) : c.accent).child(e.from?.name ?? "Agent"))
           .child(div().text_size(11).text_color(c.faint).child(clock(e.at)))
           .child(div().flex_1())
           .child(this.link(c, `bh-open-${e.id}`, "Open terminal", () => openTerminal(e.from.address))),
@@ -300,6 +385,146 @@ export class Chat {
       .text_color(c.muted)
       .child(div().child(e.text))
       .when(Boolean(e.address), (el) => el.child(this.link(c, `bh-open-${e.id}`, "Open terminal", () => openTerminal(e.address))));
+  }
+
+  /** An agent's questions: options to pick (with mockups to open), your own words, one Send. */
+  question(c, q, width, most) {
+    const who = q.fromName ?? this.composer.nameOf(q.from);
+    const tile = this.live().find((a) => a.address === q.from)?.tile ?? null;
+    const sending = this.answering === q.id;
+    return v_flex()
+      .id(`bh-q-${q.id}`)
+      .flex_none()
+      .w(width)
+      .max_h(Math.max(240, most))
+      .overflow_y_scroll()
+      .p(14)
+      .gap(14)
+      .rounded(SIZE.radius)
+      .bg(c.fill)
+      .border_1()
+      .border_color(c.edge)
+      .child(
+        h_flex()
+          .gap(8)
+          .items_center()
+          .child(div().text_size(12.5).font_semibold().text_color(tile ? readable(c, tile) : c.accent).child(who))
+          .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(c.muted).child(q.title && q.title !== "Questions" ? `asks about ${q.title}` : "has questions"))
+          .child(this.link(c, `bh-q-open-${q.id}`, "Open terminal", () => openTerminal(q.from))),
+      )
+      .when(Boolean(q.intro), (el) => el.child(div().text_size(13.5).line_height(SIZE.line).child(TextView.markdown(`bh-q-intro-${q.id}`, q.intro))))
+      .children(q.questions.map((x, i) => this.ask(c, q, x, i)))
+      .child(
+        h_flex()
+          .gap(10)
+          .items_center()
+          .child(
+            div()
+              .id(`bh-q-send-${q.id}`)
+              .flex_none()
+              .h(32)
+              .px(14)
+              .flex()
+              .items_center()
+              .rounded(SIZE.control)
+              .bg(c.accent)
+              .border_b(1)
+              .border_color(c.accentLip)
+              .text_size(13)
+              .font_medium()
+              .text_color(c.accentInk)
+              .cursor_pointer()
+              .hover((s) => s.opacity(0.92))
+              .on_click((_e, cx) => this.submit(q, cx))
+              .child(sending ? "Sending…" : "Send answers"),
+          )
+          .child(div().text_size(12).text_color(c.faint).child("Anything left open is the agent's call.")),
+      );
+  }
+
+  ask(c, q, x, i) {
+    const a = this.answers[q.id]?.[i] ?? { picks: [], text: null };
+    return v_flex()
+      .gap(6)
+      .child(
+        h_flex()
+          .gap(6)
+          .items_start()
+          .child(div().flex_1().min_w(0).text_size(14).font_semibold().line_height(SIZE.line).child(`${i + 1}. ${x.text}`))
+          .when(Boolean(x.seat), (el) => el.child(div().flex_none().pt(2).text_size(11).text_color(c.faint).child(String(x.seat).toUpperCase()))),
+      )
+      .when(Boolean(x.multi), (el) => el.child(div().text_size(11.5).text_color(c.faint).child("Pick any that apply.")))
+      .children(x.options.map((o, oi) => {
+        const on = a.picks.includes(o.label);
+        return h_flex()
+          .id(`bh-q-${q.id}-${i}-${oi}`)
+          .min_h(36)
+          .px(10)
+          .py(6)
+          .gap(10)
+          .items_center()
+          .rounded(SIZE.control)
+          .border_1()
+          .border_color(on ? c.accent : c.edge)
+          .when(on, (el) => el.bg(c.well))
+          .cursor_pointer()
+          .hover((s) => s.bg(c.hover))
+          .on_click((_e, cx) => this.pick(q, i, o.label, cx))
+          .child(
+            div()
+              .flex_none()
+              .size(16)
+              .flex()
+              .items_center()
+              .justify_center()
+              .rounded(x.multi ? 4 : 8)
+              .border_1()
+              .border_color(on ? c.accent : c.faint)
+              .when(on, (el) => el.bg(c.accent).child(svg(ICON("check")).size(11).text_color(c.accentInk))),
+          )
+          .child(
+            v_flex()
+              .flex_1()
+              .min_w(0)
+              .child(h_flex().gap(6).items_center()
+                .child(div().text_size(13).font_medium().child(o.label))
+                .when(Boolean(o.recommended), (el) => el.child(div().text_size(11).text_color(c.accent).child("Recommended"))))
+              .when(Boolean(o.meaning), (el) => el.child(div().text_size(12.5).text_color(c.muted).child(o.meaning))),
+          )
+          .when(Boolean(o.mockupFile), (el) => el.child(
+            h_flex()
+              .id(`bh-q-mock-${q.id}-${i}-${oi}`)
+              .flex_none()
+              .h(24)
+              .px(8)
+              .gap(5)
+              .items_center()
+              .rounded(6)
+              .text_size(11.5)
+              .text_color(c.muted)
+              .hover((s) => s.bg(c.fill).text_color(c.ink))
+              .on_click((_e, cx) => {
+                cx.stop_propagation();
+                cx.spawn(async () => {
+                  await bh(["open", o.mockupFile]);
+                });
+              })
+              .child(svg(ICON("external-link")).size(12))
+              .child("Mockup"),
+          ));
+      }))
+      .when(Boolean(a.text), (el) => el.child(
+        div()
+          .h(32)
+          .px(10)
+          .flex()
+          .items_center()
+          .rounded(SIZE.control)
+          .bg(c.ground)
+          .border_1()
+          .border_color(c.edge)
+          .child(Input.new(a.text).w_full().h_full().text_size(13).text_color(c.ink)),
+      ));
   }
 
   link(c, id, label, onClick) {
