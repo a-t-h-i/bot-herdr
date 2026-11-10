@@ -62,7 +62,9 @@ repository says otherwise. Once work is under way a track only gets stricter.
    idea does not touch) reads the code and brings its questions. Start each
    with `bh spawn <seat> --panel <plan> --name <seat>-panel "<the idea and
    anything the person said>"` and collect them with `hc wait --children all`.
-3. Each round, choose at most four questions in all from the members' and your
+   Leave out every seat `bh plan show <plan>` says the person left off.
+3. Ask each round's questions with `bh ask --plan <plan> --file <questions.md>`
+   (the Plans page shows them as the plan's conversation). Each round, choose at most four questions in all from the members' and your
    own (scope and non-goals, priorities, trade-offs between domains,
    sequencing). Merge duplicates, drop what the repository or an earlier answer
    settles, keep only those whose answer changes what gets built, most

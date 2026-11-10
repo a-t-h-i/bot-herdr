@@ -37,6 +37,7 @@ Plans
   bh plan write <id> --file draft.md [--status grilling|ready]
   bh plan comment <id> [--line N] "<text>"     bh plan resolve <id>
   bh plan task <id>               (a task from the plan's steps)     bh plan archive <id>
+  bh plan seat <id> <seat> --off|--on   (the person leaves a panel seat out, or brings it back)
 
 Knowledge (one file per agent)
   bh knowledge [<agent>]          bh knowledge list       bh knowledge search "<words>"
@@ -49,7 +50,7 @@ Scripts
   bh check [--base <ref>]         lint, typecheck and tests for what changed
 
 The person
-  bh ask --file questions.md [--title T]      (or: bh ask "<question>" --option "A — meaning" --option "B")
+  bh ask --file questions.md [--title T] [--plan <id>]      (or: bh ask "<question>" --option "A — meaning" --option "B")
   bh reply "<markdown>"  |  bh reply --file reply.md       your reply in the bot-herdr chat
 
 The team
@@ -197,9 +198,21 @@ async function main(argv) {
       if (sub === "list") return out(flags, P.listPlans(root, { all: Boolean(flags.all) }), (l) => l.map(P.planLine).join("\n") || "No plans yet.");
       const id = need(args[0], `bh plan ${sub} <id>`);
       const plan = P.loadPlan(root, id);
+      if (sub === "seat") {
+        // The person leaves a panel seat out of this plan, or brings it back.
+        personOnly("The panel's seats");
+        const seat = need(args[1], "bh plan seat <id> <seat> --off|--on").toLowerCase();
+        const off = new Set(plan.off ?? []);
+        if (flags.on) off.delete(seat);
+        else off.add(seat);
+        plan.off = [...off];
+        P.savePlan(root, plan);
+        return out(flags, { off: plan.off }, (x) => `Seats left out: ${x.off.join(", ") || "none"}.`);
+      }
       if (sub === "show") {
         const open = P.openComments(plan);
-        return out(flags, plan, (p) => `${P.planLine(p)}\n\n${p.markdown || "(no draft yet)"}${open.length ? `\n## Open comments from the person\n${open.map((x) => `- ${x.line ? `line ${x.line} ("${x.quote}")` : "the plan"}: ${x.text}`).join("\n")}` : ""}`);
+        plan.asked = Q.forPlan(plan.id);
+        return out(flags, plan, (p) => `${P.planLine(p)}${p.off?.length ? `\nThe person left these seats off the panel: ${p.off.join(", ")}.` : ""}\n\n${p.markdown || "(no draft yet)"}${open.length ? `\n## Open comments from the person\n${open.map((x) => `- ${x.line ? `line ${x.line} ("${x.quote}")` : "the plan"}: ${x.text}`).join("\n")}` : ""}`);
       }
       if (sub === "write") {
         P.writeDraft(plan, need(bodyText(flags, args.slice(1)), "bh plan write <id> --file draft.md"), { status: flags.status, title: flags.title });
@@ -299,7 +312,7 @@ async function main(argv) {
       }
       const from = flags.as ?? myAddress();
       if (!from) throw new Error("bh ask needs to know who is asking: run it in a herdr terminal (HC_TERMINAL_ID), or pass --as <address>.");
-      const q = Q.ask({ title: flags.title ?? null, intro: parsed.intro, questions: parsed.questions, from, fromName: flags.from ?? null, cwd: root });
+      const q = Q.ask({ title: flags.title ?? null, intro: parsed.intro, questions: parsed.questions, from, fromName: flags.from ?? null, cwd: root, plan: typeof flags.plan === "string" ? flags.plan : null });
       return out(flags, q, () => `Asked (${q.id}, ${q.questions.length} question${q.questions.length === 1 ? "" : "s"}). The person answers in the bot-herdr chat; the answers come to you as a message. End your turn now.`);
     }
 

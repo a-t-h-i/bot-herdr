@@ -97,6 +97,9 @@ export class Work {
     this.busy = false;
     this.problem = null;
     this.comment = InputState.new({ placeholder: "Comment on this plan; the Orchestrator revises it" });
+    this.idea = InputState.new({ placeholder: "What should the team plan?" });
+    this.idea.on("submit", (_e, cx) => this.startPlan(cx));
+    this.showPrevious = false; // the Plans page's list of plans, from the rail
     this.comment.on("submit", (_e, cx) => this.sendComment(cx));
     // A comment on one line of a plan, or one step of a task: { kind: "plan" | "task", id, at }.
     this.commenting = null;
@@ -134,7 +137,7 @@ export class Work {
         }
         if (this.tab === "plans") {
           this.plans = (await bhJson(["plan", "list", "--all"], { cwd: dir })) ?? [];
-          const id = this.planId ?? this.plans.find((p) => p.status !== "archived")?.id ?? null;
+          const id = this.planId === "__new" ? null : this.planId ?? this.plans.find((p) => p.status !== "archived")?.id ?? null;
           this.plan = id ? await bhJson(["plan", "show", id], { cwd: dir }) : null;
         }
         if (this.tab === "knowledge") {
@@ -649,38 +652,189 @@ export class Work {
 
   // Plans
 
+  /**
+   * The Plans page, as the planning session: your idea, then the panel's questions with your
+   * answers, then the draft to comment on line by line. A rail at the right has the round, the
+   * panel's seats (click one to leave it out) and the actions; Previous lists the other plans.
+   */
   plansView(c, width) {
     if (this.plans === null) return this.empty(c, "Loading…", "");
-    if (!this.plans.length) return this.empty(c, "No plans yet", "Type /plan and an idea in the chat. The Orchestrator and the panel (Dev, Design, QA, Research) ask what they need, then write the plan here for you to read and comment on.");
-    const listW = 260;
     const p = this.plan;
+    if (!this.plans.length || !p) {
+      if (!this.plans.length) return this.planIntro(c, width);
+      return h_flex().gap(GAP).items_start().child(this.previousList(c, 250, p)).child(this.planIntro(c, width - 250 - GAP));
+    }
+    const railW = 52;
+    const listW = this.showPrevious ? 250 : 0;
+    const mainW = Math.min(780, width - railW - GAP - (listW ? listW + GAP : 0));
     return h_flex()
       .gap(GAP)
       .items_start()
-      .child(
+      .when(listW > 0, (el) => el.child(this.previousList(c, listW, p)))
+      .child(div().flex_1())
+      .child(v_flex()
+        .id(`bh-plan-main-${p.id}`)
+        .flex_none()
+        .w(mainW)
+        .h(Math.max(300, this.height - 110))
+        .overflow_y_scroll()
+        .gap(14)
+        .pb(24)
+        .child(this.planConversation(c, p, mainW))
+        .child(this.planDoc(c, p, mainW)))
+      .child(div().flex_1())
+      .child(this.planRail(c, p, railW));
+  }
+
+  /** Before any plan: one line asking what to plan, and a box that starts it. */
+  planIntro(c, width) {
+    return v_flex()
+      .w(width)
+      .pt(80)
+      .items_center()
+      .gap(8)
+      .child(div().text_size(17).font_semibold().child("What are we planning?"))
+      .child(div().text_size(13).text_color(c.muted).child("Describe it. The Orchestrator and the panel (Dev, Design, QA, Research) ask what they need, then draft the plan here."))
+      .child(h_flex().mt(10).w(Math.min(560, width)).gap(8).items_center()
+        .child(this.inputBox(c, this.idea))
+        .child(this.button(c, "bh-plan-go", "Plan it", (_e, cx) => this.startPlan(cx))));
+  }
+
+  startPlan(cx) {
+    const idea = this.idea.value().trim();
+    if (!idea) return;
+    this.idea.set_value("");
+    sendFromChat(`/plan ${idea}`);
+    cx.notify();
+  }
+
+  previousList(c, w, p) {
+    return v_flex()
+      .flex_none()
+      .w(w)
+      .gap(4)
+      .child(div().px(10).pb(2).text_size(12).font_semibold().text_color(c.muted).child("Plans"))
+      .children(this.plans.map((x) =>
         v_flex()
+          .id(`bh-plan-${x.id}`)
+          .px(10)
+          .py(8)
+          .gap(2)
+          .rounded(SIZE.control)
+          .cursor_pointer()
+          .when(p?.id === x.id, (el) => el.bg(c.fill).border_1().border_color(c.edge))
+          .hover((s) => s.bg(c.hover))
+          .on_click((_e, cx) => {
+            this.planId = x.id;
+            keep("plan", x.id);
+            this.reload(cx);
+          })
+          .child(div().truncate().text_size(13).font_medium().text_color(x.status === "archived" ? c.faint : c.ink).child(x.title ?? x.id))
+          .child(div().text_size(11.5).text_color(c.faint).child(`${{ grilling: "Being planned", ready: "Ready", task: "Became a task", archived: "Archived" }[x.status] ?? x.status} · ${day(x.updated)}`))))
+      .child(div().id("bh-plan-new-row").mt(4).px(10).py(6).rounded(SIZE.control).text_size(12.5).text_color(c.accent).cursor_pointer().hover((s) => s.bg(c.hover))
+        .on_click((_e, cx) => {
+          this.planId = "__new";
+          this.plan = null;
+          cx.notify();
+        })
+        .child("New plan"));
+  }
+
+  /** Your idea in a bubble, then each set of the panel's questions with what you answered. */
+  planConversation(c, p, width) {
+    const asked = Array.isArray(p.asked) ? p.asked : [];
+    const bubble = h_flex().justify_end().child(
+      div()
+        .max_w(Math.round(width * 0.82))
+        .px(13)
+        .py(9)
+        .rounded(SIZE.radius)
+        .bg(c.bubble)
+        .border_1()
+        .border_color(c.bubbleEdge)
+        .text_size(14)
+        .line_height(`${SIZE.line}px`)
+        .child(p.idea || p.title || p.id),
+    );
+    const set = (q) => v_flex()
+      .flex_none()
+      .gap(8)
+      .child(h_flex().gap(8).items_center()
+        .child(div().text_size(12.5).font_semibold().text_color(c.accent).child(q.fromName || "The panel"))
+        .child(div().text_size(11).text_color(c.faint).child(q.status === "open" ? "waiting for you: answer in the chat" : `answered ${day(q.answered)}`)))
+      .children(q.questions.map((x, i) => {
+        const a = q.answers?.[i] ?? {};
+        const picked = [...(a.picks ?? [])];
+        const typed = (a.text ?? "").trim();
+        return v_flex()
           .flex_none()
-          .w(listW)
+          .pl(10)
           .gap(4)
-          .children(this.plans.map((x) =>
-            v_flex()
-              .id(`bh-plan-${x.id}`)
-              .px(10)
-              .py(8)
-              .gap(2)
-              .rounded(SIZE.control)
-              .cursor_pointer()
-              .when(p?.id === x.id, (el) => el.bg(c.fill).border_1().border_color(c.edge))
-              .hover((s) => s.bg(c.hover))
-              .on_click((_e, cx) => {
-                this.planId = x.id;
-                keep("plan", x.id);
-                this.reload(cx);
-              })
-              .child(div().truncate().text_size(13).font_medium().text_color(x.status === "archived" ? c.faint : c.ink).child(x.title ?? x.id))
-              .child(div().text_size(11.5).text_color(c.faint).child(`${{ grilling: "Being planned", ready: "Ready", task: "Became a task", archived: "Archived" }[x.status] ?? x.status} · round ${x.round ?? 0} · ${day(x.updated)}`)))),
-      )
-      .child(p ? this.planDoc(c, p, width - listW - GAP) : div().flex_1());
+          .border_l(2)
+          .border_color(c.edge)
+          .child(div().text_size(13.5).line_height("20px").child(`${x.seat ? `[${x.seat}] ` : ""}${x.text}`))
+          .child(h_flex().flex_wrap().gap(6).children(x.options.map((o) => {
+            const on = picked.includes(o.label);
+            return div().h(24).px(8).flex().items_center().rounded(SIZE.nested).border_1().text_size(12)
+              .border_color(on ? c.accent : c.edge).text_color(on ? c.ink : c.muted).when(on, (el) => el.bg(c.well).font_medium())
+              .child(`${o.label}${o.recommended ? " (recommended)" : ""}`);
+          })))
+          .when(Boolean(typed), (el) => el.child(div().text_size(12.5).text_color(c.muted).child(`You: ${typed}`)))
+          .when(q.status !== "open" && !picked.length && !typed, (el) => el.child(div().text_size(12).text_color(c.faint).child("Left for the panel to decide")));
+      }));
+    return v_flex()
+      .flex_none()
+      .gap(14)
+      .child(bubble)
+      .children(asked.map(set))
+      .when(!asked.length && !p.markdown, (el) => el.child(div().text_size(13).text_color(c.muted).child("The panel is reading the code. Its questions show here and in the chat.")));
+  }
+
+  /** The rail: the round, the panel's seats, the actions. */
+  planRail(c, p, w) {
+    const seats = [["orchestrator", "Ora", true], ["dev", "Dev"], ["design", "Des"], ["qa", "QA"], ["research", "Res"]];
+    const off = new Set(p.off ?? []);
+    const square = (id, body, tip, onClick, opts) => {
+      const el = div()
+        .id(id)
+        .size(36)
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(SIZE.control)
+        .border_1()
+        .border_color(c.edge)
+        .text_size(11.5)
+        .font_semibold()
+        .bg(opts?.on === false ? c.ground : c.fill)
+        .text_color(opts?.on === false ? c.faint : c.ink)
+        .when(Boolean(onClick), (x) => x.cursor_pointer().hover((s) => s.bg(c.hover)).on_click(onClick));
+      return el.child(body);
+    };
+    return v_flex()
+      .flex_none()
+      .w(w)
+      .pt(2)
+      .gap(6)
+      .items_center()
+      .child(v_flex().items_center().pb(4)
+        .child(div().text_size(15).font_semibold().child(String(Math.max(1, p.round ?? 0))))
+        .child(div().text_size(10.5).text_color(c.faint).child("round")))
+      .children(seats.map(([seat, short, fixed]) => square(`bh-seat-${seat}`, short, seat, fixed ? null : (_e, cx) => {
+        this.act(["plan", "seat", p.id, seat, off.has(seat) ? "--on" : "--off"], cx);
+      }, { on: !off.has(seat) })))
+      .child(div().w(24).h(1).my(4).bg(c.edge))
+      .child(square("bh-plan-prev", svg(ICON("chevron-left")).size(15).text_color(this.showPrevious ? c.accent : c.muted), "Previous plans", (_e, cx) => {
+        this.showPrevious = !this.showPrevious;
+        cx.notify();
+      }))
+      .child(square("bh-plan-new", svg(ICON("plus")).size(15).text_color(c.muted), "New plan", (_e, cx) => {
+        this.planId = "__new";
+        this.plan = null;
+        cx.notify();
+      }))
+      .child(div().text_size(10.5).text_color(c.faint).pt(2).child(this.showPrevious ? "Hide list" : ""));
   }
 
   planDoc(c, p, width) {

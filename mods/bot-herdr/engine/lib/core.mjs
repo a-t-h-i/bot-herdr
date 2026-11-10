@@ -134,7 +134,7 @@ export function titleFrom(text, words = 6) {
  * Arguments: `--flag value`, `--flag=value`, bare `--flag` (true), repeated flags collect into
  * arrays when `many` names them. Everything else is positional.
  */
-export const BOOLEANS = ["json", "all", "review", "multi", "force"];
+export const BOOLEANS = ["json", "all", "review", "multi", "force", "on", "off"];
 
 export function parseArgs(argv, many = [], booleans = BOOLEANS) {
   const flags = {};

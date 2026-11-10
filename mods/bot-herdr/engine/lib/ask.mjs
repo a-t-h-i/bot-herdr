@@ -59,7 +59,7 @@ export function parseQuestions(md) {
   return { intro: intro.join("\n").trim(), questions };
 }
 
-export function ask({ title, intro = "", questions, from, fromName = null, cwd = null }) {
+export function ask({ title, intro = "", questions, from, fromName = null, cwd = null, plan = null }) {
   if (!questions.length) throw new Error("No questions found. Number each question (1. …) and list its options under it (- Label — meaning).");
   const id = newId("q");
   questions.forEach((q, qi) => q.options.forEach((o, oi) => {
@@ -69,7 +69,7 @@ export function ask({ title, intro = "", questions, from, fromName = null, cwd =
     writeText(o.mockupFile, html);
     delete o.mockup;
   }));
-  const record = { id, title: title || "Questions", intro, questions, from, fromName, cwd, status: "open", answers: null, created: now() };
+  const record = { id, title: title || "Questions", intro, questions, from, fromName, cwd, ...(plan ? { plan } : {}), status: "open", answers: null, created: now() };
   writeJson(join(QDIR, `${id}.json`), record);
   return record;
 }
@@ -85,6 +85,14 @@ export function openQuestions() {
     .filter((d) => d.isFile() && d.name.endsWith(".json"))
     .map((d) => readJson(join(QDIR, d.name)))
     .filter((q) => q && q.status === "open")
+    .sort((a, b) => String(a.created).localeCompare(String(b.created)));
+}
+
+/** Every question set asked for a plan, open or answered, oldest first: the plan's conversation. */
+export function forPlan(plan) {
+  const read = (folder) => listDir(folder).filter((d) => d.isFile() && d.name.endsWith(".json")).map((d) => readJson(join(folder, d.name)));
+  return [...read(QDIR), ...read(join(QDIR, "answered"))]
+    .filter((q) => q && q.plan === plan)
     .sort((a, b) => String(a.created).localeCompare(String(b.created)));
 }
 
