@@ -10,9 +10,9 @@ import { div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { textWidth } from "./look.js";
 
-import { INDICATORS, roleOf, indicatorFor, alpha, typed } from "./working.js";
+import { INDICATORS, roleOf, indicatorFor, alpha } from "./working.js";
 
-export { INDICATORS, roleOf, indicatorFor, alpha, typed };
+export { INDICATORS, roleOf, indicatorFor, alpha };
 
 const SIZE = 12.5;
 const H = 22; // the word's box: the text sits at the top, lines under it at 18 to 22
@@ -22,14 +22,14 @@ const ink = (name, t) => svg(fx(name)).text_color(t);
 /**
  * The word: muted, with a window in the agent's colour sweeping across it. The window and the
  * copy inside it move in opposite directions on the same clock, so the coloured letters stay
- * exactly over the muted ones.
+ * exactly over the muted ones. A new verb crossfades in (the chat's working line does that).
  */
 function shimmer(c, word, tone, width, frames = null) {
   const band = 30;
-  const period = 2600;
+  const period = 3600;
   const text = (color) => {
     const el = div().absolute().top(0).w(width + 12).h(18).line_height("18px").whitespace_nowrap().text_size(SIZE).font_semibold().text_color(color);
-    return frames ? el.frames(frames, Math.round(2600 / frames.length)) : el.child(word);
+    return frames ? el.frames(frames, Math.round(period / frames.length)) : el.child(word);
   };
   return [
     text(c.muted).left(0),
@@ -107,9 +107,9 @@ function motion(name, t, W, c) {
       return { left: div().relative().flex_none().size(12).child(ink("pages", t).absolute().top(0).left(0).size(12)).child(div().absolute().left(2.5).w(5).h(1.25).rounded(1).bg(t).loop("top", { from: 5, to: 9, period: 1200 })) };
     // Dev.
     case "type":
-      return { frames: typed };
+      return { word: (el) => el.transition("opacity", { duration: 420, easing: "ease-out" }) };
     case "block":
-      return { right: div().flex_none().w(9).h(16).text_size(13).text_color(alpha(t, 0.8)).frames(["▋", " "], 525) };
+      return { right: div().flex_none().w(9).h(16).text_size(13).text_color(alpha(t, 0.8)).frames(["▋", " "], 800) };
     case "build":
       return { over: [div().absolute().left(0).top(19).w(W).h(2).rounded(1).bg(alpha(t, 0.18)), div().absolute().left(0).top(19).h(2).rounded(1).bg(t).loop("width", { from: 0, to: W, period: 2600, easing: "linear" })] };
     case "code":
@@ -159,15 +159,15 @@ function motion(name, t, W, c) {
     }
     // Anyone else.
     case "dots":
-      return { right: div().flex_none().w(16).h(18).text_size(SIZE).font_semibold().text_color(c.muted).frames(["", ".", "..", "..."], 350) };
+      return { right: div().flex_none().w(16).h(18).text_size(SIZE).font_semibold().text_color(c.muted).frames(["", ".", "..", "..."], 600) };
     case "glide":
-      return { over: [dot(t, 4).absolute().top(19).loop("left", { from: 0, to: W - 4, period: 2000 })] };
+      return { over: [dot(t, 4).absolute().top(19).loop("left", { from: 0, to: W - 4, period: 3200 })] };
     case "fade":
-      return { word: (el) => el.loop("opacity", { from: 0.4, to: 1, period: 1600 }) };
+      return { word: (el) => el.loop("opacity", { from: 0.55, to: 1, period: 2600 }) };
     case "march":
-      return { right: div().flex_none().w(18).h(18).text_size(12).font_semibold().text_color(t).frames(["›  ", " › ", "  ›"], 220) };
+      return { right: div().flex_none().w(18).h(18).text_size(12).font_semibold().text_color(t).frames(["›  ", " › ", "  ›"], 480) };
     case "nudge":
-      return { right: div().relative().flex_none().w(18).h(12).child(ink("arrow", t).absolute().top(1).w(12).h(10).loop("left", { from: 1, to: 5, period: 1100 })) };
+      return { right: div().relative().flex_none().w(18).h(12).child(ink("arrow", t).absolute().top(1).w(12).h(10).loop("left", { from: 1, to: 4, period: 1800 })) };
     default:
       return {};
   }

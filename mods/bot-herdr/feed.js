@@ -15,11 +15,68 @@ export function push(entries, entry) {
   return next.length > KEEP ? next.slice(next.length - KEEP) : next;
 }
 
+/** Changes one comment list on one entry; unknown ids give the entries back unchanged. */
+function onComments(entries, entryId, change) {
+  const i = entries.findIndex((e) => e.id === entryId);
+  if (i < 0) return entries;
+  const before = entries[i].comments ?? [];
+  const after = change(before);
+  if (after === before) return entries;
+  return entries.map((e, k) => (k === i ? { ...e, comments: after } : e));
+}
+
+/** Changes one comment on one entry; unknown ids give the entries back unchanged. */
+function onComment(entries, entryId, cid, change) {
+  return onComments(entries, entryId, (list) => (list.some((x) => x.id === cid) ? list.map((x) => (x.id === cid ? change(x) : x)) : list));
+}
+
+/** A comment of yours on an agent's reply: `c<max+1>`, open. */
+export function addComment(entries, entryId, text, at) {
+  return onComments(entries, entryId, (list) => {
+    const max = list.reduce((m, x) => Math.max(m, Number(String(x.id).slice(1)) || 0), 0);
+    return [...list, { id: `c${max + 1}`, text, at, open: true }];
+  });
+}
+
+export function editComment(entries, entryId, cid, text, at) {
+  return onComment(entries, entryId, cid, (x) => ({ ...x, text, edited: at, open: true }));
+}
+
+export function resolveComment(entries, entryId, cid) {
+  return onComment(entries, entryId, cid, (x) => ({ ...x, open: false }));
+}
+
+export function deleteComment(entries, entryId, cid) {
+  return onComments(entries, entryId, (list) => (list.some((x) => x.id === cid) ? list.filter((x) => x.id !== cid) : list));
+}
+
 /** The entries of one space to draw, `back` entries up from the newest. */
 export function shown(entries, space, back = 0) {
   const mine = entries.filter((e) => (e.space ?? null) === (space ?? null));
   const end = Math.max(Math.min(mine.length, 1), mine.length - back);
   return { list: mine.slice(Math.max(0, end - SHOWN), end), total: mine.length, back: mine.length - end };
+}
+
+/**
+ * Scrolls the feed by `delta` pixels (positive: towards older entries). `back` is how many whole
+ * entries sit below the view, `px` how far into entry `back` the view has moved; `heights[i]` is
+ * the drawn height (gap included) of the entry `i` up from the newest, `fallback` until measured.
+ */
+export function scrollBy(state, delta, heights, total, fallback = 120) {
+  const h = (i) => heights[i] ?? fallback;
+  let { back, px } = state;
+  px += delta;
+  while (px >= h(back) && back < total - 1) {
+    px -= h(back);
+    back += 1;
+  }
+  while (px < 0 && back > 0) {
+    back -= 1;
+    px += h(back);
+  }
+  if (back === 0 && px < 0) px = 0;
+  if (back >= total - 1) px = Math.max(0, Math.min(px, h(back) - 1));
+  return { back, px };
 }
 
 /** What a reply file says, without its stamp (`<!-- bh <time> -->`, so the same words twice still count). */

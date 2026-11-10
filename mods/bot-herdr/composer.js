@@ -93,6 +93,7 @@ export class Composer {
     this.sending = false;
     this.width = SIZE.maxWidth;
     this.justBriefed = new Set(); // briefed this session; the label can take a moment to show
+    this.expanded = true;
 
     // The box's height is ours (see box()): the text box fills whatever it is given, so it is
     // never left to size itself.
@@ -137,6 +138,7 @@ export class Composer {
   }
 
   focus() {
+    this.expanded = true;
     this.input.focus();
   }
 
@@ -337,6 +339,7 @@ export class Composer {
     const before = this.text;
     this.text = this.input.value();
     if (this.text === before) return; // our own edit (pick, send), already accounted for
+    this.expanded = true;
     const caret = caretAfterEdit(before, this.text);
     const trigger = this.text === this.dismissed ? null : triggerAt(this.text, caret);
     if (trigger?.kind !== "mention") this.mode = null;
@@ -370,11 +373,7 @@ export class Composer {
 
   close(cx) {
     // Esc on the questions puts them away; the bar brings them back.
-    if (!this.pane && this.paneNow() === "ask") {
-      this.putAway.add(this.asking().id);
-      this.dismissing = null;
-      return cx.notify();
-    }
+    if (!this.pane && this.paneNow() === "ask") return this.minimiseAsk(cx);
     if (this.pane === "suggest") this.dismissed = this.text;
     this.pane = null;
     this.mode = null;
@@ -458,7 +457,7 @@ export class Composer {
     if (!t || t.item.id !== id || t.phase === "out") return;
     t.phase = "out";
     cx.notify();
-    cx.timer.after(380, (cx) => {
+    cx.timer.after(420, (cx) => {
       if (this.toast !== t) return;
       this.toast = null;
       dismissToast(this.toasts, id);
@@ -484,17 +483,22 @@ export class Composer {
     for (const path of paths) {
       if (!path || this.files.some((f) => f.path === path)) continue;
       const file = { path, name: path.split(/[\\/]/).filter(Boolean).pop() ?? path, image: shown[path] ?? null };
+      // A readable image file can be shown directly if preview generation fails (e.g. ScreenClip paths).
+      if (!file.image && isImage(path)) file.image = path;
       this.files.push(file);
-      if (isImage(path) && !file.image) fresh.push(path);
+      if (isImage(path) && !shown[path]) fresh.push(path);
     }
     this.pane = null;
+    this.expanded = true;
     this.input.focus();
     cx.notify();
     if (!fresh.length) return;
     cx.spawn(async (cx) => {
       for (const got of await previews(fresh)) {
         const f = this.files.find((x) => x.path === got.file);
-        if (f && got.image) f.image = got.image;
+        if (!f) continue;
+        if (got.image) f.image = got.image;
+        else if (isImage(f.path)) f.image = f.path;
       }
       cx.notify();
     });
@@ -510,8 +514,8 @@ export class Composer {
 
   /** The attached images, opened large from the one clicked. */
   openImages(path) {
-    const shown = this.files.filter((f) => f.image);
-    openLightbox({ items: shown.map((f) => ({ image: f.image, title: f.name, note: "Attached to your message" })), at: Math.max(0, shown.findIndex((f) => f.path === path)) });
+    const shown = this.files.filter((f) => f.image || isImage(f.path));
+    openLightbox({ items: shown.map((f) => ({ image: f.image || f.path, title: f.name, note: "Attached to your message" })), at: Math.max(0, shown.findIndex((f) => f.path === path)) });
   }
 
   pickFiles(cx) {
@@ -595,6 +599,7 @@ export class Composer {
       showPage("settings");
       return cx.notify();
     }
+    if (result.steps[0].do === "knowledge") return this.askKnowledge(result.steps[0].question, cx);
     const keptFiles = this.files;
     const sentText = result.steps.find((s) => s.text !== undefined)?.text;
     this.files = [];
@@ -642,6 +647,21 @@ export class Composer {
         this.say(failed[0], cx, "error");
       }
       this.input.focus();
+      cx.notify();
+    });
+  }
+
+  /** /bh-knowledge: the question goes in the feed as yours; Scout's answer arrives as a reply. */
+  askKnowledge(question, cx) {
+    this.input.set_value("");
+    this.text = "";
+    this.trigger = null;
+    this.mode = null;
+    this.hooks.sent?.({ text: question, files: [], paths: [], to: [{ address: null, name: "knowledge-scout" }] }, cx);
+    cx.notify();
+    cx.spawn(async (cx) => {
+      const r = await bh(["knowledge", "ask", "--data", enc(question), "--json"], { cwd: projectDir() });
+      if (r.code !== 0) this.say((r.stderr || r.stdout).trim().split("\n")[0] || "Couldn't ask Scout.", cx, "error");
       cx.notify();
     });
   }
@@ -790,9 +810,24 @@ export class Composer {
 
   // ── Drawing ────────────────────────────────────────────────────────────────────────────────
 
-  /** The box's height at a width: attachments, the text's rows, the tools row. */
+  /** Whether the composer should be folded to a slim bar now. */
+  isFolded() {
+    return Boolean(!this.expanded && !this.pane && this.paneNow() !== "ask" && !this.files.length);
+  }
+
+  /** A key typed while folded: grow back and type it at the end of the draft. */
+  typeFolded(char, cx) {
+    this.focus();
+    const end = this.input.value().length;
+    this.input.set_selected_range({ start: end, end });
+    this.input.replace(char);
+    cx.notify();
+  }
+
+  // The box's height at a width: the text's rows and the tools row. Attachments sit above the box.
   height(width) {
-    return this.filesH() + SIZE.textTop + rowsFor(this.text, width - SIZE.textX * 2 - 2) * SIZE.line + SIZE.tools + 2;
+    if (this.isFolded()) return 40;
+    return SIZE.textTop + rowsFor(this.text, width - SIZE.textX * 2 - 2) * SIZE.line + SIZE.tools + 2;
   }
 
   /** The attachments row: taller when it shows images. */
@@ -832,6 +867,8 @@ export class Composer {
     if (this.menuOpen()) contexts.push("BotHerdrMenu");
     if (this.pane || this.paneNow() === "ask") contexts.push("BotHerdrPane");
     const menu = this.paneView(c, width);
+    const folded = this.isFolded();
+    const attach = !folded && this.files.length > 0 ? this.attachments(c, width) : null;
     return v_flex()
       .id("bc")
       .key_context(contexts.join(" "))
@@ -847,11 +884,12 @@ export class Composer {
       // The toast first: the box and the pane, painted after, cover the part still inside them.
       .when(Boolean(this.toast), (el) => el.child(this.toastView(c, width)))
       // Painted before the pane, so the pane covers the box's top edge where they join.
-      .child(this.box(c, width, Boolean(menu)))
+      .child(folded ? this.slim(c, width) : this.box(c, width, Boolean(menu)))
+      .when(Boolean(attach), (el) => el.child(attach))
       .when(Boolean(menu), (el) => el.child(menu));
   }
 
-  // The composer box: attachments, the text, the tools row.
+  // The composer box: the text and the tools row. Attachments sit above it as thumbnails.
   box(c, width, joined = false) {
     const target = this.target();
     const busy = target?.status === "working";
@@ -860,24 +898,25 @@ export class Composer {
     // Every height here is stated. The text box stretches to fill its parent, and a floating
     // surface may be offered the whole window, so nothing is left to size itself.
     const textH = rowsFor(this.text, width - SIZE.textX * 2 - 2) * SIZE.line;
-    const filesH = this.filesH();
     return v_flex()
       .id("bc-box")
       .relative()
       .flex_none()
       .w(width)
-      .h(filesH + SIZE.textTop + textH + SIZE.tools + 2)
+      .h(SIZE.textTop + textH + SIZE.tools + 2)
       .bg(c.fill)
       .border_1()
       .border_color(c.edge)
       .rounded(SIZE.radius)
       .shadow_md()
       .on_drop((e, cx) => this.addFiles(e.paths, cx))
-      .on_mouse_down("left", () => this.input.focus())
+      .on_mouse_down("left", () => {
+        this.expanded = true;
+        this.input.focus();
+      })
       // The bevel: a lit top edge inside the outline. Not while a pane is joined on top: it
       // would draw a line across the join.
       .when(!joined, (el) => el.child(div().absolute().top(0).left(SIZE.radius).right(SIZE.radius).h(1).bg(c.rim)))
-      .when(this.files.length > 0, (el) => el.child(this.filesRow(c)))
       .child(
         div()
           .relative()
@@ -907,6 +946,31 @@ export class Composer {
       .child(this.tools(c, target, busy, empty));
   }
 
+  /** A slim bar when the feed is scrolled away: click or type to grow it back, draft intact. */
+  slim(c, width) {
+    const draft = this.text.trim() ? this.text.replace(/\s+/g, " ").trim() : PLACEHOLDER;
+    return h_flex()
+      .id("bc-slim")
+      .flex_none()
+      .w(width)
+      .h(40)
+      .px(14)
+      .gap(10)
+      .items_center()
+      .bg(c.fill)
+      .border_1()
+      .border_color(c.edge)
+      .rounded(SIZE.radius)
+      .shadow_md()
+      .cursor_text()
+      .on_click((_e, cx) => {
+        this.expanded = true;
+        this.input.focus();
+        cx.notify();
+      })
+      .child(div().flex_1().min_w(0).truncate().text_size(13.5).text_color(this.text.trim() ? c.ink : c.faint).child(draft));
+  }
+
   chip(c, token) {
     const agent = token.id.startsWith("agent:") ? agents().find((a) => a.address === token.id.slice(6)) : null;
     const command = token.id.startsWith("cmd:") ? commandColor(token.id.slice(4)) : null;
@@ -925,8 +989,8 @@ export class Composer {
       .child(token.label ?? token.text);
   }
 
-  filesRow(c) {
-    const pics = this.files.some((f) => f.image);
+  /** Attached files as thumbnails/chips above the composer box. */
+  attachments(c, width) {
     const remove = (i, id) => div()
       .id(id)
       .size(20)
@@ -946,20 +1010,20 @@ export class Composer {
     return h_flex()
       .id("bc-files")
       .flex_none()
-      .h(pics ? SIZE.imagesRow : SIZE.filesRow)
+      .w(width)
       .overflow_hidden()
-      .gap(6)
-      .px(12)
-      .pt(12)
-      .items_start()
-      .children(this.files.map((f, i) => f.image
-        // An image: its preview, opened large on a click.
+      .gap(8)
+      .pb(8)
+      .items_end()
+      .flex_wrap()
+      .children(this.files.map((f, i) => (f.image || isImage(f.path))
+        // An image: its thumbnail above the box, opened large on a click.
         ? div()
           .id(`bc-file-${i}`)
           .relative()
           .flex_none()
-          .w(88)
-          .h(64)
+          .w(96)
+          .h(72)
           .rounded(SIZE.nested)
           .bg(c.well)
           .border_1()
@@ -968,7 +1032,7 @@ export class Composer {
           .cursor_pointer()
           .hover((s) => s.border_color(c.faint))
           .on_click(() => this.openImages(f.path))
-          .child(image(f.image).w(86).h(62))
+          .child(image(f.image || f.path).w(94).h(70))
           .child(div().absolute().top(3).right(3).rounded(6).bg(c.fill).child(remove(i, `bc-file-x-${i}`)))
         : h_flex()
           .id(`bc-file-${i}`)
@@ -1002,9 +1066,10 @@ export class Composer {
     const w = up ? W : Math.round(W * 0.4);
     const h = up ? H : Math.round(H * 0.45);
     const top = up ? 0 : Math.round(GAP + H * 0.85);
-    // Up it springs (rising a beat ahead of filling out); down it sinks, gathering speed.
-    const move = (el, prop, spring) => (t.phase === "out" ? el.transition(prop, { duration: 300, delay: 60, easing: "ease-in" }) : el.spring(prop, spring));
+    // Up it springs (rising a beat ahead of filling out); down it slides and fades away, mirroring the rise.
+    const out = t.phase === "out";
     const rise = { response: 420, damping: 0.82 };
+    const shapeMotion = (el, prop, spring, outDur = 300) => (out ? el.transition(prop, { duration: outDur, easing: "ease-in" }) : el.spring(prop, spring));
     let shape = div()
       .id(`bc-toast-shape-${t.n}`)
       .absolute()
@@ -1018,10 +1083,10 @@ export class Composer {
       .rounded(SIZE.radius)
       .shadow_md()
       .child(div().absolute().top(0).left(SIZE.radius).right(SIZE.radius).h(1).bg(c.rim));
-    shape = move(shape, "top", rise);
-    shape = move(shape, "height", { response: 360, damping: 0.66 });
-    shape = move(shape, "width", { response: 440, damping: 0.7 });
-    shape = move(shape, "left", { response: 440, damping: 0.7 });
+    shape = shapeMotion(shape, "top", rise);
+    shape = shapeMotion(shape, "height", { response: 360, damping: 0.66 });
+    shape = shapeMotion(shape, "width", { response: 440, damping: 0.7 });
+    shape = shapeMotion(shape, "left", { response: 440, damping: 0.7 });
     const tone = toneOf(c, item.kind);
     let body = h_flex()
       .id(`bc-toast-body-${t.n}`)
@@ -1034,7 +1099,7 @@ export class Composer {
       .gap(10)
       .items_center()
       .opacity(up ? 1 : 0)
-      .transition("opacity", up ? { duration: 200, delay: 240, easing: "ease-out" } : { duration: 90, easing: "ease-in" })
+      .transition("opacity", up ? { duration: 200, delay: 240, easing: "ease-out" } : { duration: 200, easing: "ease-in" })
       .text_size(13.5)
       .line_height("19px")
       .text_color(c.ink)
@@ -1061,7 +1126,7 @@ export class Composer {
           })
           .child(item.action.label),
       ));
-    body = move(body, "top", rise);
+    body = shapeMotion(body, "top", rise);
     return div().id("bc-toast").absolute().left(0).right(0).top(-slot).h(slot).child(shape).child(body);
   }
 
@@ -1368,7 +1433,20 @@ export class Composer {
         .child(link("bc-ask-no", "Keep", (_e, cx) => {
           this.dismissing = null;
           cx.notify();
-        })));
+        })))
+      .child(div()
+        .id("bc-ask-min")
+        .flex_none()
+        .size(22)
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(6)
+        .cursor_pointer()
+        .hover((s) => s.bg(c.hover))
+        .tooltip("Minimise: the agent keeps waiting")
+        .on_click((_e, cx) => this.minimiseAsk(cx))
+        .child(svg(ICON("chevron-down")).size(12).text_color(c.muted)));
     let h = 24 + 8;
 
     // The intro (first question only) and the question.
@@ -1578,6 +1656,13 @@ export class Composer {
     cx.notify();
   }
 
+  /** Puts the open questions away (Esc or the minimise button); the agent keeps waiting. */
+  minimiseAsk(cx) {
+    this.putAway.add(this.asking().id);
+    this.dismissing = null;
+    cx.notify();
+  }
+
   /** The questions put away: one row that brings them back. */
   barBody(c, q) {
     const n = Drawer.left(q, this.walk?.id === q.id ? this.walk : null);
@@ -1600,8 +1685,8 @@ export class Composer {
           cx.notify();
         })
         .child(svg(ICON("ask")).size(15).text_color(c.accent))
-        .child(div().text_size(13).font_medium().text_color(c.accent).child(`Answer questions · ${n} left`))
-        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(c.muted).child(`from ${q.fromName ?? this.nameOf(q.from)}${more > 0 ? ` and ${more} more` : ""}`)),
+        .child(div().flex_none().text_size(13).font_medium().text_color(c.accent).child(`${q.fromName ?? this.nameOf(q.from)} is waiting for your answer`))
+        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(c.muted).child(`${n} left${more > 0 ? ` · ${more} more set${more > 1 ? "s" : ""}` : ""}`)),
     };
   }
 

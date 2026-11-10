@@ -7,14 +7,20 @@
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { QUIET, ROLES, argvOf, effortsOf, findAgent, roleOf, roster, slug } from "../../roster.js";
-import { BH, DATA, ENGINE, accessOf, bhCommand, ensureDir, exists, readJson, readText, writeText } from "./core.mjs";
+import { QUIET, ROLES, argvOf, effortsOf, findAgent, looksLikeInstructions, migrateArgs, roleOf, roster, slug } from "../../roster.js";
+import { BH, DATA, ENGINE, accessOf, bhCommand, ensureDir, exists, readJson, readText, writeJson, writeText } from "./core.mjs";
 import { headless } from "./runner.mjs";
 import * as knowledge from "./knowledge.mjs";
 
 export function team() {
-  const saved = readJson(join(DATA, "agents.json"), {});
+  const file = join(DATA, "agents.json");
+  const saved = readJson(file, {}) ?? {};
   const known = Array.isArray(saved.known) ? saved.known : [];
+  // "Extra arguments" that were a sentence for the agent: saved as its instructions from now on.
+  if (Array.isArray(saved.agents) && saved.agents.some((a) => looksLikeInstructions(a?.args))) {
+    saved.agents = saved.agents.map((a) => (a && typeof a === "object" ? migrateArgs(a) : a));
+    writeJson(file, saved);
+  }
   return { agents: roster(saved.agents, known), known };
 }
 
@@ -74,8 +80,8 @@ export function brief(agent, { mode = "child", parent = null, task = null, plan 
   tools.push(task ? `- Your task is \`${task}\`: \`bh task show ${task}\` has its request and steps, \`bh board read ${task}\` its board. Post with \`bh board post ${task} <kind> "<text>" --from ${name ?? slug(agent.name)}\`.` : "- When you work on a task, `bh task show <task>` has its request and steps and `bh board read <task>` its board; post with `bh board post <task> <kind> \"<text>\" --from <your name>`.");
   if (plan) tools.push(`- The plan is \`${plan}\`: \`bh plan show ${plan}\`.`);
   tools.push("- `bh scripts` lists shared scripts; run one with `bh scripts run <name>`. `bh check` runs the project's lint, typecheck and tests for what changed.");
-  tools.push("- Ask the person with `bh ask --file <questions.md>` (numbered questions, `- Label — meaning` options, optional fenced `mockup` blocks), then end your turn: the answers come to you as a message. Do this whenever a choice is theirs to make (scope, look, behaviour, trade-offs) or you would otherwise guess: never put questions for the person in your reply text, and don't guess what they would pick. Your harness's own question tool (Claude Code's AskUserQuestion) works too when you run headless: it becomes the same card.");
-  if (headless) tools.push("- You run headless: no one can approve a prompt mid-turn. A command the person hasn't allowed is refused; then say what you need and why, and the person can allow it in Settings → Agent access. `bh check` runs the project's lint, typecheck and tests and is always allowed.");
+  tools.push("- Ask the person with `bh ask --file <questions.md>` (numbered questions, `- Label — meaning` options, optional fenced `mockup` blocks), then end your turn: the answers come to you as a message. Use `--file`, never a heredoc or shell redirection. Do this whenever a choice is theirs to make (scope, look, behaviour, trade-offs) or you would otherwise guess: never put questions for the person in your reply text, and don't guess what they would pick. Your harness's own question tool (Claude Code's AskUserQuestion) works too when you run headless: it becomes the same card.");
+  if (headless) tools.push("- You run headless: no one can approve a prompt mid-turn. A command the person hasn't allowed is refused; then say what you need and why, and the person can allow it in Settings → Agent access. `bh check` runs the project's lint, typecheck and tests and is always allowed. Use literal addresses in commands (no `$HC_TERMINAL_ID`, `;`, `&`, `|`, `<`, `>`); write files with tools and pass paths with `--file`.");
   parts.push(tools.join("\n"));
 
   if (mode !== "panel" && mode !== "review") {
@@ -101,6 +107,8 @@ export function brief(agent, { mode = "child", parent = null, task = null, plan 
   const known = knowledge.forBrief(root, knowledgeName(agent));
   if (known) parts.push(`## What you know about this project\n\n${known}`);
   else parts.push(`## What you know about this project\n\nNothing recorded yet${lead ? "" : ". Propose what is worth keeping in your report"}.`);
+  const own = String(agent.instructions ?? "").trim();
+  if (own) parts.push(`## The person's instructions for you\n\n${own}`);
   parts.push("[end of brief]");
   return parts.filter(Boolean).join("\n\n");
 }
@@ -121,7 +129,7 @@ function childAgents({ lead, mode, members }) {
     "",
     "1. Start one with `bh spawn <agent> --name <short-name> [--task <id> --step <n>] \"<its whole brief>\"`. It starts with that agent's harness, model, effort and role, and is told to report to you. The team:",
     ...(members.length ? members : ["- (nobody else is set up: `bh team` lists who is)"]),
-    "   For a harness outside the team: `hc run --bg --name <short-name> --cwd <repo> <command> \"<brief>. Report with hc send $HC_TERMINAL_ID when done or stuck.\"` (`hc templates` lists what is ready). Antigravity (`agy`), Gemini and Qwen Code take the brief after `-i` (`agy -i \"<brief>\"`); without it they answer once and exit.",
+    "   For a harness outside the team: `hc run --bg --name <short-name> --cwd <repo> <command> \"<brief>. Report with hc send <your terminal address> when done or stuck.\"` (`hc templates` lists what is ready). Use the literal value of your terminal address, never `$HC_TERMINAL_ID` in a command. Antigravity (`agy`), Gemini and Qwen Code take the brief after `-i` (`agy -i \"<brief>\"`); without it they answer once and exit.",
     "   Antigravity reports no status, so `hc wait` can't see its turns end: its `hc send` report is how you hear back.",
     "   A task with its own worktree (`bh task new` and `bh task show` say so): always pass `--task <id>`, so the child starts in that worktree. With a branch of its own, everyone stays on that branch.",
     "2. Keep working while children work. Collect reports with `hc wait --children any` (or `all`); never sleep or poll. Read a child's screen with `hc read <name> --lines 100`, steer it with `hc send <name> \"…\"`, stop its turn with `hc interrupt <name>`.",
@@ -188,7 +196,10 @@ export function sync(root) {
 
 /** `hc …`, its output passed back. */
 export function hc(args, opts = {}) {
-  const r = spawnSync("hc", args, { encoding: "utf8", ...opts });
+  // BH_HC names a script to run in hc's place (the tests' stand-in). Never through a shell:
+  // a brief is one argument, whatever it holds.
+  const fake = process.env.BH_HC;
+  const r = fake ? spawnSync(process.execPath, [fake, ...args], { encoding: "utf8", ...opts }) : spawnSync("hc", args, { encoding: "utf8", ...opts });
   return { code: r.status ?? 1, out: r.stdout ?? "", err: r.stderr ?? (r.error ? String(r.error.message) : "") };
 }
 

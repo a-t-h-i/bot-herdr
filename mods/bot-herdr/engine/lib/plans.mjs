@@ -6,6 +6,7 @@
 
 import { join } from "node:path";
 import { listDir, newId, now, readJson, readText, store, titleFrom, writeJson, writeText } from "./core.mjs";
+import { changeComment, commentById, nextCommentId } from "./tasks.mjs";
 
 export const PLAN_STATUSES = ["grilling", "ready", "task", "archived"];
 
@@ -62,12 +63,26 @@ export function writeDraft(plan, markdown, { status, title } = {}) {
 }
 
 export function comment(plan, { line = null, text }) {
-  const c = { id: `c${(plan.comments?.length ?? 0) + 1}`, line: line === null ? null : Number(line), quote: line === null ? "" : (plan.markdown.split("\n")[Number(line) - 1] ?? "").trim(), text: String(text).trim(), at: now(), open: true };
+  const c = { id: nextCommentId(plan.comments), line: line === null ? null : Number(line), quote: line === null ? "" : (plan.markdown.split("\n")[Number(line) - 1] ?? "").trim(), text: String(text).trim(), at: now(), open: true };
   plan.comments = [...(plan.comments ?? []), c];
   return c;
 }
 
 export const openComments = (plan) => (plan.comments ?? []).filter((c) => c.open);
+
+export const editComment = (plan, id, text) => changeComment(plan.comments, id, text, `Plan ${plan.id}`);
+
+export function resolveComment(plan, id) {
+  const c = commentById(plan.comments, id, `Plan ${plan.id}`);
+  c.open = false;
+  return c;
+}
+
+export function deleteComment(plan, id) {
+  const c = commentById(plan.comments, id, `Plan ${plan.id}`);
+  plan.comments = plan.comments.filter((x) => x !== c);
+  return c;
+}
 
 export function planLine(p) {
   return `${p.id}  ${p.status.padEnd(8)} round ${p.round}  ${p.title}`;

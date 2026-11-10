@@ -137,6 +137,22 @@ test("briefs: every agent learns how to start child agents; the panel and review
   for (const text of [lead, dev, child, panel]) assert.doesNotMatch(text, /bot[- ]lobby/i);
 });
 
+test("briefs: the person's own instructions for an agent close its brief", async () => {
+  const team = await lib("lib/team.mjs");
+  const text = team.brief({ id: "dev", role: "dev", name: "Dev", harness: "claude", instructions: "Never commit." }, { mode: "child", root: PROJECT });
+  assert.ok(text.endsWith("\n\n## The person's instructions for you\n\nNever commit.\n\n[end of brief]"));
+  assert.doesNotMatch(team.brief({ id: "dev", role: "dev", name: "Dev", harness: "claude", instructions: "" }, { mode: "child", root: PROJECT }), /The person's instructions/);
+});
+
+test("bh team save keeps instructions; a sentence in extra arguments is moved there and saved", () => {
+  const file = join(APP, "data", "bot-herdr", "agents.json");
+  const known = [{ key: "claude", name: "Claude Code", run: ["claude"], installed: true }];
+  assert.equal(bh("team", "save", "--data", enc({ agents: [{ role: "qa", harness: "claude", instructions: "Be strict." }, { role: "scout", harness: "claude", args: "Read only." }], known })).code, 0);
+  const saved = JSON.parse(readFileSync(file, "utf8")).agents;
+  assert.equal(saved[0].instructions, "Be strict.");
+  assert.deepEqual([saved[1].args, saved[1].instructions], ["", "Read only."]);
+});
+
 test("bh end to end: team, config, harnesses, tasks, questions", () => {
   const known = [{ key: "claude", name: "Claude Code", run: ["claude"], installed: true }];
   assert.equal(bh("team", "save", "--data", enc({ agents: [{ role: "dev", harness: "claude", model: "claude-sonnet-5-5", effort: "high" }], known })).code, 0);

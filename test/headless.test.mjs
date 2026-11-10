@@ -102,21 +102,48 @@ const FAKES = {
     const prompt = readFileSync(0, "utf8");
     log({ harness: "claude", argv: process.argv.slice(2), prompt });
     out({ type: "system", subtype: "init" });
-    out({ type: "assistant", message: { content: [{ type: "tool_use", name: "Read", input: { file_path: "src/x.js" } }] } });
-    out({ type: "result", subtype: "success", result: "Claude says: " + prompt.trim() });`),
+    if (prompt.includes("please ask")) {
+      out({ type: "assistant", message: { content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "node bh.mjs ask --file q.md" } }] } });
+      setTimeout(() => {
+        log({ harness: "claude", got: "ask-result" });
+        out({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t1", content: "Asked (q1, 1 question)." }] } });
+      }, 300);
+    } else {
+      out({ type: "assistant", message: { content: [{ type: "tool_use", name: "Read", input: { file_path: "src/x.js" } }] } });
+      out({ type: "result", subtype: "success", result: "Claude says: " + prompt.trim() });
+    }
+  `),
   codex: fake("codex", `
     const prompt = readFileSync(0, "utf8");
     log({ harness: "codex", argv: process.argv.slice(2), prompt });
     out({ type: "thread.started", thread_id: "th-1" });
-    out({ type: "item.started", item: { type: "command_execution", command: "ls" } });
-    out({ type: "item.completed", item: { type: "agent_message", text: "Codex says: " + prompt.trim().split("\\n").pop() } });
-    out({ type: "turn.completed" });`),
+    if (prompt.includes("please ask")) {
+      out({ type: "item.started", item: { type: "command_execution", command: "node bh.mjs ask --file q.md" } });
+      setTimeout(() => {
+        log({ harness: "codex", got: "ask-completed" });
+        out({ type: "item.completed", item: { type: "command_execution", command: "node bh.mjs ask --file q.md", status: "completed" } });
+      }, 300);
+    } else {
+      out({ type: "item.started", item: { type: "command_execution", command: "ls" } });
+      out({ type: "item.completed", item: { type: "agent_message", text: "Codex says: " + prompt.trim().split("\\n").pop() } });
+      out({ type: "turn.completed" });
+    }
+  `),
   pi: fake("pi", `
     const prompt = readFileSync(0, "utf8");
     log({ harness: "pi", argv: process.argv.slice(2), prompt });
     out({ type: "session", id: "pi-1" });
-    out({ type: "tool_execution_start", toolName: "bash", args: { command: "npm test" } });
-    out({ type: "message_end", message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "pi says: " + prompt.trim() }] } });`),
+    if (prompt.includes("please ask")) {
+      out({ type: "tool_execution_start", toolCallId: "tc9", toolName: "bash", args: { command: "node bh.mjs ask --file q.md" } });
+      setTimeout(() => {
+        log({ harness: "pi", got: "ask-end" });
+        out({ type: "tool_execution_end", toolCallId: "tc9" });
+      }, 300);
+    } else {
+      out({ type: "tool_execution_start", toolName: "bash", args: { command: "npm test" } });
+      out({ type: "message_end", message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "pi says: " + prompt.trim() }] } });
+    }
+  `),
   gemini: fake("gemini", `
     let buf = "";
     let pending = null;
@@ -132,12 +159,28 @@ const FAKES = {
         else if (m.method === "session/prompt") {
           log({ harness: "gemini", argv: process.argv.slice(2), prompt: m.params.prompt[0].text });
           pending = m.id;
-          send({ method: "session/update", params: { sessionId: "s1", update: { sessionUpdate: "tool_call", title: "Shell", kind: "execute", rawInput: { command: "rm -rf build" } } } });
-          send({ id: 900, method: "session/request_permission", params: { sessionId: "s1", toolCall: { kind: "execute", title: "rm -rf build", rawInput: { command: "rm -rf build" } }, options: [{ optionId: "yes", kind: "allow_once" }, { optionId: "no", kind: "reject_once" }] } });
+          if (m.params.prompt[0].text.includes("please ask")) {
+            send({ method: "session/update", params: { sessionId: "s1", update: { sessionUpdate: "tool_call", toolCallId: "c9", title: "Shell", kind: "execute", rawInput: { command: "node bh.mjs ask --file q.md" } } } });
+            send({ id: 901, method: "session/request_permission", params: { sessionId: "s1", toolCall: { toolCallId: "c9", kind: "execute", title: "Shell", rawInput: { command: "node bh.mjs ask --file q.md" } }, options: [{ optionId: "yes", kind: "allow_once" }, { optionId: "no", kind: "reject_once" }] } });
+          } else {
+            send({ method: "session/update", params: { sessionId: "s1", update: { sessionUpdate: "tool_call", title: "Shell", kind: "execute", rawInput: { command: "rm -rf build" } } } });
+            send({ id: 900, method: "session/request_permission", params: { sessionId: "s1", toolCall: { kind: "execute", title: "rm -rf build", rawInput: { command: "rm -rf build" } }, options: [{ optionId: "yes", kind: "allow_once" }, { optionId: "no", kind: "reject_once" }] } });
+          }
         } else if (m.id === 900) {
           log({ harness: "gemini", permission: m.result.outcome });
           send({ method: "session/update", params: { sessionId: "s1", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Gemini says hi" } } } });
           send({ id: pending, result: { stopReason: "end_turn" } });
+        } else if (m.id === 901) {
+          log({ harness: "gemini", askPermission: m.result.outcome });
+          if (m.result.outcome && m.result.outcome.outcome === "selected" && m.result.outcome.optionId === "yes") {
+            send({ method: "session/update", params: { sessionId: "s1", update: { sessionUpdate: "tool_call_update", toolCallId: "c9", status: "completed" } } });
+          } else {
+            send({ method: "session/update", params: { sessionId: "s1", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Gemini says hi" } } } });
+            send({ id: pending, result: { stopReason: "end_turn" } });
+          }
+        } else if (m.method === "session/cancel") {
+          log({ harness: "gemini", got: "cancel" });
+          send({ id: pending, result: { stopReason: "cancelled" } });
         }
       }
     });`),
@@ -216,4 +259,45 @@ test("bh agent: a child agent's answer reaches the chat too, and it reports to i
   assert.equal(existsSync(join(APP, "data", "bot-herdr", "replies", "k1.md")), true);
   const brief = readFileSync(join(APP, "data", "bot-herdr", "briefs", "fix-x-k1.md"), "utf8");
   assert.match(brief, /hc send t3/);
+});
+
+test("bh agent: a Claude bh ask runs to its card before the turn ends", () => {
+  setTeam("claude");
+  const r = agent("c9", "", "--", "please ask");
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /ask --file q\.md/);
+  // the harness was not killed at the tool call's start: the ask command ran to its result
+  assert.ok(calls("claude").some((c) => c.got === "ask-result"));
+  assert.equal(existsSync(join(APP, "data", "bot-herdr", "replies", "c9.md")), false); // the card says it
+});
+
+test("bh agent: a Codex bh ask runs to its card before the turn ends", () => {
+  setTeam("codex");
+  const r = agent("x9", "", "--", "please ask");
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /ask --file q\.md/);
+  assert.ok(calls("codex").some((c) => c.got === "ask-completed"));
+  assert.equal(existsSync(join(APP, "data", "bot-herdr", "replies", "x9.md")), false);
+});
+
+test("bh agent: a pi bh ask runs to its card before the turn ends", () => {
+  setTeam("pi");
+  const r = agent("p9", "", "--", "please ask");
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /ask --file q\.md/);
+  assert.ok(calls("pi").some((c) => c.got === "ask-end"));
+  assert.equal(existsSync(join(APP, "data", "bot-herdr", "replies", "p9.md")), false);
+});
+
+test("bh agent: an ACP agent's bh ask is allowed and the turn waits for the card", () => {
+  setTeam("gemini");
+  const r = agent("g2", "", "--", "please ask");
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /ask --file q\.md/);
+  const gs = calls("gemini");
+  const asked = gs.find((c) => c.askPermission);
+  assert.deepEqual(asked.askPermission, { outcome: "selected", optionId: "yes" }); // not cancelled
+  // the cancel reaches the agent only after the ask call completed (the card is made)
+  assert.ok(gs.findIndex((c) => c.got === "cancel") > gs.findIndex((c) => c.askPermission));
+  assert.equal(existsSync(join(APP, "data", "bot-herdr", "replies", "g2.md")), false);
 });

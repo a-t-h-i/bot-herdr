@@ -12,7 +12,7 @@
 // standard (edits, reading, the team's tools) unless the person picks full access.
 
 import { div, svg } from "gpui-kit";
-import { v_flex, h_flex, InputState, Input } from "gpui-base";
+import { v_flex, h_flex, InputState, Input, TextareaState, Textarea } from "gpui-base";
 import { agents, panes, spaces, exec, settings, shared, setShared, knownAgents, notify } from "herdr";
 import { SIZE, ICON } from "./look.js";
 import { colors } from "./theme.js";
@@ -30,7 +30,8 @@ const KNOB = 16;
 const FIELDS = [
   { key: "name", placeholder: "Name" },
   { key: "model", placeholder: "The harness's default" },
-  { key: "args", placeholder: "None" },
+  { key: "args", placeholder: "Flags only, e.g. --verbose" },
+  { key: "instructions", placeholder: "What this agent should always do, in plain words", rows: 3 },
 ];
 
 const FEATURES = [
@@ -48,12 +49,20 @@ const THRESHOLDS = [
 ];
 
 const HOST_ORDER = ["auto", "opencode", "typesafe", "openrouter", "vercel"];
+/** The classifier's choices without a harness: the engine's `kind`. */
+const KINDS = [
+  { kind: "jev", value: "kind|jev", label: "Jev", note: "TypeSafe System One" },
+  { kind: "laya", value: "kind|laya", label: "Laya", note: "TypeSafe System One, or your own base URL" },
+  { kind: "clef", value: "kind|clef", label: "Clef", note: "Cloudflare Workers AI: needs an account id" },
+  { kind: "rules", value: "kind|rules", label: "Rules only", note: "no model: the built-in rules decide" },
+];
+const kindOf = (kind) => KINDS.find((k) => k.kind === kind) ?? null;
 
 export class Settings {
   init(_props, cx) {
     this.known = [];
     this.knownSaved = "";
-    this.inputs = {}; // agent id → { name, model, args }
+    this.inputs = {}; // agent id → { name, model, args, instructions }
     this.open = null; // "<id>:harness" or "<id>:model": the field whose list is open
     this.pickedAt = shared(PICKED)?.at ?? 0;
     this.listed = {}; // harness → model ids its own list command printed (pi, Oh My Pi)
@@ -87,6 +96,17 @@ export class Settings {
     };
     this.modelInput.on("submit", saveModel);
     this.modelInput.on("blur", saveModel);
+    // Clef's account id and Laya's base URL, saved as typed (on Enter or leaving the field).
+    this.accountIdInput = InputState.new({ placeholder: "Your Cloudflare account id" });
+    this.baseUrlInput = InputState.new({ placeholder: "The default base URL" });
+    for (const [state, field] of [[this.accountIdInput, "accountId"], [this.baseUrlInput, "baseUrl"]]) {
+      const save = (_e, cx) => {
+        const v = state.value().trim();
+        if (this.classifier && v !== (this.classifier[field] ?? "")) this.config({ [field]: v }, cx);
+      };
+      state.on("submit", save);
+      state.on("blur", save);
+    }
     this.thresholdInputs = {};
     for (const t of THRESHOLDS) {
       const state = InputState.new({ placeholder: "0.5" });
@@ -149,6 +169,8 @@ export class Settings {
     const routing = Boolean(got.enabled && got.keyFound && got.features?.lobby !== false);
     if (Boolean(shared(ROUTING_KEY)) !== routing) setShared(ROUTING_KEY, routing);
     this.modelInput.set_value(got.model ?? "");
+    this.accountIdInput.set_value(got.accountId ?? "");
+    this.baseUrlInput.set_value(got.baseUrl ?? "");
     for (const t of THRESHOLDS) this.thresholdInputs[t.key].set_value(String(got.thresholds?.[t.key] ?? ""));
   }
 
@@ -230,7 +252,8 @@ export class Settings {
       if (this.inputs[a.id]) continue;
       const set = {};
       for (const f of FIELDS) {
-        const state = InputState.new({ value: a[f.key] ?? "", placeholder: f.placeholder });
+        const options = { value: a[f.key] ?? "", placeholder: f.placeholder };
+        const state = f.rows ? TextareaState.new({ ...options, rows: f.rows }) : InputState.new(options);
         state.on("change", (_e, cx) => {
           const value = state.value();
           const now = this.list().find((x) => x.id === a.id);
@@ -279,7 +302,7 @@ export class Settings {
     openPick({ key, bounds, selected: a.model, options });
   }
 
-  /** The classifier's model: one of an installed harness's models, or the Jev API. */
+  /** The classifier's model: one of an installed harness's models, or a kind that needs none. */
   openClassifierModels(bounds) {
     const k = this.classifier;
     const can = k?.harnesses ?? [];
@@ -290,9 +313,10 @@ export class Settings {
       for (const m of modelsOf(h.key).filter((m) => m.current)) options.push({ value: `${h.key}|${m.id}`, label: m.name, note: m.id !== m.name ? m.id : "" });
     }
     if (!options.length) options.push({ heading: "No installed harness can run it (Claude Code, Codex, Gemini or Qwen Code)" });
-    options.push({ heading: "Without a harness" }, { value: "api|", label: "Jev API", note: "a key from OpenCode Zen, TypeSafe, OpenRouter or Vercel" });
+    options.push({ heading: "Without a harness" }, ...KINDS.map((x) => ({ value: x.value, label: x.label, note: x.note })));
+    const selected = kindOf(k?.kind) ? `kind|${k.kind}` : k?.harness ? `${k.harness}|${k.harnessModel ?? ""}` : "";
     this.open = "classifier:model";
-    openPick({ key: "classifier:model", bounds, selected: k?.harness ? `${k.harness}|${k.harnessModel ?? ""}` : "api|", options, minWidth: 300 });
+    openPick({ key: "classifier:model", bounds, selected, options, minWidth: 300 });
   }
 
   /** A pick from a list (pick.js), applied once. */
@@ -303,7 +327,8 @@ export class Settings {
     if (picked.key === "classifier:model") {
       const [harness, ...model] = String(picked.value ?? "").split("|");
       this.open = null;
-      return this.config({ harness: harness === "api" ? "" : harness, harnessModel: model.join("|") }, cx);
+      if (harness === "kind") return this.config({ kind: model.join("|"), harness: "" }, cx);
+      return this.config({ kind: "", harness, harnessModel: model.join("|") }, cx);
     }
     const [id, field] = String(picked.key ?? "").split(":");
     const a = this.list().find((x) => x.id === id);
@@ -492,6 +517,7 @@ export class Settings {
           ? this.slider(c, a, stops, inner)
           : div().text_size(12).text_color(c.faint).child("No effort flag we know for this harness; use extra arguments.")))
       .child(v_flex().gap(5).child(this.label(c, "Extra arguments")).child(this.field(c, inputs.args)))
+      .child(v_flex().gap(5).child(this.label(c, "Instructions")).child(this.textarea(c, inputs.instructions)))
       .child(
         div()
           .pt(2)
@@ -500,6 +526,18 @@ export class Settings {
           .text_color(c.faint)
           .child(`${a.lead ? "Plain messages" : `@${slug(a.name)}`} · ${argvOf(a, this.known).join(" ")}`),
       );
+  }
+
+  /** A multi-line field, framed like field(). */
+  textarea(c, state) {
+    return div()
+      .px(10)
+      .py(6)
+      .rounded(SIZE.control)
+      .bg(c.ground)
+      .border_1()
+      .border_color(c.edge)
+      .child(Textarea.new(state).w_full().text_size(13).text_color(c.ink));
   }
 
   field(c, state, { bold = false } = {}) {
@@ -697,16 +735,19 @@ export class Settings {
     if (!k) return this.heading(c, "Classifier", "Loading… (it needs node on your PATH).");
     const hosts = k.hosts ?? {};
     const using = hosts[k.using]?.label ?? k.using;
+    const kind = k.harness ? null : kindOf(k.kind);
     const harness = k.harness ? this.known.find((x) => x.key === k.harness) : null;
     const harnessName = harness?.name ?? k.harness;
     const modelName = k.harness ? (modelsOf(k.harness).find((m) => m.id === k.harnessModel)?.name ?? (k.harnessModel || "its default model")) : "";
-    const ready = k.harness ? k.harnessReady : k.keyFound;
+    const rules = kind?.kind === "rules";
+    const ready = k.harness ? k.harnessReady : rules || k.keyFound;
     const status = !k.enabled
       ? "Off: plain rules make these calls."
       : k.harness
         ? (ready ? `On, using ${harnessName} · ${modelName}.` : `On, but ${harnessName} isn't installed here: pick another model.`)
-        : k.keyFound ? `On, using ${using}.` : `On, but no key found: paste one or set ${hosts[k.using]?.env ?? "a key"}.`;
-    const picked = k.harness ? `${harnessName} · ${modelName}` : "Jev API";
+        : rules ? "On: the built-in rules decide."
+        : k.keyFound ? `On, using ${kind?.label ?? using}.` : `On, but no key found: paste one${kind ? "" : ` or set ${hosts[k.using]?.env ?? "a key"}`}.`;
+    const picked = k.harness ? `${harnessName} · ${modelName}` : kind?.label ?? using;
     return v_flex()
       .gap(GAP)
       .child(this.heading(c, "Classifier", "A fast model makes the small calls so the agents don't spend tokens on them: who answers a message, a task's size and track, each step's effort, how deep QA goes and which shared scripts help."))
@@ -747,11 +788,12 @@ export class Settings {
               .child(div().flex_1().min_w(0).truncate().text_size(13).child(picked))
               .child(svg(ICON("chevron-down")).size(14).text_color(c.muted)),
           ))
-          .when(!k.harness, (el) => el
+          .when(!k.harness && !kind, (el) => el
             .child(v_flex().gap(5).child(this.label(c, "Host")).child(
               h_flex().flex_wrap().gap(6).children(HOST_ORDER.filter((h) => h === "auto" || hosts[h]).map((h) =>
                 this.chip(c, `bh-host-${h}`, h === "auto" ? "Auto" : hosts[h].label, k.host === h, (_e, cx) => this.config({ host: h }, cx)))),
-            ))
+            )))
+          .when(!k.harness && !rules, (el) => el
             .child(
               h_flex()
                 .gap(10)
@@ -759,6 +801,8 @@ export class Settings {
                 .child(v_flex().flex_1().min_w(0).gap(5).child(this.label(c, "Key", k.key ? "set" : "not set")).child(this.field(c, this.keyInput)))
                 .child(v_flex().flex_1().min_w(0).gap(5).child(this.label(c, "API model")).child(this.field(c, this.modelInput))),
             ))
+          .when(kind?.kind === "clef", (el) => el.child(v_flex().gap(5).child(this.label(c, "Account id")).child(this.field(c, this.accountIdInput))))
+          .when(kind?.kind === "laya", (el) => el.child(v_flex().gap(5).child(this.label(c, "Base URL")).child(this.field(c, this.baseUrlInput))))
           .when(Boolean(k.harness), (el) => el.child(div().text_size(11.5).text_color(c.faint).child("Each call starts the harness once, so a routed message waits a few seconds longer than with the API. It uses the harness's own sign-in.")))
           .child(v_flex().gap(5).child(this.label(c, "Use it for")).child(
             h_flex().flex_wrap().gap(6).children(FEATURES.map((f) =>

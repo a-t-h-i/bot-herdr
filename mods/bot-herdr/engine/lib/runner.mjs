@@ -20,6 +20,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import { existsSync } from "node:fs";
 import { HEADLESS, argvOf, effortsOf, headless } from "../../roster.js";
 import { BH, DATA, ensureDir } from "./core.mjs";
 
@@ -43,8 +44,13 @@ export function launch(argv, { cwd, env = process.env, stdio = ["pipe", "pipe", 
 /** Ends a program and whatever it started. */
 export function stop(child) {
   if (!child || child.exitCode !== null) return;
-  if (WIN) spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], { stdio: "ignore", windowsHide: true });
-  else child.kill("SIGTERM");
+  if (WIN) {
+    // taskkill ends the whole tree. Its home is System32, so a bare PATH can't hide it.
+    const exe = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe");
+    const kill = existsSync(exe) ? spawn(exe, ["/pid", String(child.pid), "/t", "/f"], { stdio: "ignore", windowsHide: true }) : null;
+    if (kill) kill.on("error", () => child.kill());
+    else child.kill();
+  } else child.kill("SIGTERM");
 }
 
 /** One short line for a tool call: "Read src/app.tsx", "Run npm test". */
@@ -144,14 +150,28 @@ function claudeTurn({ agent, known, state, briefFile, prompt, cwd, on, access, a
     if (event.type === "assistant") {
       for (const b of event.message?.content ?? []) {
         if (b.type === "tool_use") {
+          // Its question tool can't prompt headless: the card is the question, and the turn ends
+          // so the model waits for the answers (the next message) instead of deciding alone.
           const asked = b.name === "AskUserQuestion" ? fromAskTool(b.input) : null;
-          if (asked) on({ kind: "ask", ...asked });
-          else on({ kind: "tool", line: toolLine(b.name, b.input) });
+          if (asked) {
+            on({ kind: "ask", ...asked });
+            turn.asked = true;
+            return;
+          }
+          on({ kind: "tool", line: toolLine(b.name, b.input) });
+          // bh ask: the command writes the card itself, so the turn must outlive the call; it
+          // ends when the call's result arrives (the user event below), not when it starts.
+          if (asksPerson(b.name, b.input)) turn.askIds = [...(turn.askIds ?? []), b.id];
         }
         if (b.type === "text" && b.text?.trim()) {
           turn.text = b.text;
           on({ kind: "text", text: b.text });
         }
+      }
+    } else if (event.type === "user") {
+      // The result of a bh ask call: the card is made, so the turn ends here.
+      for (const b of event.message?.content ?? []) {
+        if (b.type === "tool_result" && (turn.askIds ?? []).includes(b.tool_use_id)) turn.asked = true;
       }
     } else if (event.type === "result") {
       if (event.is_error || (event.subtype && event.subtype !== "success")) turn.error = event.result?.trim() || (event.errors ?? []).join("; ") || `stopped: ${event.subtype}`;
@@ -174,7 +194,12 @@ function codexTurn({ agent, known, state, brief, prompt, cwd, on, access }) {
   return oneShot(argv, text, cwd, (event, turn) => {
     if (event.type === "thread.started" && event.thread_id) turn.session = event.thread_id;
     const item = event.item ?? {};
-    if (event.type === "item.started" && item.type === "command_execution") on({ kind: "tool", line: toolLine("bash", { command: item.command }) });
+    if (event.type === "item.started" && item.type === "command_execution") {
+      on({ kind: "tool", line: toolLine("bash", { command: item.command }) });
+      // bh ask: the command writes the card itself; the turn ends when the command completes.
+      if (asksPerson("bash", { command: item.command })) turn.askCmd = item.command;
+    }
+    if (event.type === "item.completed" && item.type === "command_execution" && item.command && item.command === turn.askCmd) turn.asked = true;
     if (event.type === "item.completed") {
       if (item.type === "agent_message" && item.text?.trim()) {
         turn.text = item.text;
@@ -194,7 +219,12 @@ function piTurn({ agent, known, state, key, briefFile, prompt, cwd, on }) {
   const argv = [...argvOf(agent, known), "-p", "--mode", "json", "--session-dir", dir, "--append-system-prompt", briefFile, ...(state.session ? ["--continue"] : [])];
   return oneShot(argv, prompt, cwd, (event, turn) => {
     if (event.type === "session" && event.id) turn.session = event.id;
-    if (event.type === "tool_execution_start") on({ kind: "tool", line: toolLine(event.toolName, event.args ?? {}) });
+    if (event.type === "tool_execution_start") {
+      on({ kind: "tool", line: toolLine(event.toolName, event.args ?? {}) });
+      // bh ask: the command writes the card itself; the turn ends when the tool call ends.
+      if (asksPerson(event.toolName, event.args ?? {})) turn.askTool = { id: event.toolCallId ?? null, name: event.toolName };
+    }
+    if (event.type === "tool_execution_end" && turn.askTool && (turn.askTool.id !== null ? event.toolCallId === turn.askTool.id : event.toolName === turn.askTool.name)) turn.asked = true;
     if (event.type === "message_end" && event.message?.role === "assistant") {
       const text = textOf(event.message.content);
       if (text.trim()) {
@@ -206,18 +236,30 @@ function piTurn({ agent, known, state, key, briefFile, prompt, cwd, on }) {
   }, { session: state.session ?? "pi" });
 }
 
+function asksPerson(name, input = {}) {
+  if (name === "AskUserQuestion") return true;
+  const command = input.command ?? input.cmd;
+  if (typeof command !== "string") return false;
+  const cmd = command.replace(/\\/g, "/");
+  return /\bbh(?:\.mjs)?["']?\s+ask\b/.test(cmd) || /\/bh\.mjs["']?\s+ask\b/.test(cmd);
+}
+
 /** Runs one process for one turn: the prompt on stdin, JSON lines out. */
 function oneShot(argv, prompt, cwd, handle, init = {}) {
   const child = launch(argv, { cwd });
-  const turn = { text: "", error: null, session: init.session ?? null, cancelled: false };
+  const turn = { text: "", error: null, session: init.session ?? null, cancelled: false, asked: false };
   const err = collectErr(child);
-  lines(child, (event) => handle(event, turn));
+  lines(child, (event) => {
+    if (turn.asked) return;
+    handle(event, turn);
+    if (turn.asked) stop(child); // it asked the person: the turn ends here
+  });
   child.stdin.on("error", () => {});
   child.stdin.end(prompt);
   const done = new Promise((resolve) => {
     child.on("error", (e) => resolve({ ...turn, error: `couldn't start ${argv[0]}: ${e.message}` }));
     child.on("close", (code) => {
-      if (turn.cancelled) return resolve(turn);
+      if (turn.cancelled || turn.asked) return resolve(turn);
       if (code !== 0 && !turn.text && !turn.error) turn.error = err().split("\n").slice(-6).join("\n") || `${argv[0]} exited with ${code}`;
       resolve(turn);
     });
@@ -260,6 +302,9 @@ export class Acp {
     this.child = null;
     this.session = null;
     this.text = "";
+    this.block = "";
+    this.asked = false;
+    this.askCall = null; // a bh ask tool call in flight: the turn ends when it completes
     this.on = () => {};
   }
 
@@ -295,13 +340,27 @@ export class Acp {
     else if (this.agent.model && made.result.models) await this.request("session/set_model", { sessionId: this.session, modelId: this.agent.model });
   }
 
+  /** A chunk of the agent's words: the reply is the last block that had any. */
+  said(chunk) {
+    this.block += chunk;
+    if (this.block.trim()) this.text = this.block;
+  }
+
   message(m) {
     if (m.method === "session/update") {
       const u = m.params?.update ?? {};
-      if (u.sessionUpdate === "agent_message_chunk" && u.content?.type === "text") this.text += u.content.text;
+      if (u.sessionUpdate === "agent_message_chunk" && u.content?.type === "text") this.said(u.content.text);
       if (u.sessionUpdate === "tool_call") {
-        this.text = ""; // what it said before a tool call was narration, not the answer
-        this.on({ kind: "tool", line: toolLine(u.title ?? u.kind ?? "tool", { ...(u.rawInput ?? {}), locations: u.locations }) });
+        this.block = ""; // what it says after a tool call is a new block; the last non-empty block stays the reply
+        const input = { ...(u.rawInput ?? {}), locations: u.locations };
+        this.on({ kind: "tool", line: toolLine(u.title ?? u.kind ?? "tool", input) });
+        // bh ask: the command writes the card itself; let it run, and end the turn when it's done.
+        if (asksPerson(u.title ?? u.kind ?? "tool", input) && u.toolCallId !== undefined) this.askCall = u.toolCallId;
+      }
+      if (u.sessionUpdate === "tool_call_update" && u.toolCallId === this.askCall && u.status === "completed") {
+        this.asked = true; // the card is made: stop the agent here, so it waits for the answers
+        this.askCall = null;
+        if (this.session) this.send({ method: "session/cancel", params: { sessionId: this.session } });
       }
       return;
     }
@@ -309,7 +368,12 @@ export class Acp {
       const options = m.params?.options ?? [];
       const call = m.params?.toolCall ?? {};
       const command = call.rawInput?.command ?? call.rawInput?.cmd;
-      const allow = acpAllowed(call.kind, this.access, { command: Array.isArray(command) ? command.join(" ") : command, allow: this.allow });
+      const textCmd = Array.isArray(command) ? command.join(" ") : command;
+      const asks = asksPerson(call.title ?? call.kind ?? "tool", { ...(call.rawInput ?? {}), command: textCmd });
+      // A bh ask call is allowed at every access level: its card is the prompt, and the turn
+      // ends only once the command has run and written the card (the tool_call_update above).
+      const allow = acpAllowed(call.kind, this.access, { command: textCmd, allow: this.allow }) || asks;
+      if (asks && call.toolCallId !== undefined) this.askCall = call.toolCallId;
       const pick = allow
         ? options.find((o) => o.kind === "allow_once") ?? options.find((o) => o.kind === "allow_always")
         : options.find((o) => o.kind === "reject_once") ?? options.find((o) => o.kind === "reject_always");
@@ -331,11 +395,15 @@ export class Acp {
   turn({ brief, prompt, on }) {
     this.on = on;
     this.text = "";
+    this.block = "";
+    this.asked = false;
+    this.askCall = null;
     const done = (async () => {
       try {
         const first = !this.child;
         if (first) await this.start();
         const r = await this.request("session/prompt", { sessionId: this.session, prompt: [{ type: "text", text: first ? `${brief}\n\n${prompt}` : prompt }] });
+        if (this.asked) return { text: this.text, asked: true, error: null, session: this.session };
         if (r.error) return { text: this.text, error: r.error.message ?? "the agent refused the prompt", session: this.session };
         if (r.result?.stopReason === "cancelled") return { text: this.text, cancelled: true, session: this.session };
         if (this.text.trim()) on({ kind: "text", text: this.text });
@@ -388,3 +456,4 @@ export function interactive(agent, known, state, key) {
   if ((agent.harness === "pi" || agent.harness === "omp") && state.session) return [...argv, "--session-dir", join(DATA, "sessions", key), "--continue"];
   return argv;
 }
+

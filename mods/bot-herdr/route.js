@@ -13,6 +13,7 @@ export const COMMANDS = [
   { name: "stop", hint: "Stop the agent where it is", color: "#cc6460" },
   { name: "peek", hint: "Peek at the agent's terminal", color: "#3ea3b5" },
   { name: "team", hint: "Brief the agent again: its role, the team, the tools", color: "#d6825a" },
+  { name: "bh-knowledge", hint: "Ask about this project: its knowledge and code", color: "#3fa796" },
 ];
 
 /** A command's colour, for its row and its chip in the text. */
@@ -167,13 +168,18 @@ export function plan(content, ctx) {
 
   // A command picked from the list is a chip; one typed out is plain text at the start.
   let command = ids.find((id) => id.startsWith("cmd:"))?.slice(4) ?? null;
-  const slash = command ? null : /^\/([a-z]+)\b\s*/i.exec(text);
+  const slash = command ? null : /^\/([a-z][a-z-]*)(?![\w-])\s*/i.exec(text);
   if (slash && COMMANDS.some((c) => c.name === slash[1].toLowerCase())) {
     command = slash[1].toLowerCase();
     text = text.slice(slash[0].length);
   }
   if (command === "all") ids.push("all");
   if (command === "settings") return { steps: [{ do: "settings" }] };
+  // /bh-knowledge asks Scout about the project; its answer comes back to the chat.
+  if (command === "bh-knowledge") {
+    if (!text) return { error: "Type a question after /bh-knowledge" };
+    return { steps: [{ do: "knowledge", question: text }] };
+  }
   // /task and /plan go to the Orchestrator (or whoever is named) marked, so it takes that track.
   if (command === "task" || command === "plan") {
     if (!text) return { error: `Say what to ${command} after /${command}.` };

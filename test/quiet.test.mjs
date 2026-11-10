@@ -67,7 +67,7 @@ test("first prompt: agy, Gemini and Qwen Code get it after -i; others as a bare 
   assert.equal(promptFlag(["codex", "--no-daemon"]), null);
 });
 
-test("templates: an agy agent's says ready: quiet, so its brief is typed in once it settles", () => {
+test("templates: an agy agent runs headless through bh agent; a non-headless harness keeps its command", () => {
   const tmp = mkdtempSync(join(tmpdir(), "bh-quiet-"));
   const APP = join(tmp, "app");
   const XDG = join(tmp, "xdg");
@@ -75,14 +75,16 @@ test("templates: an agy agent's says ready: quiet, so its brief is typed in once
   mkdirSync(PROJECT, { recursive: true });
   const BH = fileURLToPath(new URL("../mods/bot-herdr/engine/bh.mjs", import.meta.url));
   const enc = (v) => encodeURIComponent(JSON.stringify(v));
-  const known = [{ key: "antigravity", name: "Antigravity", run: ["agy"], installed: true }, { key: "codex", name: "Codex", run: ["codex"], installed: true }];
-  const r = spawnSync(process.execPath, [BH, "team", "save", "--data", enc({ agents: [{ role: "design", harness: "antigravity", model: "gemini-3.8-flash-high" }, { role: "dev", harness: "codex" }], known })], {
+  // codex is headless too by default; use a harness with no headless mode to keep its own command
+  const known = [{ key: "antigravity", name: "Antigravity", run: ["agy"], installed: true }, { key: "aider", name: "Aider", run: ["aider"], installed: true }];
+  const r = spawnSync(process.execPath, [BH, "team", "save", "--data", enc({ agents: [{ role: "design", harness: "antigravity", model: "gemini-3.8-flash-high" }, { role: "dev", harness: "aider" }], known })], {
     cwd: PROJECT, encoding: "utf8", env: { ...process.env, BH_APP_HOME: APP, XDG_CONFIG_HOME: XDG, HC_TERMINAL_ID: "", BH_AGENT: "", PATH: "" },
   });
   assert.equal(r.status, 0, r.stderr);
   const design = readFileSync(join(XDG, "herdr-core", "templates", "design.md"), "utf8");
-  assert.match(design, /command: agy --model gemini-3\.8-flash-high\n/);
-  assert.match(design, /\nready: quiet\n/);
+  assert.match(design, /command: node .*bh\.mjs agent design --mode child\n/);
+  assert.doesNotMatch(design, /\nready: quiet\n/);
   const dev = readFileSync(join(XDG, "herdr-core", "templates", "dev.md"), "utf8");
+  assert.match(dev, /command: aider\n/);
   assert.doesNotMatch(dev, /ready:/);
 });

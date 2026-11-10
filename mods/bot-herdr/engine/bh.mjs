@@ -28,19 +28,22 @@ Tasks
   bh task steps <id> "<step>" "<step>" …   (or --file plan.md: its ## Steps list)
   bh task step <id> <n> start|done|block|skip [--agent A] [--note N]
   bh task status <id> active|paused|done|abandoned     bh task archive <id>
-  bh task comment <id> [--step N] "<text>"     bh task resolve <id>     (the person's comments)
+  bh task comment <id> [--step N] "<text>"  [--edit <cid> "<text>" | --delete <cid>]
+  bh task resolve <id> [--comment <cid>]       (the person's comments; all of them without --comment)
   bh board post <task> contract|decision|blocker|question|done|note "<text>" [--from A] [--to B]
   bh board read <task> [--kinds a,b] [--since N]
 
 Plans
   bh plan new "<idea>"            bh plan list            bh plan show <id>
   bh plan write <id> --file draft.md [--status grilling|ready]
-  bh plan comment <id> [--line N] "<text>"     bh plan resolve <id>
+  bh plan comment <id> [--line N] "<text>"  [--edit <cid> "<text>" | --delete <cid>]
+  bh plan resolve <id> [--comment <cid>]
   bh plan task <id>               (a task from the plan's steps)     bh plan archive <id>
   bh plan seat <id> <seat> --off|--on   (the person leaves a panel seat out, or brings it back)
 
 Knowledge (one file per agent)
   bh knowledge [<agent>]          bh knowledge list       bh knowledge search "<words>"
+  bh knowledge ask "<question>"   ask Scout about the project's knowledge and code
   bh knowledge add <agent> "<fact>" [--section Facts|Standards|Decisions|History]
   bh knowledge note <agent> "<entry words>" "<note>"      bh knowledge write <agent> --file F
 
@@ -76,6 +79,16 @@ function personOnly(what) {
 }
 
 const out = (flags, value, text) => console.log(flags.json ? JSON.stringify(value, null, 2) : typeof text === "function" ? text(value) : text ?? value);
+
+/**
+ * `--edit <cid>` (new words) or `--delete <cid>` on one comment of a task or plan (`M` is its
+ * module). Returns the comment and what to say, or null when neither flag is given.
+ */
+function changeOne(M, owner, flags, words) {
+  if (flags.edit !== undefined) return { c: M.editComment(owner, String(flags.edit), words()), said: `Comment ${flags.edit} changed.` };
+  if (flags.delete !== undefined) return { c: M.deleteComment(owner, String(flags.delete)), said: `Comment ${flags.delete} deleted.` };
+  return null;
+}
 
 /**
  * Settings → Git isolation (or --branch / --worktree / --no-git for this one task): gives a new
@@ -162,9 +175,15 @@ async function main(argv) {
         return out(flags, task, (t) => `${t.id} is ${t.status}.`);
       }
       if (sub === "comment") {
-        const x = T.comment(task, { step: flags.step ?? null, text: need(rest2.join(" ") || bodyText(flags, []), 'bh task comment <id> [--step N] "<text>"') });
+        const one = changeOne(T, task, flags, () => rest2.join(" ") || bodyText(flags, []));
+        const x = one?.c ?? T.comment(task, { step: flags.step ?? null, text: need(rest2.join(" ") || bodyText(flags, []), 'bh task comment <id> [--step N] "<text>"') });
         T.saveTask(root, task);
-        return out(flags, x, () => `Comment ${x.id} added.`);
+        return out(flags, x, () => one?.said ?? `Comment ${x.id} added.`);
+      }
+      if (sub === "resolve" && flags.comment !== undefined) {
+        const x = T.resolveComment(task, String(flags.comment));
+        T.saveTask(root, task);
+        return out(flags, x, () => `Comment ${x.id} resolved.`);
       }
       if (sub === "resolve") {
         task.comments = (task.comments ?? []).map((x) => ({ ...x, open: false }));
@@ -220,9 +239,15 @@ async function main(argv) {
         return out(flags, plan, (p) => `${p.id} round ${p.round}: ${p.status}.`);
       }
       if (sub === "comment") {
-        const x = P.comment(plan, { line: flags.line ?? null, text: need(args.slice(1).join(" ") || bodyText(flags, []), 'bh plan comment <id> "<text>"') });
+        const one = changeOne(P, plan, flags, () => args.slice(1).join(" ") || bodyText(flags, []));
+        const x = one?.c ?? P.comment(plan, { line: flags.line ?? null, text: need(args.slice(1).join(" ") || bodyText(flags, []), 'bh plan comment <id> "<text>"') });
         P.savePlan(root, plan);
-        return out(flags, x, () => `Comment ${x.id} added.`);
+        return out(flags, x, () => one?.said ?? `Comment ${x.id} added.`);
+      }
+      if (sub === "resolve" && flags.comment !== undefined) {
+        const x = P.resolveComment(plan, String(flags.comment));
+        P.savePlan(root, plan);
+        return out(flags, x, () => `Comment ${x.id} resolved.`);
       }
       if (sub === "resolve") {
         plan.comments = plan.comments.map((x) => ({ ...x, open: false }));
@@ -249,6 +274,24 @@ async function main(argv) {
     }
 
     case "knowledge": {
+      if (sub === "ask") {
+        const question = need(args.join(" ") || bodyText(flags, []), 'bh knowledge ask "<question>"');
+        const { agents, known } = team.team();
+        const scout = agents.find((a) => a.role === "scout") ?? team.findMember("scout");
+        const files = git(root, ["ls-files"]).out.split("\n").filter(Boolean);
+        const repo = files.slice(0, 500).join("\n") + (files.length > 500 ? `\n… (${files.length - 500} more)` : "");
+        const knowledge = K.list(root).map((k) => `## ${k.agent}\n${K.withNotes(root, k.agent)}`).filter(Boolean).join("\n\n") || "(no knowledge files yet)";
+        const context = `# Knowledge files (.bot-herdr/knowledge)\n\n${knowledge}\n\n# Repository files\n${repo || "(none)"}`;
+        const name = "knowledge-scout";
+        const message = `${context}\n\n## Question\n${question}`;
+        const sent = team.hc(["send", name, question.includes("\n") ? message : `Question: ${question}\n\n${context}`]);
+        if (sent.code === 0) return out(flags, { started: false, reused: true, name }, () => `Asked ${name} (reused). Its answer will appear in the chat.`);
+        const argv = team.agentArgv(scout, { mode: "lead", name });
+        const cwd = process.cwd();
+        const r = team.hc(["run", "--bg", "--name", name, "--cwd", cwd, "--", ...argv, "--", message]);
+        if (r.code !== 0) throw new Error(`couldn't start Scout: ${(r.err || r.out).trim()}`);
+        return out(flags, { started: true, reused: false, name }, () => `Asked ${name}. Its answer will appear in the chat.`);
+      }
       if (sub === "list") return out(flags, K.list(root), (l) => l.map((k) => `${k.agent}: ${k.entries} entries, ${k.chars} characters${k.over ? " (over the limit: rewrite it shorter)" : ""}`).join("\n") || "No knowledge yet.");
       if (sub === "search") return out(flags, K.search(root, args.join(" ")), (l) => l.join("\n") || "Nothing found.");
       if (sub === "add") {
@@ -402,7 +445,9 @@ async function main(argv) {
         // with the task, so one template per agent and mode serves every spawn.
         const body = team.brief(agent, { mode, root }) + (risk ? `\n\n${risk}` : "");
         const variant = [slug(a.name), mode !== "child" ? mode : "", flags.model ? slug(flags.model) : "", effort !== a.effort ? effort : ""].filter(Boolean).join("-");
-        const template = team.writeTemplate(agent, known, { name: mode === "child" && variant === slug(a.name) ? variant : `bh-${variant}`, body, effort });
+        // hc runs a template's `command:` through `sh -c`, which Windows doesn't have: there the
+        // command goes to hc run as argv instead.
+        const template = process.platform === "win32" ? null : team.writeTemplate(agent, known, { name: mode === "child" && variant === slug(a.name) ? variant : `bh-${variant}`, body, effort });
         r = template
           ? team.hc(["run", "--bg", "--name", name, "--cwd", cwd, template.name, first])
           : team.hc(["run", "--bg", "--name", name, "--cwd", cwd, "--", ...withPrompt(argvOf(agent, known, { effort }), first), `${body}\n\n${first}`]);
@@ -456,8 +501,8 @@ async function main(argv) {
       }
       const config = C.classifierConfig();
       const t = C.target(config);
-      const shown = { ...config, key: Boolean(config.key), keyFound: Boolean(t.key), using: t.name, harnessReady: C.onHarness(config), harnesses: Object.keys(C.CLASSIFIER_HARNESSES), hosts: Object.fromEntries(Object.entries(C.HOSTS).map(([k, h]) => [k, { label: h.label, env: h.env, model: h.model }])) };
-      return out(flags, shown, (x) => `Classifier ${x.enabled ? "on" : "off"}; host ${x.host} (using ${x.using}); key ${x.keyFound ? "found" : "missing"}.`);
+      const shown = { ...config, key: Boolean(config.key), keyFound: Boolean(t.key), using: t.name, harnessReady: Boolean(C.onHarness(config)), harnesses: Object.keys(C.CLASSIFIER_HARNESSES), hosts: Object.fromEntries(Object.entries(C.HOSTS).map(([k, h]) => [k, { label: h.label, env: h.env, model: h.model }])) };
+      return out(flags, shown, (x) => `Classifier ${x.enabled ? "on" : "off"}; kind ${x.kind || "(host)"} (using ${x.using}); key ${x.keyFound ? "found" : "missing"}.`);
     }
 
     case "questions":

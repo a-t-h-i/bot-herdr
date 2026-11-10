@@ -30,6 +30,9 @@ const OFF = "\x1b[0m";
 /** A file name for an address ("t3", "laptop/t3"). */
 export const fileKey = (address) => String(address).replace(/[\\/]/g, "_");
 
+/** The chat's entry for a turn that ended without any words. */
+export const NO_REPLY = "(finished without a reply)";
+
 /** The chat's reply file: the answer, and a stamp so the same words twice still show twice. */
 export function replyText(text) {
   return `${String(text).trim()}\n\n<!-- bh ${now()} -->\n`;
@@ -265,8 +268,9 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
       say(`${RED}${r.error}${OFF}`);
       reply = `${reply ? `${reply}\n\n` : ""}**Couldn't finish:**\n\n\`\`\`\n${String(r.error).slice(-1500)}\n\`\`\``;
     }
-    // Every agent's answer reaches the chat, a child's too (it also reports to its parent).
-    if (address && reply) writeText(join(DATA, "replies", `${fileKey(address)}.md`), replyText(reply));
+    // Every agent's answer reaches the chat, a child's too (it also reports to its parent). A turn
+    // with no words still says it ended, unless it ended on a question card (the card says it).
+    if (address && (reply || !r.asked)) writeText(join(DATA, "replies", `${fileKey(address)}.md`), replyText(reply || NO_REPLY));
     status(r.error ? "error" : "done", r.error ? String(r.error).split("\n")[0] : undefined);
   }
 

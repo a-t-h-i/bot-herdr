@@ -7,7 +7,7 @@
 // answer in its terminal, gets a line here with a way to its terminal.
 
 import { div, svg, image } from "gpui-kit";
-import { v_flex, h_flex, TextView } from "gpui-base";
+import { v_flex, h_flex, TextView, InputState, Input } from "gpui-base";
 import { terminals, spaces, focused, settings, shared, setShared, readTextFile } from "herdr";
 import * as fs from "fs/promises";
 import { SIZE, ICON, readable, textWidth } from "./look.js";
@@ -15,14 +15,15 @@ import { colors } from "./theme.js";
 import { Composer, outboxDir, liveAgents } from "./composer.js";
 import { isQuiet, quietStatus } from "./live.js";
 import { FOCUS, OUTGOING, OPEN_TASK, activePage, openTerminal, showPage } from "./pages.js";
-import { replyFile, replyBody, push, shown, isNew, outcome, clock, segments, fold, linkFiles, fileTarget, FILE_LINK } from "./feed.js";
+import { replyFile, replyBody, push, shown, scrollBy, isNew, outcome, clock, segments, fold, linkFiles, fileTarget, FILE_LINK, addComment, editComment, resolveComment, deleteComment } from "./feed.js";
 import { openFile } from "./viewer.js";
 import { bh, bhJson, enc, projectDir } from "./bh.js";
-import { roleWord } from "./indicators.js";
+import { roleWord, alpha } from "./indicators.js";
 import { indicatorFor, roleOf, onTurn, TURN_MS } from "./working.js";
 import { findAgent, roster, ROSTER_KEY } from "./roster.js";
 import { summary } from "./drawer.js";
 import { mockup, openInBrowser } from "./media.js";
+import { commentRow } from "./work.js";
 import { openLightbox } from "./lightbox.js";
 
 /** Where agents' questions for the person wait (bh ask writes them; answered ones move aside). */
@@ -33,7 +34,6 @@ const activityDir = () => `${outboxDir().replace(/\/replies$/, "")}/activity`;
 const POLL_MS = 2500;
 const TASKS_MS = 5000;
 const WIDGET_W = 260;
-const WHEEL_STEP = 70; // px of wheel per entry
 
 const load = (key, fallback) => {
   try {
@@ -57,8 +57,10 @@ export class Chat {
     this.seen = load("seen", {}); // address → the last reply text shown
     this.waits = {}; // address → { name, worked, stopped, blocked }: agents we wrote to
     this.doing = {}; // address → what a headless agent is doing ("Read src/app.tsx")
-    this.back = 0; // entries scrolled up from the newest
-    this.wheel = 0;
+    this.back = 0; // whole entries scrolled up from the newest
+    this.px = 0; // pixels scrolled into the entry `back` up from the newest
+    this.heights = new Map(); // entry id → its drawn height, gap included
+    this.handle = cx.focus_handle(); // holds the keyboard while the composer is folded
     this.focusAt = shared(FOCUS) ?? 0;
     this.outAt = shared(OUTGOING)?.at ?? 0; // the last message another page asked us to send
     this.page = null;
@@ -69,6 +71,9 @@ export class Chat {
     this.turn = null; // the agent on the working line when several work (its address)
     this.turnShown = true; // the line's first frame is drawn low and clear, then slides up
     this.drawnFx = null; // the motion the working line showed last, to redraw when it changes
+    this.verbShown = true; // false for the one frame before a new verb fades in
+    this.commenting = null; // the reply with its comment box open: { entry, edit: cid | null }
+    this.commentBoxes = new Map(); // agent name → its comment box (a placeholder is fixed when made)
     this.composer = new Composer({
       sent: (message, cx) => this.sent(message, cx),
       born: (address, name) => this.expect(address, name),
@@ -103,8 +108,140 @@ export class Chat {
   add(entry, cx) {
     this.entries = push(this.entries, { at: Date.now(), space: this.space(), ...entry });
     this.back = 0;
+    this.px = 0;
     save("feed", this.entries);
     cx.notify();
+  }
+
+  /** The feed changed by a comment: kept the way add() keeps it. */
+  setFeed(entries) {
+    this.entries = entries;
+    save("feed", entries);
+  }
+
+  // ── Comments on a reply ────────────────────────────────────────────────────────────────────
+
+  /** The comment box for replies from one agent: its placeholder names who reads the comment. */
+  commentBox(name) {
+    let box = this.commentBoxes.get(name);
+    if (!box) {
+      box = InputState.new({ placeholder: `Your comment. Enter sends it to ${name}` });
+      box.on("submit", (_e, cx) => this.sendComment(cx));
+      this.commentBoxes.set(name, box);
+    }
+    return box;
+  }
+
+  /** Opens the box under a reply (a new comment, or `cid` to edit one); again closes it. */
+  startComment(e, cid, cx) {
+    const same = this.commenting?.entry === e.id && this.commenting.edit === cid;
+    this.commenting = same ? null : { entry: e.id, edit: cid };
+    const box = this.commentBox(e.from?.name ?? "Agent");
+    box.set_value(cid ? (e.comments ?? []).find((x) => x.id === cid)?.text ?? "" : "");
+    if (!same) box.focus();
+    cx.notify();
+  }
+
+  sendComment(cx) {
+    const where = this.commenting;
+    const e = where && this.entries.find((x) => x.id === where.entry);
+    if (!e) return;
+    const box = this.commentBox(e.from?.name ?? "Agent");
+    const text = box.value().trim();
+    if (!text) return;
+    box.set_value("");
+    this.commenting = null;
+    const at = Date.now();
+    this.setFeed(where.edit ? editComment(this.entries, e.id, where.edit, text, at) : addComment(this.entries, e.id, text, at));
+    const quote = String(e.text ?? "").replace(/\s+/g, " ").trim().slice(0, 80);
+    this.tellAuthor(e, `${where.edit ? "Changed comment: " : ""}About your reply ("${quote}…"): ${text}`, cx);
+    cx.notify();
+  }
+
+  /** A comment goes to the agent that wrote the reply; to the Orchestrator once that agent is gone. */
+  tellAuthor(e, text, cx) {
+    const address = e.from?.address;
+    const name = e.from?.name ?? "Agent";
+    if (!address || !liveAgents().some((a) => a.address === address)) return this.composer.sendText(`(${name} is no longer running) ${text}`, cx);
+    this.expect(address, name);
+    cx.spawn(async (cx) => {
+      try {
+        await this.composer.runStep({ do: "send", address, text, files: [] }, liveAgents());
+      } catch (err) {
+        this.composer.say(String(err?.message ?? err), cx, "error");
+      }
+      cx.notify();
+    });
+  }
+
+  /** Resolve, reopen, edit and delete for one comment on a reply: they change the feed. */
+  replyCommentActions(e, x) {
+    const change = (entries, cx) => {
+      this.setFeed(entries);
+      cx.notify();
+    };
+    return {
+      key: `bh-e-c-${e.id}-${x.id}`,
+      resolve: (cx) => change(resolveComment(this.entries, e.id, x.id), cx),
+      reopen: (cx) => change(editComment(this.entries, e.id, x.id, x.text, x.edited), cx),
+      edit: (cx) => this.startComment(e, x.id, cx),
+      delete: (cx) => {
+        if (this.commenting?.entry === e.id && this.commenting.edit === x.id) this.commenting = null;
+        change(deleteComment(this.entries, e.id, x.id), cx);
+      },
+    };
+  }
+
+  /** Under a reply: its comments (the box under the one being edited), the Comment link, the new box. */
+  replyComments(c, e) {
+    const w = this.commenting?.entry === e.id ? this.commenting : null;
+    return v_flex()
+      .flex_none()
+      .gap(4)
+      .children((e.comments ?? []).map((x) => (w?.edit === x.id
+        ? v_flex().flex_none().gap(4).child(commentRow(c, x, this.replyCommentActions(e, x))).child(this.commentInput(c, e))
+        : commentRow(c, x, this.replyCommentActions(e, x)))))
+      .child(
+        h_flex()
+          .id(`bh-e-c-${e.id}`)
+          .flex_none()
+          .self_start()
+          .gap(4)
+          .items_center()
+          .text_size(11.5)
+          .text_color(c.faint)
+          .cursor_pointer()
+          .hover((st) => st.text_color(c.ink))
+          .on_click((_ev, cx) => this.startComment(e, null, cx))
+          .child(svg(ICON("comment")).size(12))
+          .child("Comment"),
+      )
+      .when(Boolean(w && !w.edit), (el) => el.child(this.commentInput(c, e)));
+  }
+
+  commentInput(c, e) {
+    return h_flex()
+      .flex_none()
+      .gap(8)
+      .items_center()
+      .child(
+        div()
+          .flex_1()
+          .min_w(0)
+          .h(32)
+          .px(10)
+          .flex()
+          .items_center()
+          .rounded(SIZE.control)
+          .bg(c.fill)
+          .border_1()
+          .border_color(c.edge)
+          .child(Input.new(this.commentBox(e.from?.name ?? "Agent")).w_full().h_full().text_size(13).text_color(c.ink)),
+      )
+      .child(this.link(c, `bh-e-c-cancel-${e.id}`, "Cancel", (_ev, cx) => {
+        this.commenting = null;
+        cx.notify();
+      }));
   }
 
   // ── Out ────────────────────────────────────────────────────────────────────────────────────
@@ -227,17 +364,22 @@ export class Chat {
   taskWidget(c) {
     const rows = this.tasks;
     const open = this.taskOpen === undefined ? rows[0]?.id : this.taskOpen;
-    const box = (mark) => {
+    const box = (mark, { pulse = false } = {}) => {
       const el = div().flex_none().mt(2).size(14).rounded(4).flex().items_center().justify_center();
       if (mark === "done") return el.bg(c.accent).child(svg(ICON("check")).size(10).text_color(c.accentInk));
-      if (mark === "now") return el.border_1().border_color(c.accent).child(div().size(6).rounded(3).bg(c.accent).opacity(0.45).loop("opacity", { from: 0.25, to: 0.9, period: 1600, easing: "ease-in-out" }));
+      if (mark === "now") {
+        const inner = div().size(6).rounded(2).bg(c.accent);
+        return el.border_1().border_color(c.accent).child(pulse ? inner.opacity(0.45).loop("opacity", { from: 0.25, to: 0.9, period: 1600, easing: "ease-in-out" }) : inner.opacity(0.6));
+      }
+      if (mark === "blocked") return el.border_1().border_color(c.warning).child(div().text_size(10).font_bold().text_color(c.warning).child("!"));
       if (mark === "wait") return el.border_1().border_color(c.warning);
       if (mark === "skip") return el.border_1().border_color(c.edge).child(div().w(6).h(1.5).bg(c.faint));
       return el.border_1().border_color(c.edge);
     };
-    const markOf = (s) => (s.status === "done" ? "done" : s.status === "skipped" ? "skip" : s.status === "active" ? "now" : "open");
+    const markOf = (s) => (s.status === "done" ? "done" : s.status === "skipped" ? "skip" : s.status === "active" ? "now" : s.status === "blocked" ? "blocked" : "open");
     return v_flex()
       .id("bh-tasks-widget")
+      .on_scroll_wheel((_e, cx) => cx.stop_propagation())
       .absolute()
       .top(14)
       .left(14)
@@ -253,7 +395,15 @@ export class Chat {
       .child(h_flex().px(6).pb(4).gap(6).items_center()
         .child(div().text_size(11.5).font_semibold().text_color(c.muted).child(rows.length === 1 ? "Task" : "Tasks"))
         .when(rows.length > 1, (el) => el.child(div().text_size(11).text_color(c.faint).child(String(rows.length)))))
-      .child(v_flex().id("bh-tasks-widget-list").overflow_y_scroll().gap(2).children(rows.map((t) => {
+      .child(v_flex()
+        .id("bh-tasks-widget-list")
+        .overflow_y_scroll()
+        .gap(2)
+        .on_scroll_wheel((_e, cx) => {
+          // Scroll the tasks list on its own; never let the wheel reach the chat feed.
+          cx.stop_propagation();
+        })
+        .children(rows.map((t) => {
         const steps = t.steps ?? [];
         const done = steps.filter((s) => s.status === "done" || s.status === "skipped").length;
         const live = steps.some((s) => s.status === "active");
@@ -273,17 +423,21 @@ export class Chat {
               this.taskOpen = isOpen ? null : t.id;
               cx.notify();
             })
-            .child(box(live ? "now" : t.status === "paused" ? "wait" : "open"))
+            .child(box(live ? "now" : t.status === "paused" ? "wait" : "open", { pulse: false }))
             .child(div().flex_1().min_w(0).text_size(13).font_medium().line_height("18px").truncate().child(t.title ?? t.id))
             .when(steps.length > 0, (el) => el.child(div().flex_none().text_size(11.5).line_height("18px").text_color(c.faint).child(`${done}/${steps.length}`)))
             .child(svg(ICON(isOpen ? "chevron-down" : "chevron-right")).flex_none().mt(3).size(12).text_color(c.faint)))
           .when(isOpen, (el) => el.child(v_flex().pl(10).pr(6).pb(6).gap(3)
             .when(!steps.length, (x) => x.child(div().pl(12).text_size(12).text_color(c.faint).child("No plan yet.")))
-            .children(steps.map((s) => h_flex().gap(8).items_start()
-              .child(box(markOf(s)))
-              .child(div().flex_1().min_w(0).text_size(12.5).line_height("18px")
-                .text_color(s.status === "done" || s.status === "skipped" ? c.faint : s.status === "active" ? c.ink : c.muted)
-                .child(s.title ?? `Step ${s.n}`))))
+            .children(steps.map((s) => h_flex().relative().gap(8).items_start()
+              .child(box(markOf(s), { pulse: s.status === "active" }))
+              .child(v_flex().flex_1().min_w(0)
+                .child(div().text_size(12.5).line_height("18px")
+                  .text_color(s.status === "done" || s.status === "skipped" ? c.faint : s.status === "active" ? c.ink : c.muted)
+                  .child(s.title ?? `Step ${s.n}`))
+                // The step under way: a short accent segment travelling along a faint track.
+                .when(s.status === "active", (el) => el.child(div().relative().h(2).mt(2).rounded(1).bg(alpha(c.accent, 0.15)).overflow_hidden()
+                  .child(div().absolute().top(0).w(12).h(2).rounded(1).bg(c.accent).loop("left", { from: -12, to: 200, period: 2400, easing: "linear" })))))))
             .child(h_flex()
               .id(`bh-tw-open-${t.id}`)
               .mt(4)
@@ -407,6 +561,8 @@ export class Chat {
     const space = this.space();
     const view = shown(this.entries, space, this.back);
     this.back = view.back;
+    if (view.total === 0) this.px = 0;
+    const up = this.back > 0 || this.px > 0;
     const working = this.workers();
     const foot = SIZE.foot + this.composer.height(width) + 14;
     this.composer.questions = this.questions;
@@ -421,6 +577,13 @@ export class Chat {
         this.size = size;
         cx.notify();
       })
+      .track_focus(this.handle)
+      .on_key_down((e, cx) => {
+        const chord = e.modifiers.control || e.modifiers.platform || e.modifiers.alt;
+        if (this.commenting || !this.composer.isFolded() || !e.key_char || chord) return; // a comment box open takes the typing
+        this.composer.typeFolded(e.key_char, cx);
+        cx.stop_propagation();
+      })
       .child(
         v_flex()
           .id("bh-feed")
@@ -432,22 +595,41 @@ export class Chat {
           .overflow_hidden()
           .justify_end()
           .items_center()
+          .on_mouse_down("left", () => {
+            if (this.commenting) return; // a comment box open takes the click
+            this.composer.expanded = false; // the slim bar; a click on it or typing grows it back
+            this.handle.focus(); // the text box is not drawn while folded: typing comes here
+          })
           .on_scroll_wheel((e, cx) => this.scroll(e, view.total, cx))
           .when(view.total === 0, (el) => el.child(this.empty(c, width)))
           .when(view.total > 0, (el) =>
             el.child(
+              // Bottom-anchored and shifted down by the pixel offset, so its foot is clipped.
               v_flex()
+                .absolute()
+                .bottom(-this.px)
+                .left(Math.round((this.size.width - width) / 2))
                 .flex_none()
                 .w(width)
                 .gap(14)
                 .pt(16)
                 .children(view.list.map((e) => this.entry(c, e, width)))
-                .when(view.back > 0, (col) => col.child(this.newer(c, view.back)))
-                .when(view.back === 0 && working.length > 0, (col) => col.child(this.working(c, working, width))),
-            )),
+                .when(!up && working.length > 0, (col) => col.child(this.working(c, working, width))),
+            ))
+          // Stays put over the feed while the column scrolls under it.
+          .when(up, (el) => el.child(this.newer(c, view.back))),
       )
       // The tasks under way, top left, when the window has room for them beside the chat.
       .when(this.tasks.length > 0 && (this.size.width - width) / 2 >= WIDGET_W + 28, (el) => el.child(this.taskWidget(c)))
+      // An open question card dims the feed and the tasks widget behind it, and takes their clicks.
+      .when(this.composer.paneNow() === "ask", (el) => el.child(div()
+        .id("bh-ask-dim")
+        .absolute()
+        .inset_0()
+        .bg(c.ground)
+        .opacity(0.6)
+        .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+        .on_scroll_wheel((_e, cx) => cx.stop_propagation())))
       // The composer, bottom centre. Its suggestions grow upward over the feed.
       .child(
         v_flex()
@@ -460,14 +642,21 @@ export class Chat {
       );
   }
 
+  /** The wheel moves the feed by pixels: positive towards older entries, as before. */
   scroll(e, total, cx) {
-    this.wheel += e.delta.y;
-    const steps = Math.trunc(this.wheel / WHEEL_STEP);
-    if (!steps) return;
-    this.wheel -= steps * WHEEL_STEP;
-    const back = Math.max(0, Math.min(Math.max(0, total - 1), this.back + steps));
-    if (back === this.back) return;
-    this.back = back;
+    const space = this.space();
+    const mine = this.entries.filter((x) => (x.space ?? null) === (space ?? null));
+    const heights = mine.map((_, i) => this.heights.get(mine[mine.length - 1 - i].id));
+    const next = scrollBy({ back: this.back, px: this.px }, e.delta.y, heights, total);
+    if (next.back === this.back && next.px === this.px) return;
+    const was = this.back > 0 || this.px > 0;
+    this.back = next.back;
+    this.px = next.px;
+    // Scrolling up from the newest message folds the composer to its slim bar; typing unfolds.
+    if (!was && (this.back > 0 || this.px > 0)) {
+      this.composer.expanded = false;
+      this.handle.focus();
+    }
     cx.notify();
   }
 
@@ -485,9 +674,11 @@ export class Chat {
   }
 
   entry(c, e, width) {
-    if (e.kind === "me") return this.mine(c, e, width);
-    if (e.kind === "agent") return this.reply(c, e, width);
-    return this.note(c, e);
+    const el = e.kind === "me" ? this.mine(c, e, width) : e.kind === "agent" ? this.reply(c, e, width) : this.note(c, e);
+    // Measured for the pixel scroll: its height plus the column's 14 px gap.
+    return el.on_size_change((size) => {
+      this.heights.set(e.id, size.height + 14);
+    });
   }
 
   mine(c, e, width) {
@@ -577,7 +768,8 @@ export class Chat {
           .children(parts.map((p, i) => (p.kind === "md"
             ? TextView.markdown(`bh-md-${e.id}-${i}`, linkFiles(p.text)).selectable(true).on_link_click((url) => this.openLink(url))
             : this.picture(c, e, p, pics.indexOf(p), pics, width)))),
-      );
+      )
+      .child(this.replyComments(c, e));
   }
 
   /** A mockup in a reply: its picture (16:11), opened large on a click; drawing, or a way to the browser. */
@@ -678,7 +870,16 @@ export class Chat {
     this.turn = now.agent.address;
     const a = now.agent;
     const tone = a.tile ? readable(c, a.tile, c.ground) : c.accent;
-    this.drawnFx = indicatorFor(roleOf(a.role)).fx;
+    const fx = indicatorFor(roleOf(a.role)).fx;
+    if (fx !== this.drawnFx) {
+      // A new verb: drawn clear for one frame, then faded in.
+      this.verbShown = false;
+      this.cx.timer.after(16, (cx) => {
+        this.verbShown = true;
+        cx.notify();
+      });
+    }
+    this.drawnFx = fx;
     const line = h_flex()
       .id(`bh-working-${a.address}`)
       .absolute()
@@ -691,7 +892,12 @@ export class Chat {
       .gap(8)
       .items_start()
       .text_size(12.5)
-      .child(roleWord(c, { role: a.role, tone, id: `bh-rw-${a.address}` }))
+      .child(div()
+        .id("bh-working-verb")
+        .flex_none()
+        .opacity(this.verbShown === false ? 0 : 1)
+        .transition("opacity", { duration: 420, easing: "ease-out" })
+        .child(roleWord(c, { role: a.role, tone, id: `bh-rw-${a.address}` })))
       .child(div().flex_1())
       .when(now.count > 1, (el) => el.child(
         div()
@@ -716,7 +922,10 @@ export class Chat {
 
   newer(c, back) {
     return h_flex()
-      .flex_none()
+      .absolute()
+      .left(0)
+      .right(0)
+      .bottom(8)
       .justify_center()
       .child(
         div()
@@ -733,9 +942,10 @@ export class Chat {
           .hover((s) => s.text_color(c.ink))
           .on_click((_e, cx) => {
             this.back = 0;
+            this.px = 0;
             cx.notify();
           })
-          .child(`${back} newer · jump to latest`),
+          .child(back > 0 ? `${back} newer · jump to latest` : "Jump to latest"),
       );
   }
 }

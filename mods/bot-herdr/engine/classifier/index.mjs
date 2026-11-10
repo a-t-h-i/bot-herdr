@@ -2,16 +2,15 @@
 // tokens on them. Who answers a chat message, a task's size and kind, how hard a step is (effort
 // routing), how much QA a change warrants, which shared scripts a step needs.
 //
-// It calls Jev (TypeSafe's classifier, "System One" API) on OpenCode Zen (free while it lasts),
-// TypeSafe, OpenRouter or the Vercel AI Gateway. Off until turned on in Settings; every decision
-// falls back to plain rules when it is off or fails.
+// It can call a System One API (Jev/Laya), Cloudflare Workers AI (Clef), or a local harness.
+// Off or misconfigured, every decision falls back to plain rules.
 
 import { join } from "node:path";
 import { DATA, readJson } from "../lib/core.mjs";
 import { choice, choiceOf, noul, score, scoreOf, systemOne, yesOf } from "./client.mjs";
 import { clip } from "./limits.mjs";
 import { assessQaRisk } from "./qa-risk.mjs";
-import { askHarness, canClassify, CLASSIFIER_HARNESSES } from "./harness.mjs";
+import { askHarness, canClassify, promptFor, readAnswers, CLASSIFIER_HARNESSES } from "./harness.mjs";
 
 export { CLASSIFIER_HARNESSES, canClassify };
 
@@ -22,6 +21,16 @@ export const HOSTS = {
   vercel: { label: "Vercel AI Gateway", env: "AI_GATEWAY_API_KEY", baseUrl: "https://ai-gateway.vercel.sh/typesafe", model: "typesafe-ai/jev" },
 };
 
+// System One API models (Jev/Laya). Base URLs are configurable per config.
+export const MODEL_KINDS = {
+  jev: { label: "Jev", baseUrl: "https://api.typesafe.ai", model: "jev-latest" },
+  // Laya: same System One API as Jev (TypeSafe or local). Docs: https://api.typesafe.ai (System One /v1/systemone).
+  laya: { label: "Laya", baseUrl: "https://api.typesafe.ai", model: "laya-latest" },
+  // Clef: Cloudflare Workers AI REST. Docs (2026-05): POST /client/v4/accounts/{accountId}/ai/run/{model}
+  // https://developers.cloudflare.com/workers-ai/get-started/rest-api/
+  clef: { label: "Clef", baseUrl: "https://api.cloudflare.com/client/v4", model: "@cf/meta/llama-3.1-8b-instruct" },
+};
+
 export const DEFAULTS = {
   enabled: false,
   host: "auto",
@@ -30,6 +39,10 @@ export const DEFAULTS = {
   harnessModel: "",
   key: "",
   model: "",
+  // Contract with Settings UI (step 9): kind, model, key, accountId.
+  kind: "",
+  accountId: "",
+  baseUrl: "",
   features: { lobby: true, triage: true, effort: true, qa: true, scripts: true },
   thresholds: { lobbyAgentAt: 0.5, simpleAt: 0.7, trivialAt: 0.8 },
 };
@@ -47,6 +60,18 @@ export function classifierConfig() {
 
 /** The host to call and its key: the one chosen, or (auto) the first with a key, OpenCode first. */
 export function target(config = classifierConfig(), env = process.env) {
+  const kind = String(config.kind || "").toLowerCase();
+  if (kind === "jev" || kind === "laya") {
+    const base = MODEL_KINDS[kind];
+    const key = String(config.key || "").trim();
+    return { name: kind, ...base, key, baseUrl: String(config.baseUrl || base.baseUrl), model: String(config.model || base.model) };
+  }
+  if (kind === "clef") {
+    const base = MODEL_KINDS.clef;
+    const key = String(config.key || "").trim();
+    return { name: "clef", ...base, key, baseUrl: String(config.baseUrl || base.baseUrl), model: String(config.model || base.model), accountId: String(config.accountId || "") };
+  }
+  if (kind === "rules") return { name: "rules", key: "", baseUrl: "", model: "" };
   const names = config.host === "auto" || !HOSTS[config.host] ? ["opencode", "typesafe", "openrouter", "vercel"] : [config.host];
   for (const name of names) {
     const key = (config.key && (config.host !== "auto" || name === names[0]) ? config.key : "") || env[HOSTS[name].env] || "";
@@ -60,22 +85,55 @@ export const knownHarnesses = () => readJson(join(DATA, "agents.json"), {})?.kno
 
 /** Whether the classifier runs on a harness, and that harness is installed. */
 export function onHarness(config = classifierConfig(), known = knownHarnesses()) {
-  return Boolean(config.harness && canClassify(config.harness) && known.some((k) => k.key === config.harness && k.installed));
+  const kind = String(config.kind || "").toLowerCase();
+  const harness = kind && !MODEL_KINDS[kind] && kind !== "rules" && canClassify(kind) ? kind : config.harness;
+  const model = kind && !MODEL_KINDS[kind] && kind !== "rules" ? config.model : config.harnessModel;
+  return Boolean(harness && canClassify(harness) && known.some((k) => k.key === harness && k.installed)) ? { harness, model } : null;
+}
+
+/** Cloudflare Workers AI (Clef): run a model and read its JSON answers. */
+export async function askClef(request, { apiKey, baseUrl, model, accountId, fetch: f = globalThis.fetch, timeoutMs = 8000 } = {}) {
+  if (!apiKey || !accountId || !model) throw new Error("clef needs key, accountId and model");
+  const modelPath = String(model).replace(/^\/+/, "").split("/").map(encodeURIComponent).join("/");
+  const url = `${String(baseUrl || MODEL_KINDS.clef.baseUrl).replace(/\/+$/, "")}/accounts/${encodeURIComponent(accountId)}/ai/run/${modelPath}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await f(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ messages: [{ role: "user", content: promptFor(request) }] }),
+      signal: controller.signal,
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`clef ${res.status}: ${text.slice(0, 200)}`);
+    let data;
+    try { data = JSON.parse(text); } catch { throw new Error("clef: not JSON"); }
+    const reply = data?.result?.response ?? data?.result?.output_text ?? data?.result?.text ?? (typeof data?.result === "string" ? data.result : text);
+    const got = readAnswers(typeof reply === "string" ? reply : JSON.stringify(reply), request);
+    if (!got) throw new Error("clef: no answers");
+    return got;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** A classifier for the given config: `enabled(feature)` and `ask(feature, request)`. */
 export function makeClassifier(config = classifierConfig()) {
   const t = target(config);
-  const known = config.harness ? knownHarnesses() : [];
+  const known = knownHarnesses();
   const harness = onHarness(config, known);
+  const kind = String(config.kind || "").toLowerCase();
+  const apiReady = kind === "rules" ? false : (kind === "jev" || kind === "laya" || kind === "clef") ? Boolean(t.key) : (!config.harness && Boolean(t.key));
   return {
     config,
     target: t,
-    enabled: (feature) => Boolean(config.enabled && (harness || (!config.harness && t.key)) && config.features[feature] !== false),
+    enabled: (feature) => Boolean(config.enabled && (harness || apiReady) && config.features[feature] !== false),
     async ask(feature, request) {
       if (!this.enabled(feature)) return undefined;
       try {
-        if (harness) return await askHarness({ harness: config.harness, model: config.harnessModel, known }, request, { timeoutMs: 60000 });
+        if (harness) return await askHarness({ harness: harness.harness, model: harness.model, known }, request, { timeoutMs: 60000 });
+        if (kind === "clef" || t.name === "clef") return await askClef(request, { apiKey: t.key, baseUrl: t.baseUrl, model: t.model, accountId: t.accountId || config.accountId, timeoutMs: 8000 });
         return await systemOne(request, { apiKey: t.key, baseUrl: t.baseUrl, model: t.model, timeoutMs: 8000, retries: 1 });
       } catch (e) {
         if (process.env.BH_DEBUG) console.error(`classifier: ${e.message}`);

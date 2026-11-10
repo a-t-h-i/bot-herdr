@@ -134,12 +134,44 @@ export function comment(task, { step = null, text }) {
   if (n !== null && !task.steps.some((s) => s.n === n)) throw new Error(`Task ${task.id} has no step ${step}. It has ${task.steps.length}.`);
   const words = String(text ?? "").trim();
   if (!words) throw new Error("A comment needs words.");
-  const c = { id: `c${(task.comments?.length ?? 0) + 1}`, step: n, quote: n === null ? "" : task.steps.find((s) => s.n === n).title, text: words, at: now(), open: true };
+  const c = { id: nextCommentId(task.comments), step: n, quote: n === null ? "" : task.steps.find((s) => s.n === n).title, text: words, at: now(), open: true };
   task.comments = [...(task.comments ?? []), c];
   return c;
 }
 
 export const openComments = (task) => (task.comments ?? []).filter((c) => c.open);
+
+/** The next comment id: one past the highest `c<number>`, so ids stay unique after a delete. */
+export const nextCommentId = (comments = []) => `c${Math.max(0, ...comments.map((c) => Number(/^c(\d+)$/.exec(c.id ?? "")?.[1] ?? 0))) + 1}`;
+
+/** The comment with this id, or an error naming its owner (`Task t-… has no comment c9.`). */
+export function commentById(comments, id, owner) {
+  const c = (comments ?? []).find((x) => x.id === id);
+  if (!c) throw new Error(`${owner} has no comment ${id}.`);
+  return c;
+}
+
+/** New words for a comment; it opens again so the agents see the change. */
+export function changeComment(comments, id, text, owner) {
+  const c = commentById(comments, id, owner);
+  const words = String(text ?? "").trim();
+  if (!words) throw new Error("A comment needs words.");
+  return Object.assign(c, { text: words, edited: now(), open: true });
+}
+
+export const editComment = (task, id, text) => changeComment(task.comments, id, text, `Task ${task.id}`);
+
+export function resolveComment(task, id) {
+  const c = commentById(task.comments, id, `Task ${task.id}`);
+  c.open = false;
+  return c;
+}
+
+export function deleteComment(task, id) {
+  const c = commentById(task.comments, id, `Task ${task.id}`);
+  task.comments = task.comments.filter((x) => x !== c);
+  return c;
+}
 
 export const reportsDir = (root, id) => join(dir(root, id), "reports");
 

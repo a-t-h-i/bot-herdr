@@ -22,17 +22,27 @@ export class Toast {
   init(given, cx) {
     this.p = given ?? props() ?? {};
     this.up = false;
+    this.out = false;
     if (activePage() === "chat") {
       this.handed = true;
       setShared(TOAST_KEY, { title: this.p.title ?? "", body: this.p.body ?? "", level: this.p.level ?? "info", action: this.p.action ?? null, at: Date.now() });
       cx.timer.after(1, () => closeOverlay(this.p.overlay));
       return;
     }
+    this.cx = cx;
     // Drawn low and clear first, then it rises into place.
     cx.timer.after(16, (cx) => {
       this.up = true;
       cx.notify();
     });
+  }
+
+  close() {
+    if (this.out || this.handed) return;
+    this.out = true;
+    this.up = false;
+    this.cx?.notify();
+    this.cx?.timer.after(320, () => closeOverlay(this.p.overlay));
   }
 
   render() {
@@ -50,7 +60,7 @@ export class Toast {
       .cursor_pointer()
       .on_click(() => {
         if (action) run(action.name, action.args ?? {});
-        closeOverlay(p.overlay);
+        this.close();
       })
       .child(
         h_flex()
@@ -64,7 +74,7 @@ export class Toast {
           .gap(10)
           .items_center()
           .opacity(this.up ? 1 : 0)
-          .transition("opacity", { duration: 200, delay: 120, easing: "ease-out" })
+          .transition("opacity", this.up ? { duration: 200, delay: 120, easing: "ease-out" } : { duration: 180, easing: "ease-in" })
           .text_color(c.ink)
           .child(svg(ICON(TOAST_ICONS[kind])).flex_none().size(16).text_color(toneOf(c, kind)))
           .child(div().flex_1().min_w(0).max_h(57).overflow_hidden().text_size(13.5).line_height("19px").child(noteText(p)))

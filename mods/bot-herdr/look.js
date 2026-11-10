@@ -142,6 +142,33 @@ export function mix(a, b, t) {
   return `#${x.map((v, i) => hex(v + (y[i] - v) * t)).join("")}`;
 }
 
+/** The WCAG contrast ratio of two #rrggbb colours; 1 when either isn't one. */
+export function contrastOf(a, b) {
+  const x = luminance(a);
+  const y = luminance(b);
+  return x === null || y === null ? 1 : contrast(x, y);
+}
+
+/** The first mix of `from` toward `to` with at least `min` contrast against `from`; `to` when none is. */
+function reach(from, to, min) {
+  for (let t = 0.02; t < 1; t += 0.02) {
+    const m = mix(from, to, t);
+    if (contrastOf(m, from) >= min) return m;
+  }
+  return to;
+}
+
+/**
+ * A quiet line on `fill`: the theme's own `border` when it sits at 1.3–1.6:1 there, else a mix
+ * at about 1.4:1, toward the border when it is stronger (herdr's border is the pane split) and
+ * toward the ink when it is fainter.
+ */
+function line(fill, border, ink) {
+  const r = contrastOf(border, fill);
+  if (r >= 1.3 && r <= 1.6) return border;
+  return reach(fill, r > 1.6 ? border : ink, 1.4);
+}
+
 /** Whether a theme is ours (the Claude look above): the layout's own pair, or none named. */
 export const ownTheme = (name) => !name || /^bot-herdr/.test(String(name));
 
@@ -157,14 +184,15 @@ export function palette(s = {}, t = {}) {
   const ground = t.canvas ?? t.surface ?? t.background ?? base.ground;
   const fill = t.raised ?? t.popover ?? t.surface ?? base.fill;
   const ink = t.foreground;
-  const edge = t.border ?? mix(fill, ink, 0.18);
+  const border = t.border ?? mix(fill, ink, 0.18);
+  const bubble = t.selected ?? mix(ground, ink, 0.07);
   const accent = t.accent ?? base.accent;
   const red = t.ansi1 ?? t.blocked ?? base.danger;
   return {
     ground,
     fill,
-    edge,
-    edgeDark: mix(edge, "#000000", 0.18),
+    edge: line(fill, border, ink),
+    edgeDark: contrastOf(border, fill) >= 3 ? border : reach(fill, ink, 3), // controls: 3:1
     rim: fill,
     ink,
     muted: t.muted ?? mix(ink, fill, 0.35),
@@ -178,8 +206,8 @@ export function palette(s = {}, t = {}) {
     stop: red,
     stopHover: mix(red, "#000000", 0.1),
     danger: red,
-    bubble: t.selected ?? mix(ground, ink, 0.07),
-    bubbleEdge: mix(t.selected ?? ground, ink, 0.16),
+    bubble,
+    bubbleEdge: line(bubble, border, ink),
     info: t.ansi4 ?? base.info,
     success: t.ansi2 ?? base.success,
     warning: t.ansi3 ?? base.warning,

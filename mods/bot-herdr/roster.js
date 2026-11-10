@@ -47,6 +47,7 @@ export const HEADLESS = {
   gemini: { app: "gemini", acp: ["--acp"] },
   opencode: { app: "opencode", acp: ["acp"] },
   qwen: { app: "qwen-code", acp: ["--acp"] },
+  antigravity: { app: "antigravity", acp: ["acp"] },
 };
 export const headless = (key) => Object.hasOwn(HEADLESS, key);
 
@@ -94,7 +95,24 @@ export function slug(name) {
   return String(name ?? "").trim().toLowerCase().replace(/[^a-z0-9_.-]+/g, "-").replace(/^-+|-+$/g, "") || "agent";
 }
 
-const clean = (a, i, fallback) => ({
+/**
+ * Whether "Extra arguments" holds words for the agent rather than flags: some text, and no word
+ * that starts with "-" (a sentence typed into the wrong field).
+ */
+export function looksLikeInstructions(args) {
+  const words = String(args ?? "").trim().split(/\s+/).filter(Boolean);
+  return words.length > 0 && !words.some((w) => w.startsWith("-"));
+}
+
+/** An entry whose "Extra arguments" were instructions, with them moved to `instructions`. */
+export function migrateArgs(a) {
+  const args = String(a.args ?? "").trim();
+  if (!looksLikeInstructions(args)) return a;
+  const instructions = [String(a.instructions ?? "").trim(), args].filter(Boolean).join("\n\n");
+  return { ...a, instructions, args: "" };
+}
+
+const clean = (a, i, fallback) => migrateArgs({
   id: String(a.id ?? `a${i}`),
   role: String(a.role ?? "custom"),
   name: String(a.name ?? "").trim() || `Agent ${i + 1}`,
@@ -102,6 +120,7 @@ const clean = (a, i, fallback) => ({
   model: String(a.model ?? "").trim(),
   effort: String(a.effort ?? "").trim(),
   args: String(a.args ?? "").trim(),
+  instructions: String(a.instructions ?? "").trim(),
   lead: Boolean(a.lead),
 });
 
@@ -123,7 +142,7 @@ export function roster(stored, known = []) {
   const stock = ROLES.map((r) => {
     // A roster from before the roles: its lead is the Orchestrator.
     const saved = take((a) => a.role === r.role) ?? (r.role === "orchestrator" ? take((a) => a.role === "custom" && (a.id === "orchestrator" || a.lead)) : null);
-    return { ...(saved ?? { id: r.role, harness: fallback, model: "", effort: "", args: "" }), role: r.role, name: r.name, lead: r.role === "orchestrator" };
+    return { ...(saved ?? { id: r.role, harness: fallback, model: "", effort: "", args: "", instructions: "" }), role: r.role, name: r.name, lead: r.role === "orchestrator" };
   });
   const own = list.filter((a) => !used.has(a)).map((a) => ({ ...a, role: "custom", lead: false }));
   return [...stock, ...own];
@@ -167,7 +186,7 @@ export function blank(list, known = []) {
   const installed = known.filter((k) => k.installed);
   let n = 1;
   while (list.some((a) => a.name === `Agent ${n}`)) n++;
-  return { id: `a${Date.now().toString(36)}`, role: "custom", name: `Agent ${n}`, harness: installed[0]?.key ?? "claude", model: "", effort: "", args: "", lead: false };
+  return { id: `a${Date.now().toString(36)}`, role: "custom", name: `Agent ${n}`, harness: installed[0]?.key ?? "claude", model: "", effort: "", args: "", instructions: "", lead: false };
 }
 
 /** Parses `pi --list-models`-style output into model ids (provider/model), best effort. */

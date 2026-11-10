@@ -14,7 +14,8 @@ test("AskUserQuestion becomes bh ask's questions", () => {
   assert.equal(fromAskTool({}), null);
 });
 
-test("a child agent's answer is written for the chat too, not only the lead's", () => {
+test("a child agent's answer is written for the chat too, and a turn with no words leaves a note", () => {
   const src = readFileSync(fileURLToPath(new URL("../mods/bot-herdr/engine/lib/agent.mjs", import.meta.url)), "utf8");
-  assert.match(src, /if \(address && reply\) writeText\(/);
+  assert.match(src, /export const NO_REPLY = "\(finished without a reply\)"/);
+  assert.match(src, /if \(address && \(reply \|\| !r\.asked\)\) writeText\(join\(DATA, "replies", `\$\{fileKey\(address\)\}\.md`\), replyText\(reply \|\| NO_REPLY\)\)/);
 });

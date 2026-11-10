@@ -200,6 +200,41 @@ test("comments on a task's steps reach the Orchestrator through bh task show", (
   assert.doesNotMatch(bh(["task", "show", id], dir).stdout, /Open comments/);
 });
 
+// One comment edited, resolved or deleted, on a task (`kind` "task") or a plan ("plan").
+function oneCommentAtATime(kind, id, dir) {
+  const run = (...a) => bh([kind, ...a, "--json"], dir);
+  const add = (text) => JSON.parse(run("comment", id, text).stdout);
+  add("First");
+  add("Second");
+  assert.equal(JSON.parse(run("comment", id, "--delete", "c1").stdout).id, "c1");
+  assert.equal(add("Third").id, "c3");
+  assert.equal(JSON.parse(run("resolve", id, "--comment", "c3").stdout).open, false);
+  const edited = JSON.parse(run("comment", id, "--edit", "c3", "--data", encodeURIComponent("Third, better")).stdout);
+  assert.deepEqual([edited.text, edited.open, typeof edited.edited], ["Third, better", true, "string"]);
+  assert.equal(JSON.parse(run("resolve", id, "--comment", "c2").stdout).open, false);
+  const comments = JSON.parse(run("show", id).stdout).comments;
+  assert.deepEqual(comments.map((c) => `${c.id}:${c.open}`), ["c2:false", "c3:true"]);
+  const missing = bh([kind, "resolve", id, "--comment", "c9"], dir);
+  assert.notEqual(missing.status, 0);
+  assert.match(missing.stderr, new RegExp(`${kind === "task" ? "Task" : "Plan"} ${id} has no comment c9\\.`));
+  assert.notEqual(bh([kind, "comment", id, "--delete", "c1"], dir).status, 0);
+}
+
+test("one task comment at a time: ids stay unique after a delete, edit reopens, resolve leaves the rest", () => {
+  const dir = repo();
+  const id = JSON.parse(bh(["task", "new", "Make it", "--no-git", "--json"], dir).stdout).id;
+  oneCommentAtATime("task", id, dir);
+  const text = bh(["task", "show", id], dir).stdout;
+  assert.match(text, /the task: Third, better/);
+  assert.doesNotMatch(text, /Second/);
+});
+
+test("one plan comment at a time: ids stay unique after a delete, edit reopens, resolve leaves the rest", () => {
+  const dir = repo();
+  const id = JSON.parse(bh(["plan", "new", "Add login", "--json"], dir).stdout).id;
+  oneCommentAtATime("plan", id, dir);
+});
+
 test("pictures: the browser found, the page wrapped, the screenshot asked for", async () => {
   const M = await import("../mods/bot-herdr/engine/lib/media.mjs");
   assert.equal(M.findBrowser({ env: { BH_BROWSER: "/b/chrome" }, exists: (p) => p === "/b/chrome" }), "/b/chrome");

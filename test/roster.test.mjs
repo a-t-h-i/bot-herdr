@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { roster, argvOf, runnable, runningAs, effortsOf, modelsOf, findAgent, parseModelList, blank, slug } from "../mods/bot-herdr/roster.js";
-import { replyFile, push, shown, isNew, outcome, KEEP, SHOWN } from "../mods/bot-herdr/feed.js";
+import { roster, argvOf, runnable, runningAs, effortsOf, modelsOf, findAgent, parseModelList, blank, slug, looksLikeInstructions } from "../mods/bot-herdr/roster.js";
+import { replyFile, push, shown, isNew, outcome, scrollBy, KEEP, SHOWN, addComment, editComment, resolveComment, deleteComment } from "../mods/bot-herdr/feed.js";
 import { teamBrief, orchestratorBrief } from "../mods/bot-herdr/brief.js";
 
 const known = [
@@ -93,6 +93,16 @@ test("the feed: reply files, what is kept and what is shown", () => {
   assert.deepEqual(shown([], "s1", 3), { list: [], total: 0, back: 0 });
 });
 
+test("the feed scrolls by pixels: small deltas move px, crossing an entry moves back, unmeasured heights use the fallback", () => {
+  const heights = [100, 60];
+  assert.deepEqual(scrollBy({ back: 0, px: 0 }, 30, heights, 5), { back: 0, px: 30 });
+  assert.deepEqual(scrollBy({ back: 0, px: 30 }, 80, heights, 5), { back: 1, px: 10 });
+  assert.deepEqual(scrollBy({ back: 1, px: 10 }, 70, heights, 5), { back: 2, px: 20 });
+  assert.deepEqual(scrollBy({ back: 2, px: 20 }, -300, heights, 5), { back: 0, px: 0 });
+  assert.deepEqual(scrollBy({ back: 2, px: 0 }, 130, heights, 5, 120), { back: 3, px: 10 });
+  assert.deepEqual(scrollBy({ back: 0, px: 0 }, 500, [100], 2, 120), { back: 1, px: 119 });
+});
+
 test("an agent we wrote to: waiting, blocked once, silent after it worked and stopped", () => {
   assert.equal(outcome({ worked: false }, "idle", 1000), "wait");
   assert.equal(outcome({ worked: true, stopped: 1000 }, "working", 2000), "wait");
@@ -101,4 +111,36 @@ test("an agent we wrote to: waiting, blocked once, silent after it worked and st
   assert.equal(outcome({ blocked: false }, "blocked", 0), "blocked");
   assert.equal(outcome({ blocked: true }, "blocked", 0), "wait");
   assert.equal(outcome({}, null, 0), "gone");
+});
+
+test("extra arguments that are a sentence become the agent's instructions", () => {
+  assert.equal(looksLikeInstructions("Don't add the co-authored by claude in commit messages."), true);
+  assert.equal(looksLikeInstructions("--search -c x=1"), false);
+  assert.equal(looksLikeInstructions("be brief --yolo"), false);
+  assert.equal(looksLikeInstructions(""), false);
+  assert.equal(looksLikeInstructions("   "), false);
+  const sentence = "Don't add the co-authored by claude in commit messages.";
+  const [, , , , research] = roster([{ role: "research", harness: "antigravity", args: sentence, instructions: "Cite sources." }], known);
+  assert.equal(research.args, "");
+  assert.equal(research.instructions, `Cite sources.\n\n${sentence}`);
+  const argv = argvOf(research, [{ key: "antigravity", run: ["agy"], installed: true }]);
+  for (const word of sentence.split(/s+/)) assert.ok(!argv.includes(word), word);
+  assert.equal(roster([{ role: "dev", args: "--search" }], known)[2].args, "--search");
+});
+
+test("comments on a reply: add, edit, resolve and delete; unknown ids change nothing", () => {
+  const feed = [{ id: "a", kind: "agent", text: "hi" }, { id: "b", kind: "me", text: "yo" }];
+  let next = addComment(feed, "a", "first", 1);
+  next = addComment(next, "a", "second", 2);
+  assert.deepEqual(next[0].comments, [{ id: "c1", text: "first", at: 1, open: true }, { id: "c2", text: "second", at: 2, open: true }]);
+  assert.equal(next[1], feed[1]);
+  assert.equal(feed[0].comments, undefined);
+  next = resolveComment(next, "a", "c1");
+  assert.equal(next[0].comments[0].open, false);
+  next = editComment(next, "a", "c1", "changed", 5);
+  assert.deepEqual(next[0].comments[0], { id: "c1", text: "changed", at: 1, open: true, edited: 5 });
+  next = deleteComment(next, "a", "c1");
+  assert.deepEqual(next[0].comments.map((x) => x.id), ["c2"]);
+  assert.equal(addComment(next, "a", "third", 6)[0].comments[1].id, "c3");
+  for (const same of [addComment(next, "zz", "x", 1), editComment(next, "a", "c9", "x", 1), resolveComment(next, "zz", "c2"), deleteComment(next, "a", "c9")]) assert.equal(same, next);
 });
