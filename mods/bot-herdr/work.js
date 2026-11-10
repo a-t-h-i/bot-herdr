@@ -4,7 +4,8 @@
 //              its steps, each with who did it and for how long, and your comments on any step.
 //              Resume hands it back to the Orchestrator.
 //   Plans      the panel's drafts: read one, comment on any line of it, start it as a task.
-//   Knowledge  what each agent knows about the project, to read and edit.
+//   Knowledge  what each agent knows about the project, drawn by section; a note on any entry
+//              goes with it into the agent's brief; Edit opens the file itself.
 // Everything comes from the bh tool (tasks, plans and knowledge live in the project's
 // .bot-herdr folder); messages for the team go through the chat's composer.
 
@@ -15,7 +16,8 @@ import { LIGHT, DARK, SIZE, ICON } from "./look.js";
 import { activePage, sendFromChat } from "./pages.js";
 import { ROSTER_KEY, roster, slug } from "./roster.js";
 import { bh, bhJson, enc, projectDir } from "./bh.js";
-import { blocks, commentsOn } from "./doc.js";
+import { blocks, commentsOn, outline, notesOn } from "./doc.js";
+import { hash } from "./feed.js";
 
 const TABS = [
   { id: "tasks", label: "Tasks" },
@@ -89,6 +91,8 @@ export class Work {
     this.planId = load("plan", null);
     this.agent = load("agent", null); // the knowledge file shown
     this.knownText = null; // the file as loaded, to tell an edit from it
+    this.editing = false; // the knowledge file open as text, to rewrite it
+    this.confirmDelete = null; // "agent:line" of the record whose Delete asks first
     this.notes = [];
     this.busy = false;
     this.problem = null;
@@ -205,6 +209,15 @@ export class Work {
       });
       return;
     }
+    if (where.kind === "knowledge") {
+      const entry = outline(this.knownText ?? "").sections.flatMap((x) => x.entries).find((e) => e.line === where.at);
+      if (!entry) return;
+      const who = where.id.charAt(0).toUpperCase() + where.id.slice(1);
+      this.act(["knowledge", "note", where.id, entry.key, "--data", enc(text)], cx, (r) => {
+        if (r.code === 0) sendFromChat(`The person left a note on ${who}'s knowledge entry "${entry.key.slice(0, 200)}": ${text}\n\nThe note now goes with that entry into ${who}'s brief. If the entry itself is wrong or out of date, correct it (bh knowledge ${where.id}, then bh knowledge write ${where.id} --file <file>); otherwise say it needs no change.`);
+      });
+      return;
+    }
     const task = (this.tasks ?? []).find((t) => t.id === where.id);
     const step = task?.steps?.find((x) => x.n === where.at);
     this.act(["task", "comment", where.id, "--step", String(where.at), "--data", enc(text)], cx, (r) => {
@@ -229,15 +242,43 @@ export class Work {
     }
     this.agent = agent;
     keep("agent", agent);
+    this.editing = false;
+    this.commenting = null;
     this.knownText = null;
     this.reload(cx);
+  }
+
+  /** Deletes one knowledge record: the file is written without it (the version before is archived). */
+  deleteEntry(agent, e, cx) {
+    this.confirmDelete = null;
+    const lines = String(this.knownText ?? "").split("\n");
+    const from = e.line - 1;
+    const count = e.text.split("\n").length;
+    if (lines.slice(from, from + count).join("\n") !== e.text) {
+      this.problem = "The file changed; try again.";
+      this.reload(cx);
+      return;
+    }
+    lines.splice(from, count);
+    const text = lines.join("\n").replace(/\n{3,}/g, "\n\n");
+    for (const n of notesOn(this.notes, e.text)) this.act(["knowledge", "unnote", agent, "--at", n.at], cx);
+    this.act(["knowledge", "write", agent, "--data", enc(text)], cx, (r) => {
+      if (r.code === 0) {
+        this.knownText = text;
+        this.editor.set_value(text);
+      }
+    });
+    cx.notify();
   }
 
   saveKnowledge(cx) {
     const text = this.editor.value();
     const agent = this.agent ?? "orchestrator";
     this.act(["knowledge", "write", agent, "--data", enc(text)], cx, (r) => {
-      if (r.code === 0) this.knownText = text;
+      if (r.code === 0) {
+        this.knownText = text;
+        this.editing = false;
+      }
     });
   }
 
@@ -728,10 +769,11 @@ export class Work {
     const names = [...new Set([...team, ...files])];
     const counts = Object.fromEntries((this.kinds ?? []).map((k) => [k.agent, k]));
     const agent = this.agent ?? "orchestrator";
+    const who = agent.charAt(0).toUpperCase() + agent.slice(1);
     const listW = 220;
     const edited = this.knownText !== null && this.editor.value() !== this.knownText;
-    const notesH = this.notes.length ? 120 : 0;
-    const editH = Math.max(280, this.height - 200 - notesH);
+    const bodyH = Math.max(280, this.height - 190);
+    const info = counts[agent];
     return h_flex()
       .gap(GAP)
       .items_start()
@@ -759,7 +801,7 @@ export class Work {
         v_flex()
           .flex_none()
           .w(width - listW - GAP)
-          .p(14)
+          .p(16)
           .gap(10)
           .rounded(SIZE.radius)
           .bg(c.fill)
@@ -769,34 +811,136 @@ export class Work {
             h_flex()
               .gap(8)
               .items_center()
-              .child(div().flex_1().text_size(13).text_color(c.muted).child("What this agent is told about the project when it starts. The Orchestrator adds what the agents learn; you can edit it."))
-              .when(edited, (el) => el
-                .child(this.chip(c, "bh-know-undo", "Undo", false, (_e, cx) => {
+              .child(div().flex_none().text_size(16).font_semibold().child(who))
+              .child(div().flex_1().min_w(0).truncate().text_size(11.5).text_color(info?.over ? c.danger : c.faint)
+                .child(info ? `${info.entries} ${info.entries === 1 ? "entry" : "entries"}${info.over ? " · too long: ask the Orchestrator to shorten it" : ""}` : ""))
+              .when(!this.editing, (el) => el.child(this.chip(c, "bh-know-edit", "Edit", false, (_e, cx) => {
+                this.editing = true;
+                this.commenting = null;
+                this.editor.set_value(this.knownText ?? "");
+                this.editor.focus();
+                cx.notify();
+              })))
+              .when(this.editing, (el) => el
+                .child(this.chip(c, "bh-know-undo", "Cancel", false, (_e, cx) => {
                   this.editor.set_value(this.knownText ?? "");
+                  this.editing = false;
                   cx.notify();
                 }))
-                .child(this.button(c, "bh-know-save", "Save", (_e, cx) => this.saveKnowledge(cx)))),
+                .when(edited, (x) => x.child(this.button(c, "bh-know-save", "Save", (_e, cx) => this.saveKnowledge(cx))))),
           )
-          .child(
-            div()
-              .h(editH)
+          .child(div().text_size(12).text_color(c.muted).child(this.editing
+            ? "The file itself, as Markdown. Saving keeps the version before in the archive."
+            : `What ${who} is told about the project when it starts. Click an entry to leave a note on it; the note goes with it. The bin deletes a record.`))
+          .child(this.editing
+            ? div()
+              .h(bodyH)
               .p(10)
               .rounded(SIZE.control)
               .bg(c.ground)
               .border_1()
               .border_color(c.edge)
-              .child(Textarea.new(this.editor).w_full().h(editH - 20).text_size(13).text_color(c.ink)),
-          )
-          .when(this.notes.length > 0, (el) => el.child(
-            v_flex()
-              .id("bh-know-notes")
-              .max_h(notesH)
-              .overflow_y_scroll()
-              .gap(4)
-              .child(div().text_size(12).font_semibold().text_color(c.muted).child("Notes"))
-              .children(this.notes.map((n) => div().text_size(12).text_color(c.muted).child(`${n.entry}: ${n.note}`))),
-          )),
+              .child(Textarea.new(this.editor).w_full().h(bodyH - 20).text_size(13).text_color(c.ink))
+            : this.knowledgeDoc(c, agent, who, bodyH)),
       );
+  }
+
+  /** The file drawn: each section with its entries as Markdown, your notes under the entry they are on. */
+  knowledgeDoc(c, agent, who, height) {
+    if (this.knownText === null) return div().h(height).text_size(13).text_color(c.muted).child("Loading…");
+    const doc = outline(this.knownText);
+    const all = doc.sections.flatMap((x) => x.entries);
+    if (!all.length) {
+      return div().h(height).text_size(13).line_height("20px").text_color(c.muted)
+        .child(`Nothing recorded for ${who} yet. The Orchestrator adds what the agents learn as they work; Edit lets you write it yourself.`);
+    }
+    const placed = new Set();
+    const note = (n) =>
+      h_flex()
+        .flex_none()
+        .items_start()
+        .child(div().flex_1().min_w(0).child(this.commentNote(c, n.note)))
+        .child(this.iconButton(c, `bh-know-unnote-${hash(`${n.at}${n.note}`)}`, "x", (_e, cx) => this.act(["knowledge", "unnote", agent, "--at", n.at], cx)));
+    const entry = (e) => {
+      const notes = notesOn(this.notes, e.text);
+      for (const n of notes) placed.add(n);
+      const on = this.commenting?.kind === "knowledge" && this.commenting.id === agent && this.commenting.at === e.line;
+      const item = /^\s{0,3}[-*+]\s+/.test(e.text);
+      return v_flex()
+        .flex_none()
+        .child(
+          h_flex()
+            .id(`bh-know-e-${agent}-${e.line}`)
+            .px(8)
+            .py(2)
+            .gap(8)
+            .items_start()
+            .rounded(SIZE.nested)
+            .cursor_pointer()
+            .when(on, (el) => el.bg(c.hover))
+            .hover((st) => st.bg(c.hover))
+            .on_click((_e, cx) => this.startInline("knowledge", agent, e.line, cx))
+            .when(item, (el) => el.child(div().flex_none().mt(9).size(4).rounded_full().bg(c.faint)))
+            .child(div().flex_1().min_w(0).text_size(13.5).line_height(`${SIZE.line}px`)
+              .child(TextView.markdown(`bh-know-md-${agent}-${e.line}-${hash(e.text)}`, item ? e.text.replace(/^\s{0,3}[-*+]\s+/, "") : e.text)))
+            .when(notes.length > 0, (el) => el.child(h_flex().flex_none().pt(3).gap(3).items_center().text_size(11.5).text_color(c.accent)
+              .child(svg(ICON("comment")).size(12)).child(String(notes.length))))
+            .child(this.confirmDelete === `${agent}:${e.line}`
+              ? h_flex().flex_none().gap(4).items_center()
+                .child(div().text_size(12).text_color(c.danger).child("Delete?"))
+                .child(this.chip(c, `bh-know-del-yes-${e.line}`, "Delete", false, (_e, cx) => {
+                  cx.stop_propagation?.();
+                  this.deleteEntry(agent, e, cx);
+                }))
+                .child(this.chip(c, `bh-know-del-no-${e.line}`, "Keep", false, (_e, cx) => {
+                  cx.stop_propagation?.();
+                  this.confirmDelete = null;
+                  cx.notify();
+                }))
+              : div().flex_none().size(22).flex().items_center().justify_center().rounded(SIZE.nested).text_color(c.faint).cursor_pointer()
+                .id(`bh-know-del-${agent}-${e.line}`)
+                .hover((st) => st.bg(c.well).text_color(c.danger))
+                .on_click((_e, cx) => {
+                  cx.stop_propagation?.();
+                  this.confirmDelete = `${agent}:${e.line}`;
+                  cx.notify();
+                })
+                .child(svg(ICON("trash")).size(13))),
+        )
+        .children(notes.map(note))
+        .when(on, (el) => el.child(this.inlineBox(c)));
+    };
+    const sections = doc.sections.map((s, i) =>
+      v_flex()
+        .flex_none()
+        .gap(2)
+        .when(Boolean(s.name), (el) => el.child(
+          h_flex()
+            .px(8)
+            .pb(4)
+            .gap(8)
+            .items_center()
+            .child(div().text_size(12).font_semibold().text_color(c.muted).child(s.name))
+            .child(div().text_size(11.5).text_color(c.faint).child(String(s.entries.length)))
+            .child(div().flex_1().h(1).bg(c.edge)),
+        ))
+        .children(s.entries.map(entry))
+        .when(!s.entries.length, (el) => el.child(div().px(8).text_size(12.5).text_color(c.faint).child("Nothing yet")))
+        .when(i < doc.sections.length - 1, (el) => el.mb(12)));
+    const loose = this.notes.filter((n) => !placed.has(n));
+    return v_flex()
+      .id(`bh-know-doc-${agent}`)
+      .h(height)
+      .overflow_y_scroll()
+      .children(sections)
+      .when(loose.length > 0, (el) => el.child(
+        v_flex()
+          .flex_none()
+          .mt(14)
+          .gap(4)
+          .child(div().px(8).text_size(12).font_semibold().text_color(c.muted).child("Notes on entries that have changed since"))
+          .children(loose.map((n) => v_flex().flex_none().child(div().px(8).text_size(12.5).text_color(c.faint).truncate().child(n.entry)).child(note(n)))),
+      ));
   }
 
   // Bits

@@ -44,3 +44,46 @@ export function blocks(markdown) {
 export function commentsOn(comments, line, nextLine = Infinity) {
   return (comments ?? []).filter((x) => x.open !== false && x.line !== null && x.line >= line && x.line < nextLine);
 }
+
+const SECTION = /^\s{0,3}##\s+(.*?)\s*#*\s*$/;
+const TITLE = /^\s{0,3}#\s+(.*?)\s*#*\s*$/;
+
+/** What a note is filed under: an entry's first line, without its bullet or heading marks. */
+export const entryKey = (text) => String(text ?? "").split("\n")[0].replace(ITEM, "").replace(/^\s{0,3}#{1,6}\s+/, "").trim();
+
+/**
+ * A knowledge file as its title and its sections (## Facts, ## Standards…), each with its pieces
+ * (blocks above) as entries: `{ line, text, key }`. Pieces before the first section go in one with
+ * no name.
+ */
+export function outline(markdown) {
+  let title = null;
+  const sections = [];
+  let current = null;
+  for (const b of blocks(markdown)) {
+    const first = b.text.split("\n")[0];
+    const t = TITLE.exec(first);
+    if (t && title === null && !sections.length && !current) {
+      title = t[1];
+      continue;
+    }
+    const s = SECTION.exec(first);
+    if (s) {
+      current = { name: s[1], line: b.line, entries: [] };
+      sections.push(current);
+      continue;
+    }
+    if (!current) {
+      current = { name: null, line: b.line, entries: [] };
+      sections.push(current);
+    }
+    current.entries.push({ line: b.line, text: b.text, key: entryKey(b.text) });
+  }
+  return { title, sections };
+}
+
+/** The person's notes on an entry: those whose entry words it holds (as the brief places them). */
+export function notesOn(notes, text) {
+  const body = String(text ?? "");
+  return (notes ?? []).filter((n) => n?.entry && body.includes(n.entry));
+}

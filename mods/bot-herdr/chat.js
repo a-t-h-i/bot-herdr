@@ -547,9 +547,9 @@ export class Chat {
   }
 
   /**
-   * The working line: one agent at a time, its role's word shimmering in its colour beside the
-   * motion that acts out its job, then its name and what it is doing. With several at work they
-   * take turns, each sliding in over the last.
+   * The working line: one agent at a time, only its role's word, shimmering in its colour beside
+   * the motion that acts out its job (no name, nothing else). With several at work they take
+   * turns, each sliding in over the last.
    */
   working(c, list, width) {
     const now = onTurn(list, this.turn, 0);
@@ -570,9 +570,7 @@ export class Chat {
       .items_start()
       .text_size(12.5)
       .child(roleWord(c, { role: a.role, tone, id: `bh-rw-${a.address}` }))
-      .child(div().flex_none().h(18).line_height("18px").whitespace_nowrap().font_semibold().text_color(tone).child(a.name))
-      .when(Boolean(a.doing), (el) => el.child(div().flex_1().min_w(0).h(18).line_height("18px").truncate().text_color(c.faint).child(a.doing)))
-      .when(!a.doing, (el) => el.child(div().flex_1()))
+      .child(div().flex_1())
       .when(now.count > 1, (el) => el.child(
         div()
           .id("bh-working-next")

@@ -245,7 +245,11 @@ async function main(argv) {
       }
       if (sub === "note") {
         const [agent, entry, ...words] = args;
-        return out(flags, K.note(root, need(agent, "bh knowledge note <agent> <entry> <note>"), need(entry, "entry"), need(words.join(" "), "note")), () => "Note kept.");
+        return out(flags, K.note(root, need(agent, "bh knowledge note <agent> <entry> <note>"), need(entry, "entry"), need(words.join(" ") || bodyText(flags, []), "note")), () => "Note kept.");
+      }
+      if (sub === "unnote") {
+        const gone = K.unnote(root, need(args[0], "bh knowledge unnote <agent> --at <time>"), need(flags.at, "--at"));
+        return out(flags, { ok: gone }, () => (gone ? "Note taken back." : "No such note."));
       }
       if (sub === "write") {
         K.write(root, need(args[0], "bh knowledge write <agent> --file F"), need(bodyText(flags, args.slice(1)), "--file"));

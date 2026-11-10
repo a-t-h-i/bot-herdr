@@ -72,6 +72,14 @@ export function note(root, agent, entry, text) {
   return n;
 }
 
+/** Takes a note back: the one made at `at` for this agent. Returns whether one went. */
+export function unnote(root, agent, at) {
+  const all = readJson(notesFile(root), []);
+  const left = all.filter((n) => !(n.agent === agent && n.at === at));
+  if (left.length !== all.length) writeJson(notesFile(root), left);
+  return left.length !== all.length;
+}
+
 /** The file with each note under the entry it is about, for an agent's brief. */
 export function withNotes(root, agent) {
   const md = read(root, agent);
