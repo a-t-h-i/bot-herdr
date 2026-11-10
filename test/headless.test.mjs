@@ -210,10 +210,10 @@ test("bh agent: an ACP agent is refused a command outside standard access", () =
   assert.match(reply("g1"), /Gemini says hi/);
 });
 
-test("bh agent: a child agent writes no chat reply", () => {
+test("bh agent: a child agent's answer reaches the chat too, and it reports to its parent", () => {
   setTeam("claude");
   assert.equal(agent("k1", "", "--mode", "child", "--name", "fix-x", "--parent", "t3", "--", "go").code, 0);
-  assert.equal(existsSync(join(APP, "data", "bot-herdr", "replies", "k1.md")), false);
+  assert.equal(existsSync(join(APP, "data", "bot-herdr", "replies", "k1.md")), true);
   const brief = readFileSync(join(APP, "data", "bot-herdr", "briefs", "fix-x-k1.md"), "utf8");
   assert.match(brief, /hc send t3/);
 });
