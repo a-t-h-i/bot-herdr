@@ -51,6 +51,9 @@ const agents = liveAgents;
 const HEADLESS_LABEL = "bot-herdr.headless";
 const runsHeadlessAt = (address) => Boolean(terminals().find((t) => t.address === address)?.labels?.[HEADLESS_LABEL]);
 
+/** How far in from the box's sides a pane starts: past the box's corner curve, so the joins meet a straight edge. */
+const PANE_INSET = SIZE.radius + 6;
+
 const PLACEHOLDER = "Write a message, run a command, or ask an agent";
 const CLEAR = "#00000000";
 
@@ -1163,7 +1166,7 @@ export class Composer {
     let body;
     let pad = { x: SIZE.menuPad, top: 8, bottom: SIZE.menuPad };
     if (kind === "ask" || kind === "bar") {
-      const w = width - SIZE.fillet * 2 - 16;
+      const w = width - SIZE.fillet * 2 - PANE_INSET * 2;
       const got = kind === "ask" ? this.askBody(c, this.asking(), w - 26) : this.barBody(c, this.asking());
       size = { w, h: got.h + (kind === "ask" ? 24 : 12) };
       body = got.body;
@@ -1238,6 +1241,8 @@ export class Composer {
           });
         }));
     }
+    // The joins must sit on the box's straight top edge, clear of its rounded corners.
+    size.w = Math.min(size.w, width - SIZE.fillet * 2 - PANE_INSET * 2);
     const h = this.ready ? size.h : Math.round(size.h * 0.85);
     const w = this.ready ? size.w : Math.round(size.w * 0.85);
     const pane = v_flex()
