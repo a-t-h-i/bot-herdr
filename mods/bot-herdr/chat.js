@@ -339,6 +339,19 @@ export class Chat {
     });
   }
 
+  /** Set a task's status from the chat widget. */
+  actTask(id, status, cx) {
+    cx.spawn(async (cx) => {
+      try {
+        await bhJson(["task", "status", id, status], { cwd: projectDir() });
+      } catch {
+        // ignore; the widget refreshes on the next poll
+      }
+      this.loadingTasks = false;
+      this.loadTasks(cx);
+    });
+  }
+
   /** The tasks under way in this space's project, for the widget. */
   loadTasks(cx) {
     if (this.loadingTasks) return;
@@ -438,21 +451,33 @@ export class Chat {
                 // The step under way: a short accent segment travelling along a faint track.
                 .when(s.status === "active", (el) => el.child(div().relative().h(2).mt(2).rounded(1).bg(alpha(c.accent, 0.15)).overflow_hidden()
                   .child(div().absolute().top(0).w(12).h(2).rounded(1).bg(c.accent).loop("left", { from: -12, to: 200, period: 2400, easing: "linear" })))))))
-            .child(h_flex()
-              .id(`bh-tw-open-${t.id}`)
-              .mt(4)
-              .gap(4)
-              .items_center()
-              .text_size(12)
-              .text_color(c.accent)
-              .cursor_pointer()
-              .hover((st) => st.opacity(0.85))
-              .on_click(() => {
-                setShared(OPEN_TASK, { id: t.id, at: Date.now() });
-                showPage("tasks");
-              })
-              .child("Open in Tasks")
-              .child(svg(ICON("external-link")).size(11)))));
+            .child(h_flex().mt(4).gap(10).items_center()
+              .child(h_flex()
+                .id(`bh-tw-open-${t.id}`)
+                .gap(4)
+                .items_center()
+                .text_size(12)
+                .text_color(c.accent)
+                .cursor_pointer()
+                .hover((st) => st.opacity(0.85))
+                .on_click(() => {
+                  setShared(OPEN_TASK, { id: t.id, at: Date.now() });
+                  showPage("tasks");
+                })
+                .child("Open in Tasks")
+                .child(svg(ICON("external-link")).size(11)))
+              .child(div()
+                .id(`bh-tw-toggle-${t.id}`)
+                .text_size(12)
+                .font_medium()
+                .text_color(t.status === "paused" ? c.accent : c.warning)
+                .cursor_pointer()
+                .hover((st) => st.opacity(0.85))
+                .on_click((_e, cx) => {
+                  if (t.status === "paused") sendFromChat(`Resume task ${t.id}`);
+                  else this.actTask(t.id, "paused", cx);
+                })
+                .child(t.status === "paused" ? "Resume" : "Pause")))));
       })));
   }
 

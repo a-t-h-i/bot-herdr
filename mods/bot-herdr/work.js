@@ -636,7 +636,9 @@ export class Work {
               .child(div().text_size(17).font_semibold().line_height("24px").child(t.title ?? t.id))
               .child(div().text_size(12).text_color(c.muted).child(`${t.id} · ${facts}`)),
           )
-          .when(!finished, (el) => el.child(this.button(c, `bh-resume-${t.id}`, "Resume", () => sendFromChat(`Resume task ${t.id}`))))
+          .when(t.status === "paused", (el) => el.child(this.button(c, `bh-resume-${t.id}`, "Resume", () => sendFromChat(`Resume task ${t.id}`))))
+          .when(t.status === "active", (el) => el.child(this.button(c, `bh-pause-${t.id}`, "Pause", (_e, cx) => this.act(["task", "status", t.id, "paused"], cx))))
+          .when(!finished && t.status !== "active" && t.status !== "paused", (el) => el.child(this.button(c, `bh-resume-${t.id}`, "Resume", () => sendFromChat(`Resume task ${t.id}`))))
           .child(this.chip(c, `bh-arch-${t.id}`, t.archived ? "Unarchive" : "Archive", false, (_e, cx) => this.act(["task", t.archived ? "unarchive" : "archive", t.id], cx))),
       )
       .when(Boolean(t.git?.branch), (el) => el.child(
