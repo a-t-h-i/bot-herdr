@@ -7,7 +7,7 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { join } from "node:path";
-import { argvOf, effortsOf, slug } from "../roster.js";
+import { argvOf, effortsOf, slug, withPrompt } from "../roster.js";
 import { APP_HOME, BH, DATA, UsageError, accessOf, bodyText, ensureDir, myAddress, need, parseArgs, projectRoot, readJson, readText, sh, store, writeJson, writeText } from "./lib/core.mjs";
 import * as T from "./lib/tasks.mjs";
 import * as P from "./lib/plans.mjs";
@@ -388,7 +388,7 @@ async function main(argv) {
         const template = team.writeTemplate(agent, known, { name: mode === "child" && variant === slug(a.name) ? variant : `bh-${variant}`, body, effort });
         r = template
           ? team.hc(["run", "--bg", "--name", name, "--cwd", cwd, template.name, first])
-          : team.hc(["run", "--bg", "--name", name, "--cwd", cwd, "--", ...argvOf(agent, known, { effort }), `${body}\n\n${first}`]);
+          : team.hc(["run", "--bg", "--name", name, "--cwd", cwd, "--", ...withPrompt(argvOf(agent, known, { effort }), first), `${body}\n\n${first}`]);
       }
       if (task && flags.step) {
         const t = T.loadTask(root, task);

@@ -50,6 +50,30 @@ export const HEADLESS = {
 };
 export const headless = (key) => Object.hasOwn(HEADLESS, key);
 
+/**
+ * Harnesses that never report their status to herdr (no OSC 7501), so herdr's agents() leaves
+ * them out. Their terminals are agents here all the same (live.js): idle, as far as anyone can tell.
+ */
+export const QUIET = new Set(["antigravity"]);
+
+/**
+ * CLIs that run a bare prompt once and exit, by command name: they take the first message of an
+ * interactive session after this flag instead.
+ */
+export const PROMPT_FLAG = { agy: "-i", gemini: "-i", qwen: "-i" };
+
+const command = (argv) => String(argv?.[0] ?? "").split(/[\\/]/).pop().replace(/\.(exe|cmd|bat|ps1)$/i, "").toLowerCase();
+
+/** The flag a command's first message goes after, or null when it takes it as a bare argument. */
+export const promptFlag = (argv) => PROMPT_FLAG[command(argv)] ?? null;
+
+/** The command, ready for its first message to go last (herdr's tab.new and `hc run` add it there). */
+export function withPrompt(argv, text) {
+  const flag = promptFlag(argv);
+  if (!flag || !String(text ?? "").trim() || argv.at(-1) === flag) return argv;
+  return [...argv, flag];
+}
+
 /** Where Settings tells the chat whether agents run headless (the default) or as their CLI. */
 export const HEADLESS_KEY = "bot-herdr.headless";
 

@@ -24,7 +24,7 @@
 import { div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextareaState, Textarea } from "gpui-base";
 import {
-  agents, terminals, spaces, focused, settings, run, hc, exec, knownAgents, pickFolder, home,
+  agents as reported, panes, terminals, spaces, focused, settings, run, hc, exec, knownAgents, pickFolder, home,
   shared, appHome, window as appWindow,
 } from "herdr";
 import { showPage, hold } from "./pages.js";
@@ -32,7 +32,8 @@ import { LIGHT, DARK, SIZE, MOTION, ICON, tint, readable, textWidth, rowsFor } f
 import {
   triggerAt, caretAfterEdit, slashRows, mentionRows, tokenFor, plan, orchestratorOf, withoutEnter, messageText, commandColor,
 } from "./route.js";
-import { ROSTER_KEY, HEADLESS_KEY, roster, argvOf, runnable, runningAs, slug, headless } from "./roster.js";
+import { ROSTER_KEY, HEADLESS_KEY, roster, argvOf, runnable, runningAs, slug, headless, withPrompt } from "./roster.js";
+import { withQuiet, isQuiet } from "./live.js";
 import { BRIEFED, teamBrief, orchestratorBrief, briefed } from "./brief.js";
 import { bh, bhPath, enc, projectDir, ROUTING_KEY } from "./bh.js";
 import { queue, push as pushToast, dismiss as dismissToast, stayFor, toastSize, noteText, TOAST_KEY } from "./toasts.js";
@@ -41,6 +42,10 @@ import * as Drawer from "./drawer.js";
 import { alpha } from "./working.js";
 import { mockupFile, fromClipboard, previews, isImage, openInBrowser } from "./media.js";
 import { openLightbox, CHOSEN } from "./lightbox.js";
+
+/** Every agent running now: herdr's, and the terminals of harnesses that never report a status. */
+export const liveAgents = () => withQuiet({ agents: reported(), panes: panes(), spaces: spaces() });
+const agents = liveAgents;
 
 /** A terminal running `bh agent` (an agent run headless) carries this label. */
 const HEADLESS_LABEL = "bot-herdr.headless";
@@ -270,7 +275,7 @@ export class Composer {
       return t?.name || t?.program?.name || address;
     };
     return all
-      .filter((t) => t.parent && !listed.has(t.address) && (t.program?.agent || t.status))
+      .filter((t) => t.parent && !listed.has(t.address) && (t.program?.agent || t.status || isQuiet(t)))
       .map((t) => ({ address: t.address, parent: t.parent, parentName: nameOf(t.parent), name: t.name ?? null, status: t.status ?? null, program: t.program }));
   }
 
@@ -652,16 +657,19 @@ export class Composer {
       const space = this.space();
       const lead = step.role === "orchestrator";
       const entry = lead ? this.leadEntry() : step.entry ? this.roster().find((a) => a.id === step.entry) ?? null : null;
-      const quiet = this.runsHeadless(entry);
-      const brief = quiet ? "" : await this.briefFor(entry, this.briefing({ role: step.role }));
+      const headlessly = this.runsHeadless(entry);
+      const brief = headlessly ? "" : await this.briefFor(entry, this.briefing({ role: step.role }));
       this.starts.push({ space: space?.id ?? null, before: new Set(agents().map((a) => a.address)), at: Date.now(), lead, name: step.tab ?? step.name });
+      const task = headlessly ? messageText(step.text, step.files) : `${brief}\n\n${messageText(step.text, step.files)}`.trimEnd();
       // Starting a tab moves herdr's focus; tell the page switch this was us, so it stays on Chat.
       hold();
       run("tab.new", {
         ...(step.tab ? { name: step.tab } : {}),
-        // Headless: the agent terminal builds its own brief; the message is its first turn.
-        argv: quiet ? ["node", bhPath(), "agent", slug(entry.name), "--mode", "lead", "--"] : step.run,
-        task: quiet ? messageText(step.text, step.files) : `${brief}\n\n${messageText(step.text, step.files)}`.trimEnd(),
+        // Headless: the agent terminal builds its own brief; the message is its first turn. A CLI
+        // gets it as its first prompt (after -i for agy and the like, which would run a bare one
+        // once and exit).
+        argv: headlessly ? ["node", bhPath(), "agent", slug(entry.name), "--mode", "lead", "--"] : withPrompt(step.run, task),
+        task,
         space: space?.id,
       });
       return;

@@ -61,6 +61,7 @@ Each card shows the exact command. A change applies to an agent's next message w
 **How agents run**:
 
 - **Headless** (the default) or **As their CLI**. Headless works for Claude Code, Codex, pi, Oh My Pi, Gemini, opencode and Qwen Code; any other harness runs as its CLI.
+  - Antigravity (`agy`) runs as its CLI: its headless mode hangs without a terminal. It takes its first message after `-i`, and since it never reports a status to herdr, the chat counts its terminal as an agent anyway and shows it working from your message until its reply.
 - **Access**: what a headless agent may do without asking, since no one is there to approve a prompt mid-turn.
   - **Standard** (the default): edit files in the project, read and search, run `bh` (which runs the project's lint, typecheck and tests with `bh check`) and `hc`, and read git. Anything else is refused and the agent tells you what it needed. Add commands under **Also allow** (`npm test, git add, git commit`).
   - **Full access**: anything, without asking. Only for a folder or machine you're happy to let agents loose in.

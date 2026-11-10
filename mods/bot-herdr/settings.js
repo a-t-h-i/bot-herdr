@@ -13,11 +13,12 @@
 
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { agents, exec, settings, shared, setShared, knownAgents, notify } from "herdr";
+import { agents, panes, spaces, exec, settings, shared, setShared, knownAgents, notify } from "herdr";
 import { LIGHT, DARK, SIZE, ICON } from "./look.js";
 import { ROSTER_KEY, HEADLESS_KEY, HEADLESS, ROLES, roster, roleOf, argvOf, runnable, runningAs, effortsOf, modelsOf, harnessOf, blank, slug, parseModelList } from "./roster.js";
 import { bh, bhJson, enc, currentSpace, ROUTING_KEY } from "./bh.js";
 import { PICKED, openPick } from "./pick.js";
+import { withQuiet } from "./live.js";
 
 const GAP = 14; // between cards
 const MAX = 1140; // the page's widest
@@ -362,7 +363,7 @@ export class Settings {
     const content = Math.max(MIN_CARD, Math.min(MAX, this.width - SIZE.gutter * 2));
     const cols = content >= MIN_CARD * 3 + GAP * 2 ? 3 : content >= MIN_CARD * 2 + GAP ? 2 : 1;
     const cardW = Math.floor((content - GAP * (cols - 1)) / cols);
-    const running = agents();
+    const running = withQuiet({ agents: agents(), panes: panes(), spaces: spaces() });
     const space = currentSpace()?.id ?? null;
     const rows = [];
     for (let i = 0; i < list.length; i += cols) rows.push(list.slice(i, i + cols));

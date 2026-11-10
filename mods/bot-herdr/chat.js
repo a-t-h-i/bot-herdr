@@ -8,10 +8,11 @@
 
 import { div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextView } from "gpui-base";
-import { agents, terminals, spaces, focused, settings, shared, readTextFile } from "herdr";
+import { terminals, spaces, focused, settings, shared, readTextFile } from "herdr";
 import * as fs from "fs/promises";
 import { LIGHT, DARK, SIZE, ICON, readable, textWidth } from "./look.js";
-import { Composer, outboxDir } from "./composer.js";
+import { Composer, outboxDir, liveAgents } from "./composer.js";
+import { isQuiet, quietStatus } from "./live.js";
 import { FOCUS, OUTGOING, activePage, openTerminal } from "./pages.js";
 import { replyFile, replyBody, push, shown, isNew, outcome, clock, segments, fold } from "./feed.js";
 import { bh, enc } from "./bh.js";
@@ -105,20 +106,26 @@ export class Chat {
 
   /** We wrote to this agent: watch for its reply, or for it stopping without one. */
   expect(address, name) {
-    this.waits[address] = { name: name ?? this.composer.nameOf(address), worked: false, stopped: null, blocked: false };
+    this.waits[address] = { name: name ?? this.composer.nameOf(address), worked: false, stopped: null, blocked: false, at: Date.now() };
   }
 
   // ── In ─────────────────────────────────────────────────────────────────────────────────────
 
-  /** Every live agent, with the space it is in and what to call it. */
+  /**
+   * Every live agent, with the space it is in and what to call it. One that never reports a
+   * status (`quiet`, live.js) counts as working from our message until its reply.
+   */
   live() {
-    const listed = agents();
+    const now = Date.now();
+    const listed = liveAgents();
     const byAddress = new Map(listed.map((a) => [a.address, a]));
-    const out = listed.map((a) => ({ address: a.address, space: a.space, status: a.status, tile: a.program?.tile ?? null }));
+    const statusOf = (a, quiet) => (quiet ? quietStatus(this.waits[a.address], now) : a.status ?? null);
+    const out = listed.map((a) => ({ address: a.address, space: a.space, status: statusOf(a, a.quiet), tile: a.program?.tile ?? null, quiet: Boolean(a.quiet) }));
     for (const t of terminals()) {
       if (t.state !== "live" || byAddress.has(t.address) || !t.parent) continue;
-      if (!(t.program?.agent || t.status)) continue;
-      out.push({ address: t.address, space: byAddress.get(t.parent)?.space ?? this.space(), status: t.status ?? null, tile: t.program?.tile ?? null });
+      const quiet = !t.status && isQuiet(t);
+      if (!(t.program?.agent || t.status || quiet)) continue;
+      out.push({ address: t.address, space: byAddress.get(t.parent)?.space ?? this.space(), status: statusOf(t, quiet), tile: t.program?.tile ?? null, quiet });
     }
     return out;
   }
@@ -172,7 +179,9 @@ export class Chat {
           }
           if (what === "silent") {
             delete this.waits[address];
-            this.add({ kind: "note", text: `${wait.name} finished without writing a reply.`, address }, cx);
+            // One that reports no status may still be at it: we only know no reply came.
+            const quiet = live.find((a) => a.address === address)?.quiet;
+            this.add({ kind: "note", text: quiet ? `No reply from ${wait.name} yet. Its terminal shows where it is.` : `${wait.name} finished without writing a reply.`, address }, cx);
           }
           if (status !== "blocked") wait.blocked = false;
         }
@@ -263,7 +272,7 @@ export class Chat {
     return this.live().filter((a) => a.space === space && a.status === "working").map((a) => {
       const name = this.composer.nameOf(a.address);
       const role = this.composer.entryAt(a.address)?.role ?? findAgent(team, name)?.role ?? (/(^|[-_ ])(dev|design|qa|scout|research|planner|panel)/i.exec(name)?.[2] ?? "agent");
-      return { address: a.address, name, tile: a.tile, role, doing: this.doing[a.address] ?? null };
+      return { address: a.address, name, tile: a.tile, role, doing: this.doing[a.address] ?? (a.quiet ? "Its terminal shows its progress" : null) };
     });
   }
 
