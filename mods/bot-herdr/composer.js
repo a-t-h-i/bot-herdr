@@ -10,8 +10,12 @@
 // `@new-<harness>` to start a plain one. `/stop` and `/peek` act on the agent; any other
 // `/command` is sent as typed, so each harness's own commands still work. Sending is `hc send`.
 //
-// Each agent is told once how to start child agents and where to write its reply (brief.js):
-// in front of its first message from here, or of the task it is started with. `/team` repeats it.
+// A roster agent whose harness has a headless mode (Claude Code, Codex, pi, Oh My Pi, Gemini,
+// opencode, Qwen Code) starts as `bh agent` in its tab: each message runs the harness headless and
+// its answer comes back to the chat by itself (engine/lib/agent.mjs). Settings can turn that off.
+// Any other agent is its harness's own CLI, told once how to start child agents and where to
+// write its reply (brief.js): in front of its first message from here, or of the task it is
+// started with. `/team` repeats it.
 
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, TextareaState, Textarea } from "gpui-base";
@@ -24,9 +28,13 @@ import { LIGHT, DARK, SIZE, MOTION, ICON, tint, readable, textWidth, rowsFor } f
 import {
   triggerAt, caretAfterEdit, slashRows, mentionRows, tokenFor, plan, orchestratorOf, withoutEnter, messageText, commandColor,
 } from "./route.js";
-import { ROSTER_KEY, roster, argvOf, runnable, runningAs, slug } from "./roster.js";
+import { ROSTER_KEY, HEADLESS_KEY, roster, argvOf, runnable, runningAs, slug, headless } from "./roster.js";
 import { BRIEFED, teamBrief, orchestratorBrief, briefed } from "./brief.js";
-import { bh, enc, projectDir, ROUTING_KEY } from "./bh.js";
+import { bh, bhPath, enc, projectDir, ROUTING_KEY } from "./bh.js";
+
+/** A terminal running `bh agent` (an agent run headless) carries this label. */
+const HEADLESS_LABEL = "bot-herdr.headless";
+const runsHeadlessAt = (address) => Boolean(terminals().find((t) => t.address === address)?.labels?.[HEADLESS_LABEL]);
 
 const PLACEHOLDER = "Write a message, run a command, or ask an agent";
 const CLEAR = "#00000000";
@@ -255,8 +263,13 @@ export class Composer {
     return t?.name || t?.program?.name || address;
   }
 
+  /** Whether a roster agent starts headless: its harness can, and Settings didn't turn it off. */
+  runsHeadless(entry) {
+    return Boolean(entry) && headless(entry.harness) && shared(HEADLESS_KEY) !== false;
+  }
+
   needsBrief(address) {
-    if (this.justBriefed.has(address)) return false;
+    if (this.justBriefed.has(address) || runsHeadlessAt(address)) return false;
     return !briefed(terminals().find((t) => t.address === address));
   }
 
@@ -532,19 +545,27 @@ export class Composer {
       const space = this.space();
       const lead = step.role === "orchestrator";
       const entry = lead ? this.leadEntry() : step.entry ? this.roster().find((a) => a.id === step.entry) ?? null : null;
-      const brief = await this.briefFor(entry, this.briefing({ role: step.role }));
+      const quiet = this.runsHeadless(entry);
+      const brief = quiet ? "" : await this.briefFor(entry, this.briefing({ role: step.role }));
       this.starts.push({ space: space?.id ?? null, before: new Set(agents().map((a) => a.address)), at: Date.now(), lead, name: step.tab ?? step.name });
       // Starting a tab moves herdr's focus; tell the page switch this was us, so it stays on Chat.
       hold();
       run("tab.new", {
         ...(step.tab ? { name: step.tab } : {}),
-        argv: step.run,
-        task: `${brief}\n\n${messageText(step.text, step.files)}`.trimEnd(),
+        // Headless: the agent terminal builds its own brief; the message is its first turn.
+        argv: quiet ? ["node", bhPath(), "agent", slug(entry.name), "--mode", "lead", "--"] : step.run,
+        task: quiet ? messageText(step.text, step.files) : `${brief}\n\n${messageText(step.text, step.files)}`.trimEnd(),
         space: space?.id,
       });
       return;
     }
     if (step.do === "brief") {
+      if (runsHeadlessAt(step.address)) {
+        // The agent terminal sends its brief again itself.
+        const r = await hc(["send", step.address, "/team"]);
+        if (r.code !== 0) throw new Error(`Couldn't brief ${name}: ${(r.stderr || r.stdout).trim()}`);
+        return;
+      }
       const lead = this.target()?.address === step.address;
       const text = await this.briefFor(this.entryAt(step.address), this.briefing({ self: step.address, role: lead ? "orchestrator" : null }));
       const r = await hc(["send", step.address, text]);

@@ -13,11 +13,13 @@ import * as fs from "fs/promises";
 import { LIGHT, DARK, SIZE, ICON, readable } from "./look.js";
 import { Composer, outboxDir } from "./composer.js";
 import { FOCUS, OUTGOING, activePage, openTerminal } from "./pages.js";
-import { replyFile, push, shown, isNew, outcome, clock } from "./feed.js";
+import { replyFile, replyBody, push, shown, isNew, outcome, clock } from "./feed.js";
 import { bh, enc } from "./bh.js";
 
 /** Where agents' questions for the person wait (bh ask writes them; answered ones move aside). */
 const questionsDir = () => `${outboxDir().replace(/\/replies$/, "")}/questions`;
+/** What an agent run headless is doing right now (agent.mjs writes it on each tool call). */
+const activityDir = () => `${outboxDir().replace(/\/replies$/, "")}/activity`;
 
 const POLL_MS = 2500;
 const WHEEL_STEP = 70; // px of wheel per entry
@@ -43,6 +45,7 @@ export class Chat {
     this.entries = load("feed", []);
     this.seen = load("seen", {}); // address → the last reply text shown
     this.waits = {}; // address → { name, worked, stopped, blocked }: agents we wrote to
+    this.doing = {}; // address → what a headless agent is doing ("Read src/app.tsx")
     this.back = 0; // entries scrolled up from the newest
     this.wheel = 0;
     this.focusAt = shared(FOCUS) ?? 0;
@@ -127,7 +130,21 @@ export class Chat {
           this.seen[a.address] = text;
           save("seen", this.seen);
           delete this.waits[a.address];
-          this.add({ kind: "agent", space: a.space, text: text.trim(), from: { address: a.address, name: this.composer.nameOf(a.address), tile: a.tile } }, cx);
+          this.add({ kind: "agent", space: a.space, text: replyBody(text), from: { address: a.address, name: this.composer.nameOf(a.address), tile: a.tile } }, cx);
+        }
+        const doing = {};
+        for (const a of live) {
+          if (a.status !== "working" || a.address.includes("/")) continue;
+          try {
+            const got = JSON.parse((await readTextFile(replyFile(activityDir(), a.address).replace(/\.md$/, ".json"))) ?? "null");
+            if (got?.line) doing[a.address] = String(got.line);
+          } catch {
+            // not run headless, or nothing yet
+          }
+        }
+        if (JSON.stringify(doing) !== JSON.stringify(this.doing)) {
+          this.doing = doing;
+          cx.notify();
         }
         for (const [address, wait] of Object.entries(this.waits)) {
           const status = live.find((a) => a.address === address)?.status ?? null;
@@ -243,7 +260,7 @@ export class Chat {
     const space = this.space();
     const view = shown(this.entries, space, this.back);
     this.back = view.back;
-    const working = this.live().filter((a) => a.space === space && a.status === "working").map((a) => this.composer.nameOf(a.address));
+    const working = this.live().filter((a) => a.space === space && a.status === "working").map((a) => ({ name: this.composer.nameOf(a.address), doing: this.doing[a.address] ?? null }));
     const foot = SIZE.foot + this.composer.height(width) + 14;
 
     return div()
@@ -544,16 +561,28 @@ export class Chat {
       .child(label);
   }
 
-  working(c, names) {
-    const who = names.length > 3 ? `${names.slice(0, 3).join(", ")} and ${names.length - 3} more` : names.join(", ");
-    return h_flex()
+  /** Who is working, and for an agent run headless what it is doing now. */
+  working(c, list) {
+    const row = (key, text, doing) => h_flex()
+      .id(`bh-working-${key}`)
       .flex_none()
       .gap(8)
       .items_center()
+      .min_w(0)
       .text_size(12.5)
       .text_color(c.muted)
       .child(svg(ICON("spinner")).size(13).spin(900))
-      .child(`${who} ${names.length === 1 ? "is" : "are"} working…`);
+      .child(div().flex_none().child(text))
+      .when(Boolean(doing), (el) => el.child(div().flex_1().min_w(0).truncate().text_color(c.faint).child(doing)));
+    const busy = list.filter((w) => w.doing).slice(0, 4);
+    const rest = list.filter((w) => !busy.includes(w));
+    const names = rest.map((w) => w.name);
+    const who = names.length > 3 ? `${names.slice(0, 3).join(", ")} and ${names.length - 3} more` : names.join(", ");
+    return v_flex()
+      .flex_none()
+      .gap(6)
+      .children(busy.map((w, i) => row(i, `${w.name}:`, w.doing)))
+      .when(names.length > 0, (el) => el.child(row("rest", `${who} ${names.length === 1 ? "is" : "are"} working…`, null)));
   }
 
   newer(c, back) {

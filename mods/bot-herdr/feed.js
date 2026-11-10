@@ -22,9 +22,14 @@ export function shown(entries, space, back = 0) {
   return { list: mine.slice(Math.max(0, end - SHOWN), end), total: mine.length, back: mine.length - end };
 }
 
+/** What a reply file says, without its stamp (`<!-- bh <time> -->`, so the same words twice still count). */
+export function replyBody(text) {
+  return String(text ?? "").replace(/<!--\s*bh [^>]*-->/g, "").trim();
+}
+
 /** A reply file's text counts as new when it has words and differs from the last one seen. */
 export function isNew(text, seen) {
-  return typeof text === "string" && text.trim().length > 0 && text !== seen;
+  return typeof text === "string" && replyBody(text).length > 0 && text !== seen;
 }
 
 /**

@@ -1,17 +1,21 @@
-// Settings: the team, the harnesses and the classifier.
+// Settings: the team, how agents run, the harnesses and the classifier.
 //
 // The team is six fixed roles (Orchestrator, Design, Dev, QA, Research, Scout) plus any agents
 // you add, shown as a grid of cards. Each card picks a harness (Claude Code, Codex, pi, Oh My
 // Pi, …), a model from that harness's list (or any you type) and an effort level. A change is
 // kept in herdr's shared state at once (the composer sees it) and written for the bh tool a
-// moment later, which also refreshes each agent's herdr-core template. It applies the next time
-// that agent starts.
+// moment later, which also refreshes each agent's herdr-core template. An agent run headless
+// picks it up on its next message; one run as its CLI, the next time it starts.
+//
+// How agents run: headless (the default: each message runs the harness non-interactively and
+// the answer comes back to the chat) or as their CLI; and what they may do without asking,
+// standard (edits, reading, the team's tools) unless the person picks full access.
 
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { agents, exec, settings, shared, setShared, knownAgents, notify } from "herdr";
 import { LIGHT, DARK, SIZE, ICON } from "./look.js";
-import { ROSTER_KEY, ROLES, roster, roleOf, argvOf, runnable, runningAs, effortsOf, modelsOf, harnessOf, blank, slug, parseModelList } from "./roster.js";
+import { ROSTER_KEY, HEADLESS_KEY, HEADLESS, ROLES, roster, roleOf, argvOf, runnable, runningAs, effortsOf, modelsOf, harnessOf, blank, slug, parseModelList } from "./roster.js";
 import { bh, bhJson, enc, currentSpace, ROUTING_KEY } from "./bh.js";
 import { PICKED, openPick } from "./pick.js";
 
@@ -57,6 +61,14 @@ export class Settings {
     this.saveGen = 0;
     this.problem = null;
     this.classifier = null; // what `bh config` reports (the key only as set / not set)
+    this.access = null; // what `bh access` reports: { headless, access, allow }
+    this.allowInput = InputState.new({ placeholder: "npm test, git add, git commit" });
+    const saveAllow = (_e, cx) => {
+      const v = this.allowInput.value().trim();
+      if (this.access && v !== (this.access.allow ?? []).join(", ")) this.setAccess({ allow: v }, cx);
+    };
+    this.allowInput.on("submit", saveAllow);
+    this.allowInput.on("blur", saveAllow);
 
     this.harnessForm = {
       key: InputState.new({ placeholder: "omp" }),
@@ -93,6 +105,7 @@ export class Settings {
     this.sync();
     this.loadKnown(cx);
     this.loadConfig(cx);
+    this.loadAccess(cx);
     cx.timer.every(60000, (cx) => this.loadKnown(cx));
   }
 
@@ -144,6 +157,32 @@ export class Settings {
       const got = await bhJson(["config", "--data", enc(patch)]);
       if (got) this.showConfig(got);
       else this.problem = "Couldn't save the classifier settings. Is node on your PATH?";
+      cx.notify();
+    });
+  }
+
+  loadAccess(cx) {
+    cx.spawn(async (cx) => {
+      const got = await bhJson(["access"]);
+      if (got) this.showAccess(got);
+      cx.notify();
+    });
+  }
+
+  showAccess(got) {
+    this.access = got;
+    this.allowInput.set_value((got.allow ?? []).join(", "));
+    const on = got.headless !== false;
+    if (shared(HEADLESS_KEY) !== on) setShared(HEADLESS_KEY, on);
+  }
+
+  setAccess(patch, cx) {
+    if (this.access) this.access = { ...this.access, ...patch, ...(typeof patch.allow === "string" ? { allow: patch.allow.split(",").map((x) => x.trim()).filter(Boolean) } : {}) };
+    cx.notify();
+    cx.spawn(async (cx) => {
+      const got = await bhJson(["access", "--data", enc(patch)]);
+      if (got) this.showAccess(got);
+      else this.problem = "Couldn't save how agents run. Is node on your PATH?";
       cx.notify();
     });
   }
@@ -350,7 +389,7 @@ export class Settings {
               .w(content)
               .py(24)
               .gap(GAP)
-              .child(this.heading(c, "Agents", "Each agent runs on a harness with a model and an effort level. The Orchestrator gets every message that names no one and hands work to the others; reach any of them with @name. A change applies the next time that agent starts."))
+              .child(this.heading(c, "Agents", "Each agent runs on a harness with a model and an effort level. The Orchestrator gets every message that names no one and hands work to the others; reach any of them with @name. A change applies to an agent's next message when it runs headless, or the next time it starts."))
               .when(Boolean(this.problem), (el) => el.child(div().text_size(12.5).text_color(c.danger).child(this.problem)))
               .children(rows.map((row, r) =>
                 h_flex().id(`bh-row-${r}`).flex_none().gap(GAP).items_start().children(row.map((a) => this.card(c, a, cardW, running, space)))))
@@ -361,6 +400,8 @@ export class Settings {
                   .child(this.button(c, "bh-add", "plus", "Add agent", (_e, cx) => this.add(cx)))
                   .child(div().text_size(12).text_color(c.faint).child("Your own agents sit beside the six: give one a name, a harness and a model.")),
               )
+              .child(div().h(14))
+              .child(this.accessCard(c))
               .child(div().h(14))
               .child(this.harnesses(c))
               .child(div().h(14))
@@ -578,6 +619,50 @@ export class Settings {
           .child(col("Name", f.name, 180))
           .child(v_flex().flex_1().min_w(0).gap(5).child(this.label(c, "Command")).child(this.field(c, f.run)))
           .child(this.button(c, "bh-add-harness", "plus", "Add harness", (_e, cx) => this.addHarness(cx))),
+      );
+  }
+
+  accessCard(c) {
+    const k = this.access;
+    if (!k) return this.heading(c, "How agents run", "Loading… (it needs node on your PATH).");
+    const on = k.headless !== false;
+    const full = k.access === "full";
+    const quiet = this.known.filter((h) => h.installed && HEADLESS[h.key]).map((h) => h.name);
+    const row = (label, chips, about, danger = false) => v_flex()
+      .gap(6)
+      .child(this.label(c, label))
+      .child(h_flex().flex_wrap().gap(6).children(chips))
+      .child(div().text_size(12).text_color(danger ? c.danger : c.muted).child(about));
+    return v_flex()
+      .gap(GAP)
+      .child(this.heading(c, "How agents run", "Headless, each message runs the harness on its own and the answer comes straight back to the chat. The agent's terminal still shows what it does, and /cli there opens the full CLI on the same conversation."))
+      .child(
+        v_flex()
+          .p(PAD)
+          .gap(16)
+          .rounded(SIZE.radius)
+          .bg(c.fill)
+          .border_1()
+          .border_color(c.edge)
+          .child(row("Run agents", [
+            this.chip(c, "bh-run-headless", "Headless", on, (_e, cx) => this.setAccess({ headless: true }, cx)),
+            this.chip(c, "bh-run-cli", "As their CLI", !on, (_e, cx) => this.setAccess({ headless: false }, cx)),
+          ], on
+            ? `Headless works for ${quiet.length ? quiet.join(", ") : "Claude Code, Codex, pi, Oh My Pi, Gemini, opencode and Qwen Code"}. Any other harness runs as its CLI.`
+            : "Each agent is its harness's own CLI in a terminal. A reply reaches the chat only when the agent writes one with bh reply."))
+          .child(row("Access", [
+            this.chip(c, "bh-access-standard", "Standard", !full, (_e, cx) => this.setAccess({ access: "standard" }, cx)),
+            this.chip(c, "bh-access-full", "Full access", full, (_e, cx) => this.setAccess({ access: "full" }, cx)),
+          ], full
+            ? "Agents run any command and change any file without asking. Use it only in a folder or on a machine you're happy to let them loose in."
+            : "Agents edit files in the project, read and search, run bh (which runs the project's lint, typecheck and tests) and hc, and read git. Anything else is refused and the agent tells you what it needed.", full))
+          .when(!full, (el) => el.child(
+            v_flex()
+              .gap(5)
+              .child(this.label(c, "Also allow these commands"))
+              .child(this.field(c, this.allowInput))
+              .child(div().text_size(11.5).text_color(c.faint).child("Comma separated; each allows that command and anything after it. Claude Code, Gemini, opencode and Qwen Code follow this list. Codex runs commands in its workspace sandbox; pi and Oh My Pi have no permission system and run as they would in a terminal.")),
+          )),
       );
   }
 

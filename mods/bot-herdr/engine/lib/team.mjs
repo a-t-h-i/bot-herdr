@@ -8,7 +8,8 @@ import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ROLES, argvOf, effortsOf, findAgent, roleOf, roster, slug } from "../../roster.js";
-import { DATA, ENGINE, bhCommand, ensureDir, exists, readJson, readText, writeText } from "./core.mjs";
+import { BH, DATA, ENGINE, accessOf, bhCommand, ensureDir, exists, readJson, readText, writeText } from "./core.mjs";
+import { headless } from "./runner.mjs";
 import * as knowledge from "./knowledge.mjs";
 
 export function team() {
@@ -49,7 +50,7 @@ function reportSection({ parent, task, name }) {
  * Everything an agent is told when it starts. `mode`: "lead" (the Orchestrator, or an agent the
  * person talks to in its own tab), "child" (started by another agent), "panel" or "review".
  */
-export function brief(agent, { mode = "child", parent = null, task = null, plan = null, root = process.cwd(), name = null } = {}) {
+export function brief(agent, { mode = "child", parent = null, task = null, plan = null, root = process.cwd(), name = null, headless = false } = {}) {
   const { agents } = team();
   const r = roleOf(agent.role);
   const lead = agent.role === "orchestrator";
@@ -73,6 +74,7 @@ export function brief(agent, { mode = "child", parent = null, task = null, plan 
   if (plan) tools.push(`- The plan is \`${plan}\`: \`bh plan show ${plan}\`.`);
   tools.push("- `bh scripts` lists shared scripts; run one with `bh scripts run <name>`. `bh check` runs the project's lint, typecheck and tests for what changed.");
   tools.push("- Ask the person with `bh ask --file <questions.md>` (numbered questions, `- Label — meaning` options, optional fenced `mockup` blocks), then end your turn: the answers come to you as a message.");
+  if (headless) tools.push("- You run headless: no one can approve a prompt mid-turn. A command the person hasn't allowed is refused; then say what you need and why, and the person can allow it in Settings → Agent access. `bh check` runs the project's lint, typecheck and tests and is always allowed.");
   parts.push(tools.join("\n"));
 
   if (mode !== "panel" && mode !== "review") {
@@ -81,7 +83,12 @@ export function brief(agent, { mode = "child", parent = null, task = null, plan 
   }
   if (mode !== "lead" && !lead) parts.push("## Rules\n- Stay inside your scope and the files your brief names.");
 
-  if (mode === "lead") {
+  if (mode === "lead" && headless) {
+    parts.push([
+      "## Replying to the person",
+      "Your last message of each turn is your reply: the bot-herdr chat shows it. Write it for the person, in Markdown, short and plain: what you did or found, and anything they need to decide. You don't need `bh reply`.",
+    ].join("\n"));
+  } else if (mode === "lead") {
     parts.push([
       "## Replying to the person",
       "At the end of every turn, save what you want to tell the person (Markdown, short and plain) with `bh reply --file <reply.md>` (or `bh reply \"<text>\"`). The bot-herdr chat shows it as your reply; without it the person sees nothing unless they open your terminal.",
@@ -129,10 +136,31 @@ export function commandLine(argv) {
 
 const MARK = "managed: bot-herdr";
 
-/** Writes one agent's template. Leaves alone a template of that name the person wrote. */
-export function writeTemplate(agent, known, { name = slug(agent.name), body, effort } = {}) {
+/** Whether an agent runs headless: its harness has a headless mode and the person didn't turn it off. */
+export const runsHeadless = (agent) => headless(agent.harness) && accessOf().headless;
+
+/** `bh agent …`: the agent terminal that runs a headless harness (agent.mjs). */
+export function agentArgv(agent, { mode = "child", name = null, parent = null, task = null, effort = null, model = null } = {}) {
+  return [
+    "node", BH.replace(/\\/g, "/"), "agent", slug(agent.name), "--mode", mode,
+    ...(name ? ["--name", name] : []), ...(parent ? ["--parent", parent] : []), ...(task ? ["--task", task] : []),
+    ...(effort && effort !== agent.effort ? ["--effort", effort] : []), ...(model ? ["--model", model] : []),
+  ];
+}
+
+/**
+ * Writes one agent's template. Leaves alone a template of that name the person wrote. A
+ * harness that runs headless gets the agent terminal, which writes its own brief; others get
+ * the harness's command with the brief as the template's body.
+ */
+export function writeTemplate(agent, known, { name = slug(agent.name), body, effort, mode = "child" } = {}) {
   const file = join(templatesDir(), `${name}.md`);
   if (exists(file) && !readText(file).includes(MARK)) return null;
+  if (runsHeadless(agent)) {
+    const argv = agentArgv(agent, { mode, effort });
+    writeText(file, ["---", `description: ${roleOf(agent.role)?.does ?? `${agent.name}, an agent set up in bot-herdr.`}`, `command: ${commandLine(argv)}`, MARK, "---", ""].join("\n"));
+    return { file, name, argv };
+  }
   const argv = argvOf(agent, known, effort ? { effort } : {});
   writeText(file, [
     "---",

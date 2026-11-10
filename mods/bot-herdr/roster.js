@@ -34,6 +34,25 @@ export const HARNESSES = {
 };
 const OTHER = { model: (m) => ["--model", m], efforts: [] };
 
+/**
+ * Harnesses bot-herdr can run headless (engine/lib/runner.mjs), with the name each reports to
+ * herdr (OSC 7501 `app`, which picks its icon) and, for Agent Client Protocol ones, the
+ * arguments that start that mode.
+ */
+export const HEADLESS = {
+  claude: { app: "claude-code" },
+  codex: { app: "codex" },
+  pi: { app: "pi" },
+  omp: { app: "oh-my-pi" },
+  gemini: { app: "gemini", acp: ["--acp"] },
+  opencode: { app: "opencode", acp: ["acp"] },
+  qwen: { app: "qwen-code", acp: ["--acp"] },
+};
+export const headless = (key) => Object.hasOwn(HEADLESS, key);
+
+/** Where Settings tells the chat whether agents run headless (the default) or as their CLI. */
+export const HEADLESS_KEY = "bot-herdr.headless";
+
 export const harnessOf = (key) => HARNESSES[key] ?? OTHER;
 
 /** The models a harness lists, current ones first. Empty when we don't know them (type one). */

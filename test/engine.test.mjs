@@ -20,10 +20,13 @@ process.env.XDG_CONFIG_HOME = XDG;
 const BH = fileURLToPath(new URL("../mods/bot-herdr/engine/bh.mjs", import.meta.url));
 const lib = (name) => import(new URL(`../mods/bot-herdr/engine/${name}`, import.meta.url));
 const enc = (v) => encodeURIComponent(typeof v === "string" ? v : JSON.stringify(v));
-const bh = (...args) => {
-  const r = spawnSync(process.execPath, [BH, ...args], { cwd: PROJECT, encoding: "utf8", env: { ...process.env, BH_APP_HOME: APP, XDG_CONFIG_HOME: XDG, HC_TERMINAL_ID: "t1", PATH: "" } });
+// The chat and Settings run bh outside any terminal; an agent runs it in one (HC_TERMINAL_ID).
+const run = (args, env) => {
+  const r = spawnSync(process.execPath, [BH, ...args], { cwd: PROJECT, encoding: "utf8", env: { ...process.env, BH_APP_HOME: APP, XDG_CONFIG_HOME: XDG, HC_TERMINAL_ID: "", BH_AGENT: "", PATH: "", ...env } });
   return { code: r.status, out: r.stdout, err: r.stderr };
 };
+const bh = (...args) => run(args, {});
+const asAgent = (...args) => run(args, { HC_TERMINAL_ID: "t1" });
 const json = (...args) => JSON.parse(bh(...args, "--json").out);
 
 test("arguments: flags, booleans that take no value, repeated flags and --data", async () => {
@@ -138,9 +141,14 @@ test("bh end to end: team, config, harnesses, tasks, questions", () => {
   const known = [{ key: "claude", name: "Claude Code", run: ["claude"], installed: true }];
   assert.equal(bh("team", "save", "--data", enc({ agents: [{ role: "dev", harness: "claude", model: "claude-sonnet-5-5", effort: "high" }], known })).code, 0);
   assert.match(bh("team").out, /Dev: claude --model claude-sonnet-5-5 --effort high/);
-  const template = readFileSync(join(XDG, "herdr-core", "templates", "dev.md"), "utf8");
-  assert.match(template, /command: claude --model claude-sonnet-5-5 --effort high/);
-  assert.match(template, /managed: bot-herdr/);
+  // Claude Code runs headless: the template starts the agent terminal, which writes its own brief.
+  const template = () => readFileSync(join(XDG, "herdr-core", "templates", "dev.md"), "utf8");
+  assert.match(template(), /command: node \S+bh\.mjs agent dev --mode child\n/);
+  assert.match(template(), /managed: bot-herdr/);
+  bh("access", "--data", enc({ headless: false })); // rewrites the templates
+  assert.match(template(), /command: claude --model claude-sonnet-5-5 --effort high/);
+  assert.match(template(), /## Child agents/);
+  bh("access", "--data", enc({ headless: true }));
 
   const config = json("config", "--data", enc({ enabled: true, key: "secret", features: { qa: false } }));
   assert.equal(config.enabled, true);
@@ -162,7 +170,8 @@ test("bh end to end: team, config, harnesses, tasks, questions", () => {
   assert.equal(json("task", "list").length, 0);
   assert.equal(json("task", "list", "--all").length, 1);
 
-  const asked = json("ask", "Which database?", "--option", "Postgres (Recommended) — what we run", "--option", "SQLite — simpler");
+  const asked = JSON.parse(asAgent("ask", "Which database?", "--option", "Postgres (Recommended) — what we run", "--option", "SQLite — simpler", "--json").out);
+  assert.equal(asked.from, "t1");
   assert.equal(asked.questions[0].options[0].recommended, true);
   assert.equal(json("questions").length, 1);
   const answered = bh("answer", asked.id, "--data", enc([{ picks: ["Postgres"], text: "" }]));
@@ -170,6 +179,21 @@ test("bh end to end: team, config, harnesses, tasks, questions", () => {
   assert.equal(json("questions").length, 0);
   assert.ok(existsSync(join(APP, "data", "bot-herdr", "questions", "answered", `${asked.id}.json`)));
   assert.match(bh("answers", asked.id).out, /Postgres/);
+});
+
+test("agents can't change the settings that decide what they may do", () => {
+  for (const args of [["access", "full"], ["access", "--allow", "rm"], ["team", "save", "--data", enc({ agents: [] })], ["config", "--data", enc({ enabled: true })], ["harness", "add", "x", "--run", "x"]]) {
+    const r = run(args, { BH_AGENT: "Dev", HC_TERMINAL_ID: "t1" });
+    assert.equal(r.code, 1, args.join(" "));
+    assert.match(r.err, /the person's to change/);
+  }
+  assert.equal(json("access").access, "standard");
+  const set = json("access", "--data", enc({ access: "full", allow: "npm test, git commit", headless: false }));
+  assert.deepEqual(set, { access: "full", allow: ["npm test", "git commit"], headless: false });
+  assert.equal(json("access", "standard").access, "standard");
+  assert.equal(json("access").headless, false);
+  bh("access", "--data", enc({ headless: true, allow: "" }));
+  assert.deepEqual(json("access"), { access: "standard", allow: [], headless: true });
 });
 
 test("nothing in the repository mentions the old name", () => {

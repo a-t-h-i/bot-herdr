@@ -8,7 +8,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { argvOf, effortsOf, slug } from "../roster.js";
-import { APP_HOME, BH, DATA, UsageError, bodyText, ensureDir, myAddress, need, parseArgs, projectRoot, readJson, readText, sh, store, writeJson, writeText } from "./lib/core.mjs";
+import { APP_HOME, BH, DATA, UsageError, accessOf, bodyText, ensureDir, myAddress, need, parseArgs, projectRoot, readJson, readText, sh, store, writeJson, writeText } from "./lib/core.mjs";
 import * as T from "./lib/tasks.mjs";
 import * as P from "./lib/plans.mjs";
 import * as K from "./lib/knowledge.mjs";
@@ -16,6 +16,7 @@ import * as S from "./lib/scripts.mjs";
 import * as Q from "./lib/ask.mjs";
 import * as team from "./lib/team.mjs";
 import * as C from "./classifier/index.mjs";
+import { replyText } from "./lib/agent.mjs";
 
 const HELP = `bh: bot-herdr's tools. Run from the project folder. Add --json for machine-readable output.
 
@@ -51,12 +52,23 @@ The person
 The team
   bh team                         who is set up, with harness, model and effort
   bh spawn <agent> --name <short> [--task T --step N] [--effort auto|<level>] [--panel P] [--review] "<brief>"
+  bh agent <agent> [--mode lead|child] [--name N] [-- "<first message>"]   run an agent headless in this terminal
   bh classify route|triage|effort|qa-risk "<text>" [--task T]
   bh brief <agent> [--mode lead|child|panel|review]        bh sync   (write the hc templates)
 
-Used by the bot-herdr chat and Settings (--data takes URI-encoded JSON)
+Used by the bot-herdr chat and Settings (--data takes URI-encoded JSON; agents can't change these)
   bh team save --data <roster>    bh config [--data <changes>]    bh questions    bh open <file>
-  bh harness add <key> --name "<Name>" --run "<command and arguments>"`;
+  bh harness add <key> --name "<Name>" --run "<command and arguments>"
+  bh access [standard|full] [--allow "npm test, git commit"]     how agents run, what they may do without asking`;
+
+/**
+ * Settings that decide what agents may do are the person's: refused when a headless agent runs
+ * bh (the agent terminal marks everything it starts with BH_AGENT), so no agent can widen its
+ * own access. An agent run as its CLI asks the person before each command anyway.
+ */
+function personOnly(what) {
+  if (process.env.BH_AGENT) throw new Error(`${what} is the person's to change, in bot-herdr's Settings. Ask them if you need it.`);
+}
 
 const out = (flags, value, text) => console.log(flags.json ? JSON.stringify(value, null, 2) : typeof text === "function" ? text(value) : text ?? value);
 
@@ -268,12 +280,13 @@ async function main(argv) {
       const who = flags.as ?? myAddress();
       if (!who) throw new Error("bh reply needs HC_TERMINAL_ID (run it in a herdr terminal) or --as <address>.");
       const file = join(DATA, "replies", `${String(who).replace(/[\\/]/g, "_")}.md`);
-      writeText(file, text.trim() + "\n");
+      writeText(file, replyText(text));
       return out(flags, { file }, "Saved: the chat shows it as your reply.");
     }
 
     case "team": {
       if (sub === "save") {
+        personOnly("The team");
         const saved = JSON.parse(need(bodyText(flags, []), "bh team save --data <roster>"));
         writeJson(join(DATA, "agents.json"), { agents: saved.agents ?? [], known: saved.known ?? [] });
         const written = team.sync(root);
@@ -309,15 +322,11 @@ async function main(argv) {
       } else if (typeof flags.effort === "string") effort = flags.effort;
       const agent = { ...a, ...(flags.model ? { model: flags.model } : {}) };
       const parent = myAddress();
-      // The template carries the generic brief (role, team, knowledge); this run's specifics go
-      // with the task, so one template per agent and mode serves every spawn.
-      let body = team.brief(agent, { mode, root });
+      let risk = "";
       if (mode === "review" && task) {
         const t = T.loadTask(root, task);
-        if (t.qa) body += `\n\n${(await import("./classifier/qa-risk.mjs")).qaRiskBrief(t.qa)}`;
+        if (t.qa) risk = (await import("./classifier/qa-risk.mjs")).qaRiskBrief(t.qa);
       }
-      const variant = [slug(a.name), mode !== "child" ? mode : "", flags.model ? slug(flags.model) : "", effort !== a.effort ? effort : ""].filter(Boolean).join("-");
-      const template = team.writeTemplate(agent, known, { name: mode === "child" && variant === slug(a.name) ? variant : `bh-${variant}`, body, effort });
       const report = task ? `.bot-herdr/tasks/${task}/reports/${name}.md` : `.bot-herdr/reports/${name}.md`;
       const about = [
         `You are ${name}.`,
@@ -327,9 +336,22 @@ async function main(argv) {
       ].filter(Boolean).join(" ");
       const first = `${text}\n\n(${about})`;
       const cwd = flags.cwd ?? root;
-      const r = template
-        ? team.hc(["run", "--bg", "--name", name, "--cwd", cwd, template.name, first])
-        : team.hc(["run", "--bg", "--name", name, "--cwd", cwd, "--", ...argvOf(agent, known, { effort }), `${body}\n\n${first}`]);
+      let r;
+      if (team.runsHeadless(agent)) {
+        // The agent terminal: it runs the harness headless, writes its own brief, and reports
+        // its status, so hc wait sees each turn end.
+        const argv = team.agentArgv(agent, { mode, name, parent, task, effort, model: flags.model ?? null });
+        r = team.hc(["run", "--bg", "--name", name, "--cwd", cwd, "--", ...argv, "--", risk ? `${first}\n\n${risk}` : first]);
+      } else {
+        // The template carries the generic brief (role, team, knowledge); this run's specifics go
+        // with the task, so one template per agent and mode serves every spawn.
+        const body = team.brief(agent, { mode, root }) + (risk ? `\n\n${risk}` : "");
+        const variant = [slug(a.name), mode !== "child" ? mode : "", flags.model ? slug(flags.model) : "", effort !== a.effort ? effort : ""].filter(Boolean).join("-");
+        const template = team.writeTemplate(agent, known, { name: mode === "child" && variant === slug(a.name) ? variant : `bh-${variant}`, body, effort });
+        r = template
+          ? team.hc(["run", "--bg", "--name", name, "--cwd", cwd, template.name, first])
+          : team.hc(["run", "--bg", "--name", name, "--cwd", cwd, "--", ...argvOf(agent, known, { effort }), `${body}\n\n${first}`]);
+      }
       if (task && flags.step) {
         const t = T.loadTask(root, task);
         T.moveStep(t, flags.step, "start", { agent: name });
@@ -370,6 +392,7 @@ async function main(argv) {
       const file = join(DATA, "config.json");
       const saved = readJson(file, {}) ?? {};
       if (typeof flags.data === "string" || typeof flags.file === "string") {
+        personOnly("The classifier");
         const patch = JSON.parse(bodyText(flags, []));
         const was = saved.classifier ?? {};
         const next = { ...was, ...patch, features: { ...(was.features ?? {}), ...(patch.features ?? {}) }, thresholds: { ...(was.thresholds ?? {}), ...(patch.thresholds ?? {}) } };
@@ -388,6 +411,7 @@ async function main(argv) {
     case "harness": {
       // Adds a harness herdr doesn't know to <app home>/programs.json, so it is listed everywhere.
       if (sub !== "add") throw new UsageError('bh harness add <key> --name "<Name>" --run "<command and arguments>"');
+      personOnly("The harness table");
       const key = slug(need(args[0], "bh harness add <key> …"));
       const run = String(need(flags.run, '--run "<command>"')).trim().split(/\s+/).filter(Boolean);
       const file = join(APP_HOME, "programs.json");
@@ -408,6 +432,35 @@ async function main(argv) {
 
     case "path":
       return console.log(BH);
+
+    case "agent": {
+      const { runAgent } = await import("./lib/agent.mjs");
+      const word = need(sub, 'bh agent <agent> [--mode lead|child|panel|review] [--name N] [--parent T] [--task T] [--model M] [--effort E] [-- "<first message>"]');
+      return runAgent({ word, mode: flags.mode ?? "lead", name: flags.name ?? null, parent: flags.parent ?? null, task: flags.task ?? null, model: flags.model ?? null, effort: flags.effort ?? null, first: args.join(" ") });
+    }
+
+    case "access": {
+      // Settings → How agents run: headless or as their CLI, and what they may do without
+      // asking. Standard unless the person picks full.
+      const file = join(DATA, "config.json");
+      const saved = readJson(file, {}) ?? {};
+      const next = accessOf();
+      const level = rest[0];
+      if (level && level !== "standard" && level !== "full") throw new UsageError('bh access [standard|full] [--allow "npm test, git commit"]   or   bh access --data <changes>');
+      const patch = typeof flags.data === "string" ? JSON.parse(bodyText(flags, [])) : {};
+      if (level) patch.access = level;
+      if (typeof flags.allow === "string") patch.allow = flags.allow;
+      if (Object.keys(patch).length) {
+        personOnly("Agent access");
+        if (patch.access === "standard" || patch.access === "full") next.access = patch.access;
+        if (patch.allow !== undefined) next.allow = (Array.isArray(patch.allow) ? patch.allow : String(patch.allow).split(/[,\n]/)).map((x) => String(x).trim()).filter(Boolean);
+        const was = accessOf().headless;
+        if (typeof patch.headless === "boolean") next.headless = patch.headless;
+        writeJson(file, { ...saved, agents: next });
+        if (next.headless !== was) team.sync(root); // the templates start agents the new way
+      }
+      return out(flags, next, (x) => `Agents run ${x.headless ? "headless" : "as their CLI"}; access ${x.access}${x.allow.length ? `; also allowed: ${x.allow.join(", ")}` : ""}.`);
+    }
 
     default:
       throw new UsageError(`Unknown command ${cmd}. bh help lists them.`);

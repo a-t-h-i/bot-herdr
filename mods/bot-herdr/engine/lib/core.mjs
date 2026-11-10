@@ -15,6 +15,19 @@ export const BH = join(ENGINE, "bh.mjs");
 export const APP_HOME = process.env.BH_APP_HOME || resolve(ENGINE, "..", "..", "..");
 export const DATA = join(APP_HOME, "data", "bot-herdr");
 
+/**
+ * How agents run (Settings → How agents run): headless (the default) or as their CLI, and what
+ * they may do without asking: standard (the default) or full, plus commands the person allowed.
+ */
+export function accessOf() {
+  const saved = readJson(join(DATA, "config.json"), {})?.agents ?? {};
+  return {
+    access: saved.access === "full" ? "full" : "standard",
+    allow: Array.isArray(saved.allow) ? saved.allow.map((x) => String(x).trim()).filter(Boolean) : [],
+    headless: saved.headless !== false,
+  };
+}
+
 /** The command an agent types to run bh. */
 export const bhCommand = () => `node "${BH.replace(/\\/g, "/")}"`;
 
