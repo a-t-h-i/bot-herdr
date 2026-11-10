@@ -626,7 +626,7 @@ export class Composer {
           failed.push(String(e?.message ?? e));
         }
       }
-      if (to.length) this.hooks.sent?.({ text: sentText ?? "", files: keptFiles.map((f) => f.name), to }, cx);
+      if (to.length) this.hooks.sent?.({ text: sentText ?? "", files: keptFiles.map((f) => f.name), paths: keptFiles.map((f) => f.path), to }, cx);
       this.sending = false;
       if (failed.length) {
         // Put the message back so nothing typed is lost.

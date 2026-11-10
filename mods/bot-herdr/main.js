@@ -5,6 +5,7 @@
 //   { "view": "pick" }      a dropdown list, opened as a popup by Settings (pick.js)
 //   { "view": "settings" }  the agents: harness, model, effort (settings.js)
 //   { "view": "lightbox" }  a picture opened large, as a dialog (lightbox.js)
+//   { "view": "file" }      a file named in a message, opened read only, as a dialog (viewer.js)
 //   (no view)               herdr's notifications: the layout's "toast" mod (toast.js)
 
 import { View } from "gpui-kit";
@@ -16,8 +17,9 @@ import { Work } from "./work.js";
 import { Pick } from "./pick.js";
 import { Lightbox } from "./lightbox.js";
 import { Toast, isNotification } from "./toast.js";
+import { FileView } from "./viewer.js";
 
-const VIEWS = { chat: Chat, switch: Switch, work: Work, settings: Settings, pick: Pick, lightbox: Lightbox, toast: Toast };
+const VIEWS = { chat: Chat, switch: Switch, work: Work, settings: Settings, pick: Pick, lightbox: Lightbox, toast: Toast, file: FileView };
 
 export default class BotHerdr extends View {
   init(given, cx) {

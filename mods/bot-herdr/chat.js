@@ -14,8 +14,9 @@ import { LIGHT, DARK, SIZE, ICON, readable, textWidth } from "./look.js";
 import { Composer, outboxDir, liveAgents } from "./composer.js";
 import { isQuiet, quietStatus } from "./live.js";
 import { FOCUS, OUTGOING, activePage, openTerminal } from "./pages.js";
-import { replyFile, replyBody, push, shown, isNew, outcome, clock, segments, fold } from "./feed.js";
-import { bh, enc } from "./bh.js";
+import { replyFile, replyBody, push, shown, isNew, outcome, clock, segments, fold, linkFiles, fileTarget, FILE_LINK } from "./feed.js";
+import { openFile } from "./viewer.js";
+import { bh, enc, projectDir } from "./bh.js";
 import { roleWord } from "./indicators.js";
 import { indicatorFor, roleOf, onTurn, TURN_MS } from "./working.js";
 import { findAgent, roster, ROSTER_KEY } from "./roster.js";
@@ -99,9 +100,9 @@ export class Chat {
 
   // ── Out ────────────────────────────────────────────────────────────────────────────────────
 
-  sent({ text, files, to }, cx) {
+  sent({ text, files, paths, to }, cx) {
     for (const t of to) if (t.address) this.expect(t.address, t.name);
-    this.add({ kind: "me", text, files, to: to.map((t) => t.name) }, cx);
+    this.add({ kind: "me", text, files, paths, to: to.map((t) => t.name) }, cx);
   }
 
   /** We wrote to this agent: watch for its reply, or for it stopping without one. */
@@ -419,11 +420,21 @@ export class Chat {
               .child(open ? "Show less" : `Show more · ${folded.rows - 12} more lines`),
           ))
           .when((e.files ?? []).length > 0, (el) =>
-            el.child(h_flex().pt(4).gap(6).flex_wrap().children(e.files.map((name) =>
-              h_flex().h(22).px(6).gap(4).items_center().rounded(6).bg(c.hover).text_size(11.5).text_color(c.muted)
+            el.child(h_flex().pt(4).gap(6).flex_wrap().children(e.files.map((name, i) =>
+              h_flex().id(`bh-mine-file-${e.id}-${i}`).h(22).px(6).gap(4).items_center().rounded(6).bg(c.hover).text_size(11.5).text_color(c.muted)
+                .when(Boolean(e.paths?.[i]), (x) => x.cursor_pointer().hover((s) => s.text_color(c.ink)).on_click(() => openFile({ path: e.paths[i] })))
                 .child(svg(ICON("file")).size(12)).child(name))))),
       )
       .child(div().text_size(11).text_color(c.faint).child(`to ${(e.to ?? []).join(", ")} · ${clock(e.at)}`));
+  }
+
+  /** A link in a reply: a file it names opens over the chat; any other link opens in the browser. */
+  openLink(url) {
+    if (String(url).startsWith(FILE_LINK)) {
+      const { path, line } = fileTarget(url);
+      return openFile({ path, line, root: projectDir() });
+    }
+    if (/^https?:\/\//.test(String(url))) bh(["open", String(url)]);
   }
 
   reply(c, e, width) {
@@ -453,7 +464,7 @@ export class Chat {
           .text_size(14)
           .line_height(`${SIZE.line}px`)
           .children(parts.map((p, i) => (p.kind === "md"
-            ? TextView.markdown(`bh-md-${e.id}-${i}`, p.text).selectable(true)
+            ? TextView.markdown(`bh-md-${e.id}-${i}`, linkFiles(p.text)).selectable(true).on_link_click((url) => this.openLink(url))
             : this.picture(c, e, p, pics.indexOf(p), pics, width)))),
       );
   }

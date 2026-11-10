@@ -107,3 +107,43 @@ export function fold(text, width, measure) {
   if (rows <= FOLD_ROWS + FOLD_SLACK) return { rows, folded: false, text: String(text ?? "") };
   return { rows, folded: true, text: kept.join("\n").trimEnd() };
 }
+
+/** The link a file named in a message gets: clicking it opens the file (viewer.js). */
+export const FILE_LINK = "bh-file:";
+const PATHISH = /^(?:[A-Za-z]:[\\/]|~?[\\/]|\.{1,2}[\\/])?[\w@.+-]+(?:[\\/][\w@.+ -]+)*\.[A-Za-z0-9]{1,10}(?::\d+(?::\d+)?)?$/;
+const BARE = /(^|[\s(])((?:[A-Za-z]:[\\/]|~?\/|\.{1,2}\/)?[\w@.+-]+(?:\/[\w@.+-]+)+\.[A-Za-z0-9]{1,10}(?::\d+(?::\d+)?)?)(?=[\s),.;:!?]*(?:\s|$))/g;
+
+/** Whether text names a file: a path with a name and an extension, not a web address. */
+export function isPath(text) {
+  const t = String(text ?? "").trim();
+  if (!t || t.length > 300 || t.includes("://") || /\s{2}/.test(t)) return false;
+  return PATHISH.test(t) && (/[\\/]/.test(t) || /\.(m?[jt]sx?|c?js|json|md|css|scss|html?|py|rs|go|java|kt|swift|rb|php|cs|cpp|c|h|ya?ml|toml|sql|sh|ps1|txt|svg|vue|svelte)(?::\d+)?$/i.test(t));
+}
+
+/** A file link's path and line: "src/a.ts:12" → { path: "src/a.ts", line: 12 }. */
+export function fileTarget(url) {
+  const raw = decodeURIComponent(String(url ?? "").slice(FILE_LINK.length));
+  const m = /^(.*?)(?::(\d+)(?::\d+)?)?$/.exec(raw);
+  return { path: m[1], line: m[2] ? Number(m[2]) : null };
+}
+
+/**
+ * Markdown with every file it names made a link: `src/app.tsx` in backticks, or a bare path
+ * with a folder in it. Code blocks and existing links are left alone.
+ */
+export function linkFiles(markdown) {
+  const parts = String(markdown ?? "").split(/(```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$))/);
+  return parts.map((part, i) => {
+    if (i % 2 === 1) return part;
+    return part.split(/(\[[^\]]*\]\([^)]*\)|`[^`\n]+`)/).map((bit, j) => {
+      if (j % 2 === 1) {
+        if (bit.startsWith("`")) {
+          const inner = bit.slice(1, -1);
+          return isPath(inner) ? `[${bit}](${FILE_LINK}${encodeURIComponent(inner.trim())})` : bit;
+        }
+        return bit;
+      }
+      return bit.replace(BARE, (all, lead, path) => (isPath(path) ? `${lead}[${path}](${FILE_LINK}${encodeURIComponent(path)})` : all));
+    }).join("");
+  }).join("");
+}
