@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  triggerAt, caretAfterEdit, slashRows, mentionRows, tokenFor, plan, orchestratorOf, leadAgent, withoutEnter, messageText,
+  triggerAt, caretAfterEdit, slashRows, mentionRows, tokenFor, plan, orchestratorOf, withoutEnter, messageText,
 } from "../mods/bot-herdr/route.js";
 
 const claude = { address: "t1", space: "s1", space_name: "app", tab: "a", tab_name: "1", status: "idle", seq: 2, program: { key: "claude", name: "Claude Code", tile: "#d97757" } };
@@ -83,14 +83,13 @@ test("a plain message goes to the Orchestrator, starting one if there is none", 
   assert.equal(orchestratorOf([claude, lead, far], "s1").address, "t2");
   assert.equal(orchestratorOf([claude, codex], "s1"), null);
   assert.equal(orchestratorOf([{ ...far, tab_name: "orchestrator" }], "s1"), null);
-  assert.equal(leadAgent(known, "gemini").key, "gemini");
-  assert.equal(leadAgent(known, "aider").key, "claude");
-  assert.equal(leadAgent([], null), null);
+  assert.equal(orchestratorOf([claude, { ...codex, tab_name: "Boss" }], "s1", "boss").address, "t2");
   const started = plan({ text: "build it", tokens: [] }, { agents: [claude], target: null, lead: known[0], space: "s1" });
   assert.deepEqual(started.steps, [{ do: "start", role: "orchestrator", run: ["claude"], name: "Claude Code", text: "build it", files: [] }]);
   const rows = mentionRows("", { agents: [claude, lead], known: [], space: "s1" });
   assert.deepEqual(rows.slice(0, 2).map((r) => `${r.id} ${r.name} ${r.tag}`), ["agent:t2 orchestrator lead", "agent:t1 claude agent"]);
-  assert.deepEqual(mentionRows("", { known, mode: "orch" }).map((r) => r.id), ["orch:claude", "orch:gemini"]);
+  const named = mentionRows("", { agents: [claude, { ...codex, tab_name: "Boss" }], known: [], space: "s1", leadName: "Boss", names: { t1: "Reviewer" } });
+  assert.deepEqual(named.slice(0, 2).map((r) => `${r.id} ${r.name} ${r.tag}`), ["agent:t2 boss lead", "agent:t1 reviewer agent"]);
 });
 
 test("Enter's newline comes out", () => {

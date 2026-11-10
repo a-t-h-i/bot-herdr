@@ -6,7 +6,7 @@
  *  (Claude Code's /compact, Codex's /model, ...). */
 export const COMMANDS = [
   { name: "new", hint: "Start an agent with this message" },
-  { name: "orchestrator", hint: "Choose which agent runs the Orchestrator" },
+  { name: "settings", hint: "Set up agents: harness, model and effort" },
   { name: "all", hint: "Send to every agent in this space" },
   { name: "stop", hint: "Stop the agent where it is" },
   { name: "peek", hint: "Peek at the agent's terminal" },
@@ -54,20 +54,16 @@ export function handle(agent) {
   return (key ?? agent.app ?? agent.program?.name ?? "agent").toLowerCase().replace(/[^a-z0-9_.-]+/g, "-");
 }
 
+const slugOf = (name) => String(name).trim().toLowerCase().replace(/[^a-z0-9_.-]+/g, "-").replace(/^-+|-+$/g, "") || "agent";
+
 /**
  * The `@` rows: running agents (this space first, then the rest), then installed agents that
  * are not running yet, which start in a new tab with the message. `startOnly` (after `/new`)
  * leaves out the running ones.
  */
-export function mentionRows(query, { agents = [], children = [], known = [], space = null, mode = null } = {}) {
+export function mentionRows(query, { agents = [], children = [], known = [], space = null, mode = null, leadName, names = {} } = {}) {
   const startOnly = mode === "start";
-  // After /orchestrator: only the installed agents, to choose which one leads.
-  if (mode === "orch") {
-    return rank(known.filter((k) => k.installed).map((k) => ({
-      id: `orch:${k.key}`, kind: "orch", name: k.key, label: k.name, hint: `Run the Orchestrator on ${k.name}`, tag: "lead", color: k.tile ?? null, key: k.key,
-    })), query, (r) => `${r.name} ${r.label}`);
-  }
-  const lead = orchestratorOf(agents, space);
+  const lead = orchestratorOf(agents, space, leadName);
   const here = [...agents.filter((a) => a.space === space && a === lead), ...agents.filter((a) => a.space === space && a !== lead)];
   const there = agents.filter((a) => a.space !== space);
   // Child agents (started by an agent with `hc run`) sit right under their parent.
@@ -85,8 +81,8 @@ export function mentionRows(query, { agents = [], children = [], known = [], spa
   }) : ({
     id: `agent:${a.address}`,
     kind: "agent",
-    name: a === lead ? "orchestrator" : handle(a),
-    label: a === lead ? "Orchestrator" : a.program?.name ?? a.app ?? "Agent",
+    name: a === lead ? slugOf(leadName ?? ORCHESTRATOR_TAB) : names[a.address] ? slugOf(names[a.address]) : handle(a),
+    label: a === lead ? leadName ?? ORCHESTRATOR_TAB : names[a.address] ?? a.program?.name ?? a.app ?? "Agent",
     hint: a === lead ? `Leads this space · ${a.program?.name ?? "agent"}${a.status === "working" ? " · working" : a.status === "blocked" ? " · needs you" : ""}` : `${a.tab_name ? `tab ${a.tab_name}` : a.address}${a.space !== space ? ` · ${a.space_name}` : ""}${a.status === "working" ? " · working" : a.status === "blocked" ? " · needs you" : ""}`,
     tag: a === lead ? "lead" : a.status === "blocked" ? "waiting" : a.status === "working" ? "busy" : "agent",
     color: a.program?.tile ?? null,
@@ -97,9 +93,9 @@ export function mentionRows(query, { agents = [], children = [], known = [], spa
   const start = known.filter((k) => k.installed).map((k) => ({
     id: `start:${k.key}`,
     kind: "start",
-    name: `new-${k.key}`,
+    name: k.handle ?? `new-${k.key}`,
     label: k.name,
-    hint: `Start ${k.name} in a new tab with this message`,
+    hint: k.hint ?? `Start ${k.name} in a new tab with this message`,
     tag: "start",
     color: k.tile ?? null,
     run: k.run,
@@ -111,9 +107,9 @@ export function mentionRows(query, { agents = [], children = [], known = [], spa
 export const ORCHESTRATOR_TAB = "Orchestrator";
 
 /** The space's Orchestrator: the agent in the tab named "Orchestrator" (the oldest, if several). */
-export function orchestratorOf(agents, space) {
+export function orchestratorOf(agents, space, name = ORCHESTRATOR_TAB) {
   return agents
-    .filter((a) => a.space === space && (a.tab_name ?? "").trim().toLowerCase() === ORCHESTRATOR_TAB.toLowerCase())
+    .filter((a) => a.space === space && (a.tab_name ?? "").trim().toLowerCase() === name.trim().toLowerCase())
     .sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))[0] ?? null;
 }
 
@@ -127,7 +123,7 @@ export function childrenOf(children, address, seen = new Set()) {
 /** The token a picked row leaves in the text: the word as typed, drawn as a chip. */
 export function tokenFor(row) {
   if (row.kind === "agent") return { id: row.id, text: `@${row.name}`, label: row.label };
-  if (row.kind === "start") return { id: row.id, text: `@${row.name}`, label: `New ${row.label}` };
+  if (row.kind === "start") return { id: row.id, text: `@${row.name}`, label: row.id.startsWith("start:cfg:") ? row.label : `New ${row.label}` };
   return { id: "all", text: "@all", label: "Everyone" };
 }
 
@@ -169,6 +165,7 @@ export function plan(content, ctx) {
     text = text.slice(slash[0].length);
   }
   if (command === "all") ids.push("all");
+  if (command === "settings") return { steps: [{ do: "settings" }] };
 
   const files = ctx.files ?? [];
 
@@ -198,20 +195,14 @@ export function plan(content, ctx) {
     if (ctx.starting) return { error: "The Orchestrator is starting. Send again in a moment." };
     if (text.startsWith("/")) return { error: "No Orchestrator here yet. Send it a message first, or @ an agent." };
     if (!ctx.lead) return { error: "No agent is installed to run the Orchestrator. Install one, or type @ to pick an agent." };
-    return { steps: [{ do: "start", role: "orchestrator", run: ctx.lead.run, name: ctx.lead.name, text, files }] };
+    return { steps: [{ do: "start", role: "orchestrator", run: ctx.lead.run, name: ctx.lead.name, text, files, ...(ctx.lead.tab ? { tab: ctx.lead.tab } : {}) }] };
   }
   return {
     steps: [
       ...unique.map((address) => ({ do: "send", address, text, files })),
-      ...starts.map((k) => ({ do: "start", run: k.run, name: k.name, text, files })),
+      ...starts.map((k) => ({ do: "start", run: k.run, name: k.name, text, files, ...(k.tab ? { tab: k.tab } : {}) })),
     ],
   };
-}
-
-/** The installed agent that runs a new Orchestrator: the person's choice, else the first installed. */
-export function leadAgent(known, chosen) {
-  const installed = known.filter((k) => k.installed && k.run?.length);
-  return installed.find((k) => k.key === chosen) ?? installed[0] ?? null;
 }
 
 /** The text without the newline Enter put in before it was read as "send". */

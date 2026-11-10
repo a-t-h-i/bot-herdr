@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// Installs bot-herdr into the Herdr app's home: the composer mod, the "bot-herdr"
-// layout (Herdr's main layout with the composer under the panes) and its light and dark themes,
-// and the composer's key (ctrl+shift+m). Then checks the mod with `herdr-app check` if it can.
+// Installs bot-herdr into the Herdr app's home: the mod, the "bot-herdr" layout (Herdr's main
+// layout with a Chat page and a Settings page beside the terminals) and its light and dark
+// themes, and the chat's key (ctrl+shift+m). Then checks the mod with `herdr-app check` if it can.
 //
-//   node install.mjs            install (keeps your edited layout and your own keys)
+//   node install.mjs            install (keeps your layout and your own keys)
 //   node install.mjs --force    also replace the layout file
 //   node install.mjs --switch   then switch the open window to the layout
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -37,10 +37,13 @@ for (const name of ["bot-herdr-light.json", "bot-herdr-dark.json"]) {
 console.log(`themes   ${join(appHome, "themes")}/bot-herdr-{light,dark}.json`);
 
 const layout = join(appHome, "layouts", "bot-herdr.json");
-if (!existsSync(layout) || args.has("--force")) {
+// A layout from before the pages (chat, terminals, settings) can't show them: replace it.
+const old = existsSync(layout) && !readFileSync(layout, "utf8").includes('"id": "pages"');
+if (old) cpSync(layout, `${layout}.old`);
+if (!existsSync(layout) || old || args.has("--force")) {
   mkdirSync(dirname(layout), { recursive: true });
   cpSync(join(here, "layouts", "bot-herdr.json"), layout);
-  console.log(`layout   ${layout}`);
+  console.log(`layout   ${layout}${old ? " (yours from before is kept as bot-herdr.json.old)" : ""}`);
 } else {
   console.log(`layout   kept your ${layout} (--force replaces it)`);
 }
