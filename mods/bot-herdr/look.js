@@ -42,7 +42,7 @@ export const DARK = {
 
 /** Sizes in px at zoom 1 (herdr scales them). After the user's radii: outer 12, controls 10, nested 8. */
 export const SIZE = {
-  maxWidth: 720, // the chat column width
+  maxWidth: 660, // the chat column width
   gutter: 24, // room either side of the composer in its block
   foot: 14, // from the composer's foot to the block's
   radius: 12,
@@ -51,7 +51,9 @@ export const SIZE = {
   textTop: 14,
   textX: 16,
   minRows: 2,
-  maxRows: 12,
+  maxRows: 10,
+  line: 21, // the text's line height
+  filesRow: 40,
   tools: 46,
   iconButton: 32,
   chip: 28,
@@ -84,4 +86,11 @@ export function textWidth(s, size) {
   let w = 0;
   for (const ch of s) w += /[mwMW@]/.test(ch) ? 0.82 : /[il.,:;'|!]/.test(ch) ? 0.3 : /[A-Z]/.test(ch) ? 0.66 : 0.55;
   return w * size;
+}
+
+/** How many rows the text needs at this inner width: its lines, each wrapped, within min and max. */
+export function rowsFor(text, innerWidth, size = 14) {
+  let rows = 0;
+  for (const line of text.split("\n")) rows += Math.max(1, Math.ceil(textWidth(line, size) / Math.max(40, innerWidth)));
+  return Math.max(SIZE.minRows, Math.min(SIZE.maxRows, rows));
 }

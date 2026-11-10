@@ -4,9 +4,10 @@
 // key hints, stop, a round send key). The `/` commands, the `@` agents, the attach menu and the
 // spaces list grow out of its top edge as a smaller bubble joined to it by curved fillets.
 //
-// A message goes to the agent you were last in (the focused pane's, else the newest in the tab),
-// or to whoever you `@`: a running agent, `@all` in this space, or `@new-<agent>` to start one in
-// a new tab with the message. `/stop` and `/peek` act on the agent; any other `/command` is sent
+// A message goes to the space's Orchestrator: the agent in the tab named "Orchestrator", started
+// on the first message if the space has none (`/orchestrator` chooses which agent runs it). It
+// plans and hands work to child agents. Or it goes to whoever you `@`: a running agent, a child
+// agent, `@all` in this space, or `@new-<agent>` to start one in a new tab with the message. `/stop` and `/peek` act on the agent; any other `/command` is sent
 // as typed, so each harness's own commands still work. Sending is `hc send` (paste, then Enter).
 //
 // Agents can start child agents (`hc run`). Each agent is told how, once: the brief in brief.js
@@ -22,13 +23,14 @@ import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, TextareaState, Textarea, Popup } from "gpui-base";
 import {
   agents, terminals, spaces, focused, settings, run, hc, exec, knownAgents, pickFolder, home,
-  props, nextCommand, window as appWindow,
+  props, nextCommand, shared, setShared, window as appWindow,
 } from "herdr";
-import { LIGHT, DARK, SIZE, MOTION, ICON, tint, textWidth } from "./look.js";
+import { LIGHT, DARK, SIZE, MOTION, ICON, tint, textWidth, rowsFor } from "./look.js";
 import {
-  triggerAt, caretAfterEdit, slashRows, mentionRows, tokenFor, plan, defaultTarget, withoutEnter, messageText,
+  triggerAt, caretAfterEdit, slashRows, mentionRows, tokenFor, plan, orchestratorOf, leadAgent, withoutEnter,
+  messageText, ORCHESTRATOR_TAB,
 } from "./route.js";
-import { BRIEFED, teamBrief, withBrief, briefed } from "./brief.js";
+import { BRIEFED, teamBrief, orchestratorBrief, withBrief, briefed } from "./brief.js";
 
 const PLACEHOLDER = "Write a message, run a command, or ask an agent";
 const CLEAR = "#00000000";
@@ -38,7 +40,8 @@ export default class BotHerdr extends View {
     this.text = "";
     this.trigger = null;
     this.dismissed = null; // the text Esc closed the suggestions on; they stay shut until it changes
-    this.startOnly = false; // after /new: the @ list offers only agents to start
+    this.mode = null; // "start" after /new (only agents to start), "orch" after /orchestrator
+    this.starts = []; // agents we started and are waiting to see, to mark them as briefed
     this.pane = null; // "suggest" | "attach" | "spaces"
     this.at = 0;
     this.offset = 0; // first suggestion row shown when there are more than fit
@@ -47,12 +50,12 @@ export default class BotHerdr extends View {
     this.known = [];
     this.notice = null;
     this.sending = false;
-    this.lastTarget = null;
     this.width = SIZE.maxWidth;
     this.justBriefed = new Set(); // briefed this session; the label can take a moment to show
 
-    this.input = TextareaState.new({ rows: SIZE.minRows });
-    this.input.set_auto_grow(SIZE.minRows, SIZE.maxRows);
+    // The box's height is ours (see box()): the text box fills whatever it is given, so it is
+    // never left to size itself.
+    this.input = TextareaState.new({ rows: 1 });
     this.input.set_soft_wrap(true);
     this.input.on("change", (_e, cx) => this.changed(cx));
     // Enter is bound to our send action below; if the text box ever gets it first, it inserts a
@@ -115,11 +118,27 @@ export default class BotHerdr extends View {
     return spaces().find((s) => s.id === f?.space) ?? spaces().find((s) => s.active) ?? null;
   }
 
+  /** The Orchestrator a plain message goes to, or null when this space has none yet. */
   target() {
-    const list = agents();
-    const t = defaultTarget(list, focused(), this.lastTarget);
-    if (t) this.lastTarget = t;
-    return list.find((a) => a.address === t) ?? null;
+    return orchestratorOf(agents(), this.space()?.id ?? null);
+  }
+
+  /** The installed agent a new Orchestrator runs on. */
+  lead() {
+    return leadAgent(this.known, shared("bot-herdr.orchestrator") ?? null);
+  }
+
+  /** Agents we started carry the brief in their task: once one shows up, mark it as briefed. */
+  adopt() {
+    if (!this.starts.length) return;
+    const now = Date.now();
+    this.starts = this.starts.filter((s) => now - s.at < 60000);
+    for (const s of [...this.starts]) {
+      const born = agents().find((a) => a.space === s.space && !s.before.has(a.address) && !this.justBriefed.has(a.address));
+      if (!born) continue;
+      this.starts.splice(this.starts.indexOf(s), 1);
+      this.markBriefed(born.address);
+    }
   }
 
   /** Live child agents that have no pane of their own (those with one are in agents()). */
@@ -169,7 +188,7 @@ export default class BotHerdr extends View {
       children: this.children(),
       known: this.known,
       space: this.space()?.id ?? null,
-      startOnly: this.startOnly,
+      mode: this.mode,
     });
   }
 
@@ -181,7 +200,7 @@ export default class BotHerdr extends View {
     if (this.text === before) return; // our own edit (pick, send), already accounted for
     const caret = caretAfterEdit(before, this.text);
     const trigger = this.text === this.dismissed ? null : triggerAt(this.text, caret);
-    if (!trigger || trigger.kind !== "mention") this.startOnly = this.startOnly && trigger?.kind === "mention";
+    if (trigger?.kind !== "mention") this.mode = null;
     const was = this.pane;
     this.trigger = trigger;
     if (trigger) this.open("suggest", cx);
@@ -217,7 +236,7 @@ export default class BotHerdr extends View {
   close(cx) {
     if (this.pane === "suggest") this.dismissed = this.text;
     this.pane = null;
-    this.startOnly = false;
+    this.mode = null;
     cx.notify();
   }
 
@@ -234,23 +253,25 @@ export default class BotHerdr extends View {
     const t = this.trigger;
     if (!row || !t) return;
     const range = { start: t.start, end: t.end };
-    if (row.kind === "command") {
+    // /new and /orchestrator turn into an @ list of the installed agents.
+    const lists = row.kind === "command" && (row.name === "new" || row.name === "orchestrator");
+    if (row.kind === "orch") {
+      // The choice is kept for every space; a running Orchestrator stays as it is.
+      setShared("bot-herdr.orchestrator", row.key);
+      this.mode = null;
+      this.input.set_value("");
+      this.say(this.target() ? `New Orchestrators will run on ${row.label}. Close the Orchestrator tab to switch this one.` : `The Orchestrator will run on ${row.label}.`, cx);
+    } else if (row.kind === "command") {
       this.input.set_selected_range(range);
-      if (row.name === "new") {
-        this.startOnly = true;
-        this.input.replace("@");
-      } else {
-        this.startOnly = false;
-        this.input.replace(`/${row.name} `);
-      }
+      this.mode = row.name === "new" ? "start" : row.name === "orchestrator" ? "orch" : null;
+      this.input.replace(lists ? "@" : `/${row.name} `);
     } else {
-      this.startOnly = false;
+      this.mode = null;
       this.input.replace_range_with_token(range, tokenFor(row));
       this.input.replace(" ");
     }
     this.text = this.input.value();
-    const caret = row.kind === "command" && row.name === "new" ? t.start + 1 : this.text.length;
-    this.trigger = row.kind === "command" && row.name === "new" ? triggerAt(this.text, caret) : null;
+    this.trigger = lists ? triggerAt(this.text, t.start + 1) : null;
     this.pane = this.trigger ? "suggest" : null;
     this.at = 0;
     this.offset = 0;
@@ -328,6 +349,8 @@ export default class BotHerdr extends View {
       known: this.known,
       space: this.space()?.id ?? null,
       target: target?.address ?? null,
+      lead: this.lead(),
+      starting: this.starts.some((s) => s.lead && s.space === (this.space()?.id ?? null)),
       files: this.files.map((f) => f.path),
     });
     if (result.error) return this.say(result.error, cx, "warning");
@@ -338,7 +361,7 @@ export default class BotHerdr extends View {
     this.text = "";
     this.pane = null;
     this.trigger = null;
-    this.startOnly = false;
+    this.mode = null;
     this.dismissed = null;
     this.sending = true;
     cx.notify();
@@ -376,12 +399,23 @@ export default class BotHerdr extends View {
       return;
     }
     if (step.do === "start") {
-      // A new agent gets the brief with its task, so it knows from its first turn.
-      run("tab.new", { argv: step.run, task: withBrief(messageText(step.text, step.files), { known: this.known }), space: this.space()?.id });
+      // A new agent gets the brief with its task, so it knows from its first turn. The
+      // Orchestrator's tab carries its name: that name is what makes it the Orchestrator.
+      const space = this.space();
+      const lead = step.role === "orchestrator";
+      this.starts.push({ space: space?.id ?? null, before: new Set(agents().map((a) => a.address)), at: Date.now(), lead });
+      run("tab.new", {
+        ...(lead ? { name: ORCHESTRATOR_TAB } : {}),
+        argv: step.run,
+        task: withBrief(messageText(step.text, step.files), { known: this.known, role: step.role, space: space?.name }),
+        space: space?.id,
+      });
       return;
     }
     if (step.do === "brief") {
-      const r = await hc(["send", step.address, teamBrief({ known: this.known, self: step.address })]);
+      const lead = this.target()?.address === step.address;
+      const text = lead ? orchestratorBrief({ known: this.known, space: this.space()?.name }) : teamBrief({ known: this.known, self: step.address });
+      const r = await hc(["send", step.address, text]);
       if (r.code !== 0) throw new Error(`Couldn't brief ${name}: ${(r.stderr || r.stdout).trim()}`);
       await this.markBriefed(step.address);
       return;
@@ -399,7 +433,9 @@ export default class BotHerdr extends View {
     // An agent's first message from here carries the brief; a harness's own /command goes bare.
     const body = messageText(step.text, paths);
     const brief = !body.startsWith("/") && this.needsBrief(step.address);
-    const r = await hc(["send", step.address, brief ? withBrief(body, { known: this.known, self: step.address }) : body]);
+    // A tab the person named "Orchestrator" themselves gets the Orchestrator's brief here.
+    const role = this.target()?.address === step.address ? "orchestrator" : null;
+    const r = await hc(["send", step.address, brief ? withBrief(body, { known: this.known, self: step.address, role, space: this.space()?.name }) : body]);
     if (r.code === 0 && brief) await this.markBriefed(step.address);
     if (r.code !== 0) {
       const why = (r.stderr || r.stdout).trim();
@@ -421,6 +457,7 @@ export default class BotHerdr extends View {
   // ── Drawing ────────────────────────────────────────────────────────────────────────────────
 
   render(cx) {
+    this.adopt();
     const c = settings().dark ? DARK : LIGHT;
     const width = Math.max(320, Math.min(SIZE.maxWidth, this.width - SIZE.gutter * 2));
     const bubble = this.bubble(c, width);
@@ -474,11 +511,17 @@ export default class BotHerdr extends View {
     const target = this.target();
     const busy = target?.status === "working";
     const empty = !this.text.trim() && !this.files.length;
-    const placeholder = busy ? `${target.program?.name ?? "The agent"} is working. Enter steers it…` : PLACEHOLDER;
+    const placeholder = busy ? "The Orchestrator is working. Enter steers it…" : PLACEHOLDER;
+    // Every height here is stated. The text box stretches to fill its parent, and a floating
+    // surface may be offered the whole window, so nothing is left to size itself.
+    const textH = rowsFor(this.text, width - SIZE.textX * 2 - 2) * SIZE.line;
+    const filesH = this.files.length ? SIZE.filesRow : 0;
     return v_flex()
       .id("bc-box")
       .relative()
+      .flex_none()
       .w(width)
+      .h(filesH + SIZE.textTop + textH + SIZE.tools + 2)
       .bg(c.fill)
       .border_1()
       .border_color(c.edge)
@@ -492,18 +535,21 @@ export default class BotHerdr extends View {
       .child(
         div()
           .relative()
+          .flex_none()
           .px(SIZE.textX)
           .pt(SIZE.textTop)
-          .min_h(60)
+          .h(SIZE.textTop + textH)
+          .overflow_hidden()
           .when(!this.text, (el) =>
             el.child(div().absolute().top(SIZE.textTop).left(SIZE.textX).text_size(14).text_color(c.faint).child(placeholder)))
           .child(
             Textarea.new(this.input)
               .w_full()
+              .h(textH)
               .bg(CLEAR)
               .border_0()
               .text_size(14)
-              .line_height(21)
+              .line_height(SIZE.line)
               .text_color(c.ink)
               .token((tok) => this.chip(c, tok.token))
               .on_token_click((ev, cx) => {
@@ -535,7 +581,9 @@ export default class BotHerdr extends View {
   filesRow(c) {
     return h_flex()
       .id("bc-files")
-      .flex_wrap()
+      .flex_none()
+      .h(SIZE.filesRow)
+      .overflow_hidden()
       .gap(6)
       .px(12)
       .pt(12)
@@ -584,6 +632,7 @@ export default class BotHerdr extends View {
     const canSend = !empty && !this.sending;
     return h_flex()
       .id("bc-tools")
+      .flex_none()
       .h(SIZE.tools)
       .px(10)
       .gap(6)
@@ -612,8 +661,10 @@ export default class BotHerdr extends View {
       .when(Boolean(this.notice), (el) =>
         el.child(div().max_w(320).truncate().text_size(12).text_color(this.notice.level === "error" ? c.danger : c.muted).child(this.notice.text)))
       .when(!this.notice && Boolean(target), (el) =>
-        el.child(div().max_w(200).truncate().text_size(12).text_color(c.faint).child(`to ${target.program?.name ?? target.address}`)))
-      .child(h_flex().gap(4).items_center().text_size(11.5).text_color(c.muted).children(hints))
+        el.child(div().max_w(220).truncate().text_size(12).text_color(c.faint).child(`to Orchestrator · ${target.program?.name ?? target.address}`)))
+      .when(!this.notice && !target && Boolean(this.lead()), (el) =>
+        el.child(div().max_w(220).truncate().text_size(12).text_color(c.faint).child(`starts Orchestrator · ${this.lead().name}`)))
+      .when(this.width >= 560, (el) => el.child(h_flex().flex_none().gap(4).items_center().text_size(11.5).text_color(c.muted).children(hints)))
       .when(busy, (el) =>
         el.child(
           div()
@@ -738,6 +789,8 @@ export default class BotHerdr extends View {
     const w = this.ready ? size.w : Math.round(size.w * 0.85);
     const pane = v_flex()
       .id("bc-pane")
+      .relative()
+      .flex_none()
       .w(w)
       .h(h)
       .transition("height", MOTION.menuHeight)
@@ -765,6 +818,8 @@ export default class BotHerdr extends View {
         .child(svg(ICON(`fillet-${side}-edge`)).absolute().top(0).left(0).size(SIZE.fillet).text_color(c.edge));
     return h_flex()
       .id("bc-pane-row")
+      .flex_none()
+      .h(h)
       .items_end()
       .mb(-1)
       .opacity(this.ready ? 1 : 0)

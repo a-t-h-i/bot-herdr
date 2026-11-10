@@ -175,7 +175,7 @@
           "id": "composer",
           "type": "block",
           "size": {
-            "px": 136
+            "px": 124
           },
           "content": {
             "mod": "bot-herdr"

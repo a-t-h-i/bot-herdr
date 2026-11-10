@@ -22,18 +22,28 @@ Edits here take effect after another `node install.mjs`, because herdr hot-reloa
 One raised bubble: the text on top, and a tools row under it with attach, the space chip, key hints, stop and a round send key. The suggestions, attach menu and spaces list grow out of its top edge, joined by curved fillets.
 
 - **Enter** sends. **Shift+Enter** starts a new line.
-- A message goes to the agent you were last in: the focused pane's agent, else the newest in that tab. Its name shows as "to …" in the tools row.
+- A plain message goes to the space's **Orchestrator** (see below). The tools row shows "to Orchestrator", or "starts Orchestrator" when the space has none yet.
 - **@** lists agents:
-  - running ones (this space first), each with its child agents under it
+  - the Orchestrator first, then the other running agents (this space first), each with its child agents under it
   - `@all` (every agent in this space)
   - `@new-<agent>` for each installed agent, which starts it in a new tab with your message
   - Mention several agents to send to all of them. Up and Down move, Enter or Tab picks, Esc closes.
-- **/new** starts an agent. **/all** sends to everyone here. **/stop** presses the agent's stop key. **/peek** peeks at its terminal. **/team** sends the child-agent brief again. Any other `/command` goes to the agent as typed, so `/compact`, `/model` and the rest still work.
+- **/new** starts an agent. **/orchestrator** chooses which installed agent runs the Orchestrator. **/all** sends to everyone here. **/stop** presses the agent's stop key. **/peek** peeks at its terminal. **/team** sends the child-agent brief again. Any other `/command` goes to the agent as typed, so `/compact`, `/model` and the rest still work.
 - **Attach**: drop files on the composer, use "Attach document…" (the system file picker), or use "Attach folder…". Each path is added to the message on its own line. For agents on another machine, files go over with `hc put` first.
 - **Stop** (red key) shows while the target agent is working.
 - The **space chip** lists spaces and has "Open folder…".
 
 Sending uses `hc send` (paste, then Enter), stopping uses `hc interrupt`, and starting uses `tab.new {argv, task}`.
+
+## The Orchestrator
+
+Each space has one lead agent. A message that names nobody goes to it. It answers small things itself, and for larger work it plans, hands parts to child agents, checks their results and reports back to you.
+
+- The Orchestrator is the agent in the tab named **Orchestrator**. The first plain message in a space starts one in a new tab with that name.
+- `/orchestrator` chooses which installed agent runs it (Claude Code, Codex, and so on). The default is the one you start most. The choice applies to Orchestrators started later.
+- To appoint an agent that's already running, rename its tab to "Orchestrator". To replace the Orchestrator, close its tab.
+- `@` still reaches any agent directly, including the Orchestrator's children.
+- Stop (the red key), `/stop` and `/peek` act on the Orchestrator unless you `@` someone.
 
 ## Child agents
 
@@ -41,7 +51,7 @@ Any agent can start child agents with herdr-core (`hc run --bg ...`). herdr show
 
 So that agents know this, bot-herdr gives each agent a short brief once:
 
-- An agent started from the composer (`@new-<agent>`, `/new`) gets the brief in front of its first task.
+- An agent started from the composer (`@new-<agent>`, `/new`) gets the brief in front of its first task. The Orchestrator gets its role first, then the same brief.
 - An agent that was already running gets it in front of its first message from the composer. The terminal is then labelled `bot-herdr.briefed`, so it isn't told twice. A harness's own `/command` is never prefixed.
 - `/team` sends the brief again, for example after the agent compacts its context.
 
@@ -66,7 +76,7 @@ Child agents show in the `@` list under their parent (tag "child"), so you can m
 | `mods/bot-herdr/brief.js` | what agents are told about child agents (tested) |
 | `mods/bot-herdr/look.js` | colours, sizes and motion |
 | `mods/bot-herdr/icons/` | Lucide icons (ISC licence) and the fillet shapes |
-| `layouts/bot-herdr.json` | herdr's main layout plus a 136px composer block under the panes |
+| `layouts/bot-herdr.json` | herdr's main layout plus a 124px composer block under the panes |
 | `themes/bot-herdr-{light,dark}.json` | a Claude-style palette for terminals and panels |
 | `test/*.test.mjs` | `npm test` |
 
@@ -74,7 +84,7 @@ Child agents show in the `@` list under their parent (tag "child"), so you can m
 
 This was written without a running herdr, so `herdr-app check` and a first look in the app are the real test. Three things are most likely to need a tweak:
 
-1. **The bubble floats in a `Popup`** anchored to the block's foot, so it can grow upward over the panes. If that misbehaves, set the block's props to `{ "float": false }` in the layout. The bubble then sits inside the block.
+1. **The bubble floats in a `Popup`** anchored to the block's foot, so it can grow upward over the panes. Its height is computed from the text (2 to 10 rows), because the text box otherwise stretches to fill the window. If floating misbehaves, set the block's props to `{ "float": false }` in the layout. The bubble then sits inside the block.
 2. **Enter to send** relies on our key binding beating the text box's own Enter at the same depth. If Enter adds a newline instead, the `submit` fallback still sends.
 3. Exact method names for `flex_col_reverse`, `shadow_md` and `border_0` come from GPUI's style macros. `herdr-app check` will name any that are missing.
 

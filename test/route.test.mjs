@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  triggerAt, caretAfterEdit, slashRows, mentionRows, tokenFor, plan, defaultTarget, withoutEnter, messageText,
+  triggerAt, caretAfterEdit, slashRows, mentionRows, tokenFor, plan, orchestratorOf, leadAgent, withoutEnter, messageText,
 } from "../mods/bot-herdr/route.js";
 
 const claude = { address: "t1", space: "s1", space_name: "app", tab: "a", tab_name: "1", status: "idle", seq: 2, program: { key: "claude", name: "Claude Code", tile: "#d97757" } };
@@ -32,7 +32,7 @@ test("rows: commands rank by prefix; agents here first, then installed ones to s
   assert.equal(slashRows("st")[0].name, "stop");
   const rows = mentionRows("", { agents: [far, claude, codex], known, space: "s1" });
   assert.deepEqual(rows.map((r) => r.id), ["agent:t1", "agent:t2", "agent:vps/t7", "all", "start:claude", "start:gemini"]);
-  assert.deepEqual(mentionRows("", { agents: [claude], known, space: "s1", startOnly: true }).map((r) => r.id), ["start:claude", "start:gemini"]);
+  assert.deepEqual(mentionRows("", { agents: [claude], known, space: "s1", mode: "start" }).map((r) => r.id), ["start:claude", "start:gemini"]);
   assert.equal(mentionRows("cod", { agents: [claude, codex], known, space: "s1" })[0].id, "agent:t2");
 });
 
@@ -74,15 +74,23 @@ test("/stop and /peek act on the agent; other commands pass through", () => {
 });
 
 test("no agent: a hint, not a silent drop", () => {
-  assert.match(plan({ text: "hi", tokens: [] }, { agents: [], target: null, space: "s1" }).error, /Type @/);
+  assert.match(plan({ text: "hi", tokens: [] }, { agents: [], target: null, space: "s1" }).error, /No agent is installed/);
   assert.deepEqual(plan({ text: "  ", tokens: [] }, { agents: [claude], target: "t1", space: "s1" }).steps, []);
 });
 
-test("default target: focused agent, else newest in tab, else in space", () => {
-  assert.equal(defaultTarget([claude, codex], { space: "s1", tab: "a", terminal: "t2" }), "t2");
-  assert.equal(defaultTarget([claude, codex], { space: "s1", tab: "a", terminal: null }), "t1");
-  assert.equal(defaultTarget([claude, codex], { space: "s1", tab: "z", terminal: null }), "t2");
-  assert.equal(defaultTarget([claude, codex], { space: "s1", tab: "z", terminal: null }, "t1"), "t1");
+test("a plain message goes to the Orchestrator, starting one if there is none", () => {
+  const lead = { ...codex, tab_name: "Orchestrator" };
+  assert.equal(orchestratorOf([claude, lead, far], "s1").address, "t2");
+  assert.equal(orchestratorOf([claude, codex], "s1"), null);
+  assert.equal(orchestratorOf([{ ...far, tab_name: "orchestrator" }], "s1"), null);
+  assert.equal(leadAgent(known, "gemini").key, "gemini");
+  assert.equal(leadAgent(known, "aider").key, "claude");
+  assert.equal(leadAgent([], null), null);
+  const started = plan({ text: "build it", tokens: [] }, { agents: [claude], target: null, lead: known[0], space: "s1" });
+  assert.deepEqual(started.steps, [{ do: "start", role: "orchestrator", run: ["claude"], name: "Claude Code", text: "build it", files: [] }]);
+  const rows = mentionRows("", { agents: [claude, lead], known: [], space: "s1" });
+  assert.deepEqual(rows.slice(0, 2).map((r) => `${r.id} ${r.name} ${r.tag}`), ["agent:t2 orchestrator lead", "agent:t1 claude agent"]);
+  assert.deepEqual(mentionRows("", { known, mode: "orch" }).map((r) => r.id), ["orch:claude", "orch:gemini"]);
 });
 
 test("Enter's newline comes out", () => {
@@ -102,4 +110,9 @@ test("children sit under their parent in the @ list, and /team briefs", () => {
   assert.match(rows[1].hint, /child of Claude Code · working/);
   assert.equal(mentionRows("rev", { agents: [claude], children: kids, space: "s1" })[0].id, "agent:t5");
   assert.deepEqual(plan({ text: "/team", tokens: [] }, { agents: [claude], target: "t1", space: "s1" }).steps, [{ do: "brief", address: "t1" }]);
+});
+
+test("no second Orchestrator while one starts; a bare /command needs someone to go to", () => {
+  assert.match(plan({ text: "and this", tokens: [] }, { agents: [], target: null, lead: known[0], starting: true, space: "s1" }).error, /starting/);
+  assert.match(plan({ text: "/compact", tokens: [] }, { agents: [], target: null, lead: known[0], space: "s1" }).error, /No Orchestrator here yet/);
 });

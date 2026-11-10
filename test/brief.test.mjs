@@ -34,3 +34,12 @@ test("the brief goes before the person's words, once", () => {
   assert.equal(briefed({ labels: {} }), false);
   assert.equal(briefed(undefined), false);
 });
+
+test("the Orchestrator's brief gives its role, then the team brief", async () => {
+  const { orchestratorBrief } = await import("../mods/bot-herdr/brief.js");
+  const b = orchestratorBrief({ known, space: "app" });
+  assert.match(b, /you are the Orchestrator for the space "app"/);
+  assert.match(b, /reviewed by a different child/);
+  assert.match(b, /hc run --bg --name/);
+  assert.ok(withBrief("go", { known, role: "orchestrator" }).startsWith("[bot-herdr: you are the Orchestrator"));
+});

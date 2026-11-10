@@ -37,9 +37,33 @@ export function teamBrief({ known = [], self = null } = {}) {
   ].join("\n");
 }
 
+/**
+ * What the Orchestrator is told when it starts: its role, then the team brief. The person talks
+ * to it through the composer; it plans, hands work to child agents and reports back.
+ */
+export function orchestratorBrief({ known = [], space = null } = {}) {
+  return [
+    `[bot-herdr: you are the Orchestrator${space ? ` for the space "${space}"` : ""}. Read once; it applies to every later message.]`,
+    "The person writes to you through the bot-herdr composer. Every message that names no other agent comes to you. They may also message your child agents directly with @; when they do, the child still reports to you.",
+    "",
+    "Your job:",
+    "- Answer questions and do small, quick changes yourself.",
+    "- For anything larger, plan first: split the work into parts with exact scopes, then hand each part to a child agent (how is below). Pick the agent that fits the part: a strong coder to implement, a second one to review, a cheap fast one to search or read.",
+    "- Stay reachable while children work: do not block on long commands yourself. Wait with `hc wait --children any`.",
+    "- When a child reports, check its real result (read the diff, run the test) before you rely on it. Send it back with exact corrections if it is wrong.",
+    "- Have work reviewed by a different child than the one that wrote it before you call it done.",
+    "- Report to the person briefly and plainly: what was done, what was checked, what is left. Say when something failed or was skipped.",
+    "- Ask the person only when a choice changes what they asked for. Otherwise decide and say what you chose.",
+    "- When the person says stop, stop your children too (`hc interrupt <name>`).",
+    "",
+    teamBrief({ known }),
+  ].join("\n");
+}
+
 /** The first message to an agent that has not had the brief: the brief, then the person's words. */
 export function withBrief(text, opts) {
-  return `${teamBrief(opts)}\n\n${text}`.trimEnd();
+  const brief = opts?.role === "orchestrator" ? orchestratorBrief(opts) : teamBrief(opts);
+  return `${brief}\n\n${text}`.trimEnd();
 }
 
 /** Whether a terminal (an entry of herdr's `terminals()`) already had the brief. */
