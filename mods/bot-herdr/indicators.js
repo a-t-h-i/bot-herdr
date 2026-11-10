@@ -28,7 +28,7 @@ function shimmer(c, word, tone, width, frames = null) {
   const band = 30;
   const period = 2600;
   const text = (color) => {
-    const el = div().absolute().top(0).w(width + 12).h(18).whitespace_nowrap().text_size(SIZE).font_semibold().text_color(color);
+    const el = div().absolute().top(0).w(width + 12).h(18).line_height("18px").whitespace_nowrap().text_size(SIZE).font_semibold().text_color(color);
     return frames ? el.frames(frames, Math.round(2600 / frames.length)) : el.child(word);
   };
   return [

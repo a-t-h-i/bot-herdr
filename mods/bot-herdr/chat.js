@@ -570,8 +570,8 @@ export class Chat {
       .items_start()
       .text_size(12.5)
       .child(roleWord(c, { role: a.role, tone, id: `bh-rw-${a.address}` }))
-      .child(div().flex_none().h(18).flex().items_center().font_semibold().text_color(tone).child(a.name))
-      .when(Boolean(a.doing), (el) => el.child(div().flex_1().min_w(0).h(18).truncate().text_color(c.faint).child(a.doing)))
+      .child(div().flex_none().h(18).line_height("18px").whitespace_nowrap().font_semibold().text_color(tone).child(a.name))
+      .when(Boolean(a.doing), (el) => el.child(div().flex_1().min_w(0).h(18).line_height("18px").truncate().text_color(c.faint).child(a.doing)))
       .when(!a.doing, (el) => el.child(div().flex_1()))
       .when(now.count > 1, (el) => el.child(
         div()
@@ -583,6 +583,7 @@ export class Chat {
           .items_center()
           .rounded(6)
           .text_size(11.5)
+          .line_height("18px")
           .text_color(c.faint)
           .cursor_pointer()
           .hover((s) => s.bg(c.hover).text_color(c.ink))
