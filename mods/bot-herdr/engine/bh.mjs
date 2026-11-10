@@ -443,7 +443,7 @@ async function main(argv) {
       }
       const config = C.classifierConfig();
       const t = C.target(config);
-      const shown = { ...config, key: Boolean(config.key), keyFound: Boolean(t.key), using: t.name, hosts: Object.fromEntries(Object.entries(C.HOSTS).map(([k, h]) => [k, { label: h.label, env: h.env, model: h.model }])) };
+      const shown = { ...config, key: Boolean(config.key), keyFound: Boolean(t.key), using: t.name, harnessReady: C.onHarness(config), harnesses: Object.keys(C.CLASSIFIER_HARNESSES), hosts: Object.fromEntries(Object.entries(C.HOSTS).map(([k, h]) => [k, { label: h.label, env: h.env, model: h.model }])) };
       return out(flags, shown, (x) => `Classifier ${x.enabled ? "on" : "off"}; host ${x.host} (using ${x.using}); key ${x.keyFound ? "found" : "missing"}.`);
     }
 

@@ -11,6 +11,9 @@ import { DATA, readJson } from "../lib/core.mjs";
 import { choice, choiceOf, noul, score, scoreOf, systemOne, yesOf } from "./client.mjs";
 import { clip } from "./limits.mjs";
 import { assessQaRisk } from "./qa-risk.mjs";
+import { askHarness, canClassify, CLASSIFIER_HARNESSES } from "./harness.mjs";
+
+export { CLASSIFIER_HARNESSES, canClassify };
 
 export const HOSTS = {
   opencode: { label: "OpenCode Zen", env: "OPENCODE_API_KEY", baseUrl: "https://opencode.ai/zen", model: "jev-1.13-free" },
@@ -22,6 +25,9 @@ export const HOSTS = {
 export const DEFAULTS = {
   enabled: false,
   host: "auto",
+  // Settings → Classifier → Model: a harness you have installed and its model ("" = the Jev API).
+  harness: "",
+  harnessModel: "",
   key: "",
   model: "",
   features: { lobby: true, triage: true, effort: true, qa: true, scripts: true },
@@ -49,16 +55,27 @@ export function target(config = classifierConfig(), env = process.env) {
   return { name: names[0], ...HOSTS[names[0]], key: "", model: config.model || HOSTS[names[0]].model };
 }
 
+/** The harnesses this machine has (Settings saves them with the team). */
+export const knownHarnesses = () => readJson(join(DATA, "agents.json"), {})?.known ?? [];
+
+/** Whether the classifier runs on a harness, and that harness is installed. */
+export function onHarness(config = classifierConfig(), known = knownHarnesses()) {
+  return Boolean(config.harness && canClassify(config.harness) && known.some((k) => k.key === config.harness && k.installed));
+}
+
 /** A classifier for the given config: `enabled(feature)` and `ask(feature, request)`. */
 export function makeClassifier(config = classifierConfig()) {
   const t = target(config);
+  const known = config.harness ? knownHarnesses() : [];
+  const harness = onHarness(config, known);
   return {
     config,
     target: t,
-    enabled: (feature) => Boolean(config.enabled && t.key && config.features[feature] !== false),
+    enabled: (feature) => Boolean(config.enabled && (harness || (!config.harness && t.key)) && config.features[feature] !== false),
     async ask(feature, request) {
       if (!this.enabled(feature)) return undefined;
       try {
+        if (harness) return await askHarness({ harness: config.harness, model: config.harnessModel, known }, request, { timeoutMs: 60000 });
         return await systemOne(request, { apiKey: t.key, baseUrl: t.baseUrl, model: t.model, timeoutMs: 8000, retries: 1 });
       } catch (e) {
         if (process.env.BH_DEBUG) console.error(`classifier: ${e.message}`);

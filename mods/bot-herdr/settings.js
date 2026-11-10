@@ -278,11 +278,32 @@ export class Settings {
     openPick({ key, bounds, selected: a.model, options });
   }
 
+  /** The classifier's model: one of an installed harness's models, or the Jev API. */
+  openClassifierModels(bounds) {
+    const k = this.classifier;
+    const can = k?.harnesses ?? [];
+    const options = [];
+    for (const h of this.known.filter((x) => x.installed && can.includes(x.key))) {
+      options.push({ heading: h.name });
+      options.push({ value: `${h.key}|`, label: `${h.name} · its default model` });
+      for (const m of modelsOf(h.key).filter((m) => m.current)) options.push({ value: `${h.key}|${m.id}`, label: m.name, note: m.id !== m.name ? m.id : "" });
+    }
+    if (!options.length) options.push({ heading: "No installed harness can run it (Claude Code, Codex, Gemini or Qwen Code)" });
+    options.push({ heading: "Without a harness" }, { value: "api|", label: "Jev API", note: "a key from OpenCode Zen, TypeSafe, OpenRouter or Vercel" });
+    this.open = "classifier:model";
+    openPick({ key: "classifier:model", bounds, selected: k?.harness ? `${k.harness}|${k.harnessModel ?? ""}` : "api|", options, minWidth: 300 });
+  }
+
   /** A pick from a list (pick.js), applied once. */
   applyPick(cx) {
     const picked = shared(PICKED);
     if (!picked?.at || picked.at <= this.pickedAt) return;
     this.pickedAt = picked.at;
+    if (picked.key === "classifier:model") {
+      const [harness, ...model] = String(picked.value ?? "").split("|");
+      this.open = null;
+      return this.config({ harness: harness === "api" ? "" : harness, harnessModel: model.join("|") }, cx);
+    }
     const [id, field] = String(picked.key ?? "").split(":");
     const a = this.list().find((x) => x.id === id);
     this.open = null;
@@ -675,7 +696,16 @@ export class Settings {
     if (!k) return this.heading(c, "Classifier", "Loading… (it needs node on your PATH).");
     const hosts = k.hosts ?? {};
     const using = hosts[k.using]?.label ?? k.using;
-    const status = !k.enabled ? "Off: plain rules make these calls." : k.keyFound ? `On, using ${using}.` : `On, but no key found: paste one or set ${hosts[k.using]?.env ?? "a key"}.`;
+    const harness = k.harness ? this.known.find((x) => x.key === k.harness) : null;
+    const harnessName = harness?.name ?? k.harness;
+    const modelName = k.harness ? (modelsOf(k.harness).find((m) => m.id === k.harnessModel)?.name ?? (k.harnessModel || "its default model")) : "";
+    const ready = k.harness ? k.harnessReady : k.keyFound;
+    const status = !k.enabled
+      ? "Off: plain rules make these calls."
+      : k.harness
+        ? (ready ? `On, using ${harnessName} · ${modelName}.` : `On, but ${harnessName} isn't installed here: pick another model.`)
+        : k.keyFound ? `On, using ${using}.` : `On, but no key found: paste one or set ${hosts[k.using]?.env ?? "a key"}.`;
+    const picked = k.harness ? `${harnessName} · ${modelName}` : "Jev API";
     return v_flex()
       .gap(GAP)
       .child(this.heading(c, "Classifier", "A fast model makes the small calls so the agents don't spend tokens on them: who answers a message, a task's size and track, each step's effort, how deep QA goes and which shared scripts help."))
@@ -692,19 +722,43 @@ export class Settings {
               .gap(10)
               .items_center()
               .child(this.toggle(c, "bh-cls-on", k.enabled, (_e, cx) => this.config({ enabled: !k.enabled }, cx)))
-              .child(div().text_size(13).text_color(k.enabled && !k.keyFound ? c.danger : c.ink).child(status)),
+              .child(div().text_size(13).text_color(k.enabled && !ready ? c.danger : c.ink).child(status)),
           )
-          .child(v_flex().gap(5).child(this.label(c, "Host")).child(
-            h_flex().flex_wrap().gap(6).children(HOST_ORDER.filter((h) => h === "auto" || hosts[h]).map((h) =>
-              this.chip(c, `bh-host-${h}`, h === "auto" ? "Auto" : hosts[h].label, k.host === h, (_e, cx) => this.config({ host: h }, cx)))),
-          ))
-          .child(
+          .child(v_flex().gap(5).child(this.label(c, "Model", "from the harnesses installed here")).child(
             h_flex()
-              .gap(10)
-              .items_end()
-              .child(v_flex().flex_1().min_w(0).gap(5).child(this.label(c, "Key", k.key ? "set" : "not set")).child(this.field(c, this.keyInput)))
-              .child(v_flex().flex_1().min_w(0).gap(5).child(this.label(c, "Model")).child(this.field(c, this.modelInput))),
-          )
+              .id("bh-cls-model")
+              .w(360)
+              .h(32)
+              .px(10)
+              .gap(8)
+              .items_center()
+              .rounded(SIZE.control)
+              .bg(c.ground)
+              .border_1()
+              .border_color(this.open === "classifier:model" ? c.accent : c.edge)
+              .cursor_pointer()
+              .hover((s) => s.border_color(c.accent))
+              .on_mouse_down("left", (e, cx) => {
+                cx.stop_propagation();
+                this.openClassifierModels(e.bounds);
+                cx.notify();
+              })
+              .child(div().flex_1().min_w(0).truncate().text_size(13).child(picked))
+              .child(svg(ICON("chevron-down")).size(14).text_color(c.muted)),
+          ))
+          .when(!k.harness, (el) => el
+            .child(v_flex().gap(5).child(this.label(c, "Host")).child(
+              h_flex().flex_wrap().gap(6).children(HOST_ORDER.filter((h) => h === "auto" || hosts[h]).map((h) =>
+                this.chip(c, `bh-host-${h}`, h === "auto" ? "Auto" : hosts[h].label, k.host === h, (_e, cx) => this.config({ host: h }, cx)))),
+            ))
+            .child(
+              h_flex()
+                .gap(10)
+                .items_end()
+                .child(v_flex().flex_1().min_w(0).gap(5).child(this.label(c, "Key", k.key ? "set" : "not set")).child(this.field(c, this.keyInput)))
+                .child(v_flex().flex_1().min_w(0).gap(5).child(this.label(c, "API model")).child(this.field(c, this.modelInput))),
+            ))
+          .when(Boolean(k.harness), (el) => el.child(div().text_size(11.5).text_color(c.faint).child("Each call starts the harness once, so a routed message waits a few seconds longer than with the API. It uses the harness's own sign-in.")))
           .child(v_flex().gap(5).child(this.label(c, "Use it for")).child(
             h_flex().flex_wrap().gap(6).children(FEATURES.map((f) =>
               this.chip(c, `bh-feat-${f.key}`, f.label, k.features?.[f.key] !== false, (_e, cx) => this.config({ features: { [f.key]: k.features?.[f.key] === false } }, cx)))),

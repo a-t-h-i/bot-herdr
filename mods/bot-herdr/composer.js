@@ -237,7 +237,7 @@ export class Composer {
    * Orchestrator (a styling question → Design). Returns the steps to run and a note, or null.
    */
   async reroute(step) {
-    const r = await bh(["classify", "route", "--json", "--data", enc(step.text)], { cwd: projectDir(this.space()), timeout: 12000 });
+    const r = await bh(["classify", "route", "--json", "--data", enc(step.text)], { cwd: projectDir(this.space()), timeout: 70000 });
     let routed = null;
     try {
       routed = JSON.parse(r.stdout);
