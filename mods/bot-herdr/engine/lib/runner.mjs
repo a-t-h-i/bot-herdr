@@ -294,6 +294,9 @@ export class Acp {
     const run = known.find((k) => k.key === agent.harness)?.run ?? [agent.harness];
     this.argv = [...run, ...HEADLESS[agent.harness].acp, ...extra(agent)];
     this.agent = agent;
+    this.harnessName = known.find((k) => k.key === agent.harness)?.name ?? agent.harness;
+    this.newResult = null; // what session/new offered: config options and models
+    this.modelSet = null; // the model the session is running (set once it takes)
     this.cwd = cwd;
     this.access = access;
     this.allow = allow;
@@ -334,10 +337,30 @@ export class Acp {
     const made = await this.request("session/new", { cwd: this.cwd, mcpServers: [] });
     if (made.error || typeof made.result?.sessionId !== "string") throw new Error(made.error?.message ?? "the agent didn't open a session (sign in to it once in a terminal)");
     this.session = made.result.sessionId;
-    const options = Array.isArray(made.result.configOptions) ? made.result.configOptions : [];
-    const model = options.find((o) => o.category === "model");
-    if (this.agent.model && model) await this.request("session/set_config_option", { sessionId: this.session, configId: model.id, value: this.agent.model });
-    else if (this.agent.model && made.result.models) await this.request("session/set_model", { sessionId: this.session, modelId: this.agent.model });
+    this.newResult = made.result;
+    this.modelSet = null; // a fresh session: the chosen model goes on before the first prompt
+  }
+
+  /**
+   * Puts the agent's chosen model on the session. The standard way is the model config option
+   * (every current ACP agent takes it); an older one that listed `models` instead takes
+   * session/set_model. One that offered neither gets both, and a refusal is said out loud,
+   * so a harness silently running its default never surprises anyone.
+   */
+  async pickModel() {
+    if (!this.agent.model || this.modelSet === this.agent.model) return;
+    const made = this.newResult ?? {};
+    const option = (Array.isArray(made.configOptions) ? made.configOptions : []).find((o) => o.category === "model");
+    const listed = Array.isArray(made.models) && made.models.length > 0;
+    let r;
+    if (option) r = await this.request("session/set_config_option", { sessionId: this.session, configId: option.id, value: this.agent.model });
+    else if (listed) r = await this.request("session/set_model", { sessionId: this.session, modelId: this.agent.model });
+    else {
+      r = await this.request("session/set_config_option", { sessionId: this.session, configId: "model", value: this.agent.model });
+      if (r.error) r = await this.request("session/set_model", { sessionId: this.session, modelId: this.agent.model });
+    }
+    this.modelSet = this.agent.model; // asked once per model: a refused harness keeps its default
+    if (r.error) this.on({ kind: "tool", line: `Model ${this.agent.model} not set (${r.error.message ?? "refused"}): ${this.harnessName} runs its default` });
   }
 
   /** A chunk of the agent's words: the reply is the last block that had any. */
@@ -402,6 +425,7 @@ export class Acp {
       try {
         const first = !this.child;
         if (first) await this.start();
+        await this.pickModel(); // every turn: a model changed in Settings reaches a live session too
         const r = await this.request("session/prompt", { sessionId: this.session, prompt: [{ type: "text", text: first ? `${brief}\n\n${prompt}` : prompt }] });
         if (this.asked) return { text: this.text, asked: true, error: null, session: this.session };
         if (r.error) return { text: this.text, error: r.error.message ?? "the agent refused the prompt", session: this.session };

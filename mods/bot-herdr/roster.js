@@ -27,10 +27,10 @@ export const HARNESSES = {
   claude: { model: (m) => ["--model", m], effort: (e) => ["--effort", e], efforts: ["low", "medium", "high", "xhigh", "max"] },
   codex: { model: (m) => ["-m", m], effort: (e) => ["-c", `model_reasoning_effort=${e}`], efforts: ["minimal", "low", "medium", "high", "xhigh"] },
   pi: { model: (m) => ["--model", m], effort: (e) => ["--thinking", e], efforts: ["off", "minimal", "low", "medium", "high", "xhigh"], lists: ["--list-models"] },
-  omp: { model: (m) => ["--model", m], effort: (e) => ["--thinking", e], efforts: ["off", "minimal", "low", "medium", "high", "xhigh"], lists: ["--list-models"] },
-  gemini: { model: (m) => ["-m", m], efforts: [] },
+  omp: { model: (m) => ["--model", m], effort: (e) => ["--thinking", e], efforts: ["off", "minimal", "low", "medium", "high", "xhigh"] },
+  gemini: { model: (m) => ["-m", m], efforts: [], lists: ["models"] },
   qwen: { model: (m) => ["-m", m], efforts: [] },
-  opencode: { model: (m) => ["-m", m], efforts: [] },
+  opencode: { model: (m) => ["-m", m], efforts: [], lists: ["models"] },
 };
 const OTHER = { model: (m) => ["--model", m], efforts: [] };
 
@@ -194,8 +194,9 @@ export function parseModelList(text) {
   const out = [];
   for (const line of String(text ?? "").split(/\r?\n/)) {
     const cols = line.trim().split(/\s{2,}|\t/).filter(Boolean);
-    if (cols.length < 2 || /^provider$/i.test(cols[0]) || /^-+$/.test(cols[0])) continue;
-    const id = cols[1].includes("/") ? cols[1] : `${cols[0]}/${cols[1]}`;
+    if (!cols.length || /^provider$/i.test(cols[0]) || /^-+$/.test(cols[0])) continue;
+    // a plain `provider/model` line (opencode models), or a provider column beside the id
+    const id = cols.length === 1 ? cols[0] : cols[1].includes("/") ? cols[1] : `${cols[0]}/${cols[1]}`;
     if (/^[\w.-]+\/[\w.:@-]+$/.test(id) && !out.includes(id)) out.push(id);
   }
   return out;
