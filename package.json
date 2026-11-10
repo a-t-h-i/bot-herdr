@@ -1,0 +1,12 @@
+{
+  "name": "bot-herdr",
+  "version": "0.1.0",
+  "description": "Bot Lobby's interface as a herdr desktop mod: one composer for every agent herdr runs.",
+  "type": "module",
+  "private": true,
+  "license": "Apache-2.0",
+  "scripts": {
+    "install-mod": "node install.mjs",
+    "test": "node --test test/*.test.mjs"
+  }
+}
