@@ -4,6 +4,8 @@
 //   { "view": "work", "tab": "tasks" | "plans" | "knowledge" }   the team's work (work.js)
 //   { "view": "pick" }      a dropdown list, opened as a popup by Settings (pick.js)
 //   { "view": "settings" }  the agents: harness, model, effort (settings.js)
+//   { "view": "lightbox" }  a picture opened large, as a dialog (lightbox.js)
+//   (no view)               herdr's notifications: the layout's "toast" mod (toast.js)
 
 import { View } from "gpui-kit";
 import { props } from "herdr";
@@ -12,13 +14,15 @@ import { Switch } from "./switch.js";
 import { Settings } from "./settings.js";
 import { Work } from "./work.js";
 import { Pick } from "./pick.js";
+import { Lightbox } from "./lightbox.js";
+import { Toast, isNotification } from "./toast.js";
 
-const VIEWS = { chat: Chat, switch: Switch, work: Work, settings: Settings, pick: Pick };
+const VIEWS = { chat: Chat, switch: Switch, work: Work, settings: Settings, pick: Pick, lightbox: Lightbox, toast: Toast };
 
 export default class BotHerdr extends View {
   init(given, cx) {
     const p = given?.view ? given : props() ?? given ?? {};
-    this.page = new (VIEWS[p.view] ?? Chat)();
+    this.page = new (VIEWS[p.view] ?? (isNotification(p) ? Toast : Chat))();
     this.page.init(p, cx);
   }
 

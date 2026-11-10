@@ -662,7 +662,10 @@ export class Settings {
               .child(this.label(c, "Also allow these commands"))
               .child(this.field(c, this.allowInput))
               .child(div().text_size(11.5).text_color(c.faint).child("Comma separated; each allows that command and anything after it. Claude Code, Gemini, opencode and Qwen Code follow this list. Codex runs commands in its workspace sandbox; pi and Oh My Pi have no permission system and run as they would in a terminal.")),
-          )),
+          ))
+          .child(row("Git isolation", ["off", "branch", "worktree"].map((m) =>
+            this.chip(c, `bh-git-${m}`, { off: "Off", branch: "Branch", worktree: "Worktree" }[m], (k.git ?? "off") === m, (_e, cx) => this.setAccess({ git: m }, cx))),
+          { off: "Tasks work in the project folder as it is.", branch: "Each new task gets a git branch named after it, checked out in the project folder.", worktree: "Each new task gets its own worktree and branch, named after it: every agent of the task runs there, apart from your checkout." }[k.git ?? "off"])),
       );
   }
 

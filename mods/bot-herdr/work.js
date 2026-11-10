@@ -1,8 +1,9 @@
 // The Tasks, Plans and Knowledge pages: the team's work in the project of the space you are
 // looking at. One view; the layout gives each page its own block (props.tab).
-//   Tasks      a board (Backlog, In progress, Completed); a task opens to its steps, each with
-//              who did it and for how long. Resume hands it back to the Orchestrator.
-//   Plans      the panel's drafts: read one, comment on it, start it as a task.
+//   Tasks      a list (under way, then finished; or the archived ones) beside the chosen task:
+//              its steps, each with who did it and for how long, and your comments on any step.
+//              Resume hands it back to the Orchestrator.
+//   Plans      the panel's drafts: read one, comment on any line of it, start it as a task.
 //   Knowledge  what each agent knows about the project, to read and edit.
 // Everything comes from the bh tool (tasks, plans and knowledge live in the project's
 // .bot-herdr folder); messages for the team go through the chat's composer.
@@ -14,17 +15,18 @@ import { LIGHT, DARK, SIZE, ICON } from "./look.js";
 import { activePage, sendFromChat } from "./pages.js";
 import { ROSTER_KEY, roster, slug } from "./roster.js";
 import { bh, bhJson, enc, projectDir } from "./bh.js";
+import { blocks, commentsOn } from "./doc.js";
 
 const TABS = [
   { id: "tasks", label: "Tasks" },
   { id: "plans", label: "Plans" },
   { id: "knowledge", label: "Knowledge" },
 ];
-const COLUMNS = [
-  { id: "backlog", label: "Backlog", has: ["backlog", "paused"] },
-  { id: "active", label: "In progress", has: ["active"] },
-  { id: "done", label: "Completed", has: ["done", "abandoned"] },
+const SECTIONS = [
+  { id: "open", label: "Under way", has: ["active", "paused", "backlog"] },
+  { id: "done", label: "Finished", has: ["done", "abandoned"] },
 ];
+const LIST_W = 340;
 const GAP = 14;
 const MAX = 1140;
 const REFRESH_MS = 4000;
@@ -53,6 +55,18 @@ export function duration(ms) {
 }
 
 const workedOf = (t, at = Date.now()) => (t.steps ?? []).reduce((sum, s) => sum + (s.workedMs ?? 0) + (s.status === "active" && s.started ? at - Date.parse(s.started) : 0), 0);
+/** How old something is, in one short word: now, 40s, 3h, 4d. */
+export function age(iso, at = Date.now()) {
+  const ms = at - Date.parse(iso ?? "");
+  if (!Number.isFinite(ms)) return "";
+  const s = Math.floor(ms / 1000);
+  if (s < 30) return "now";
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}d`;
+}
+
 const day = (iso) => {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
@@ -80,6 +94,12 @@ export class Work {
     this.problem = null;
     this.comment = InputState.new({ placeholder: "Comment on this plan; the Orchestrator revises it" });
     this.comment.on("submit", (_e, cx) => this.sendComment(cx));
+    // A comment on one line of a plan, or one step of a task: { kind: "plan" | "task", id, at }.
+    this.commenting = null;
+    this.inline = InputState.new({ placeholder: "Your comment. Enter sends it to the Orchestrator" });
+    this.inline.on("submit", (_e, cx) => this.sendInline(cx));
+    this.taskComment = InputState.new({ placeholder: "Comment on this task; the Orchestrator takes it up" });
+    this.taskComment.on("submit", (_e, cx) => this.sendTaskComment(cx));
     this.editor = TextareaState.new({ rows: 20 });
     this.editor.set_soft_wrap(true);
     this.editor.on("change", (_e, cx) => cx.notify());
@@ -158,6 +178,47 @@ export class Work {
     this.comment.set_value("");
     this.act(["plan", "comment", plan.id, "--data", enc(text)], cx, (r) => {
       if (r.code === 0) sendFromChat(`The person commented on plan ${plan.id} ("${plan.title}"): ${text}\n\nRevise the draft (bh plan show ${plan.id}) or say why it needs no change.`);
+    });
+  }
+
+  /** Starts a comment on a plan's line or a task's step (or closes it, clicked again). */
+  startInline(kind, id, at, cx) {
+    const same = this.commenting && this.commenting.kind === kind && this.commenting.id === id && this.commenting.at === at;
+    this.commenting = same ? null : { kind, id, at };
+    this.inline.set_value("");
+    if (!same) this.inline.focus();
+    cx.notify();
+  }
+
+  sendInline(cx) {
+    const text = this.inline.value().trim();
+    const where = this.commenting;
+    if (!text || !where) return;
+    this.inline.set_value("");
+    this.commenting = null;
+    if (where.kind === "plan") {
+      const plan = this.plan;
+      if (!plan) return;
+      const quote = String(plan.markdown ?? "").split("\n")[where.at - 1]?.trim() ?? "";
+      this.act(["plan", "comment", plan.id, "--line", String(where.at), "--data", enc(text)], cx, (r) => {
+        if (r.code === 0) sendFromChat(`The person commented on line ${where.at} of plan ${plan.id} ("${plan.title}")${quote ? `, which reads "${quote.slice(0, 160)}"` : ""}: ${text}\n\nRevise the draft (bh plan show ${plan.id}) or say why it needs no change.`);
+      });
+      return;
+    }
+    const task = (this.tasks ?? []).find((t) => t.id === where.id);
+    const step = task?.steps?.find((x) => x.n === where.at);
+    this.act(["task", "comment", where.id, "--step", String(where.at), "--data", enc(text)], cx, (r) => {
+      if (r.code === 0) sendFromChat(`The person commented on step ${where.at}${step ? ` ("${step.title}")` : ""} of task ${where.id}: ${text}\n\nTake it into account (bh task show ${where.id}) or say why it needs no change.`);
+    });
+  }
+
+  sendTaskComment(cx) {
+    const text = this.taskComment.value().trim();
+    const id = this.opened;
+    if (!text || !id) return;
+    this.taskComment.set_value("");
+    this.act(["task", "comment", id, "--data", enc(text)], cx, (r) => {
+      if (r.code === 0) sendFromChat(`The person commented on task ${id}: ${text}\n\nTake it into account (bh task show ${id}) or say why it needs no change.`);
     });
   }
 
@@ -262,112 +323,281 @@ export class Work {
 
   tasksView(c, width) {
     if (this.tasks === null) return this.empty(c, "Loading…", "");
-    const list = this.tasks.filter((t) => this.archived || !t.archived);
     if (!this.tasks.length) return this.empty(c, "No tasks yet", "Ask the Orchestrator for something sizeable, or type /task in the chat. Its steps, who works on each and for how long show up here.");
-    const colW = Math.floor((width - GAP * 2) / 3);
+    const archived = this.tasks.filter((t) => t.archived);
+    const current = this.tasks.filter((t) => !t.archived);
+    const list = this.archived ? archived : current;
+    if (!list.some((t) => t.id === this.opened)) this.opened = (list.find((t) => t.status === "active") ?? list[0])?.id ?? null;
+    const open = list.find((t) => t.id === this.opened) ?? null;
+    const paneH = Math.max(320, this.height - 96);
+    const groups = this.archived ? [{ id: "archived", label: "Archived", rows: list }] : SECTIONS.map((sec) => ({ ...sec, rows: list.filter((t) => sec.has.includes(t.status ?? "backlog")) })).filter((g) => g.rows.length);
+    return h_flex()
+      .h(paneH)
+      .items_start()
+      .child(
+        v_flex()
+          .flex_none()
+          .w(LIST_W)
+          .h(paneH)
+          .gap(10)
+          .pr(14)
+          .child(this.segmented(c, [
+            { id: "tasks", label: "Tasks", count: current.length, on: !this.archived },
+            { id: "archived", label: "Archived", count: archived.length, on: this.archived },
+          ], (id, cx) => {
+            this.archived = id === "archived";
+            this.opened = null;
+            cx.notify();
+          }))
+          .child(
+            v_flex()
+              .id("bh-task-list")
+              .flex_1()
+              .min_h(0)
+              .overflow_y_scroll()
+              .gap(2)
+              .when(!list.length, (el) => el.child(div().pt(12).text_size(12.5).text_color(c.muted).child(this.archived ? "Nothing archived. Archive a finished task from its detail to keep this list short." : "Every task is archived.")))
+              .children(groups.flatMap((g) => [
+                ...(groups.length > 1 || this.archived ? [h_flex().flex_none().h(26).pt(6).px(10).gap(6).items_center()
+                  .child(div().text_size(11.5).font_semibold().text_color(c.muted).child(g.label.toUpperCase()))
+                  .child(div().text_size(11.5).text_color(c.faint).child(String(g.rows.length)))] : []),
+                ...g.rows.map((t) => this.taskRow(c, t)),
+              ])),
+          ),
+      )
+      .child(div().flex_none().w(1).h(paneH).bg(c.edge))
+      .child(
+        v_flex()
+          .id("bh-task-detail")
+          .flex_1()
+          .min_w(0)
+          .h(paneH)
+          .overflow_y_scroll()
+          .pl(22)
+          .child(open
+            ? this.taskDetail(c, open, width - LIST_W - 37)
+            : v_flex().pt(60).items_center().gap(6).child(div().text_size(13).text_color(c.muted).child("Choose a task to see its steps, progress and comments."))),
+      );
+  }
+
+  /** A row of the list: its mark, the title and its age; under them the facts and the steps' pips. */
+  taskRow(c, t) {
+    const steps = t.steps ?? [];
+    const done = steps.filter((s) => s.status === "done" || s.status === "skipped").length;
+    const on = this.opened === t.id;
+    const finished = t.status === "done" || t.status === "abandoned";
+    const blocked = steps.some((s) => s.status === "blocked");
+    const facts = finished
+      ? `${t.status === "done" ? "done" : "abandoned"} · worked ${duration(workedOf(t))}`
+      : [blocked ? "blocked" : t.status, t.track ? `${t.track} track` : "", t.git?.branch ? t.git.branch : ""].filter(Boolean).join(" · ");
     return v_flex()
-      .gap(GAP)
+      .id(`bh-task-${t.id}`)
+      .flex_none()
+      .px(10)
+      .py(8)
+      .gap(3)
+      .rounded(SIZE.control)
+      .border_1()
+      .border_color(on ? c.edge : "#00000000")
+      .when(on, (el) => el.bg(c.fill))
+      .when(!on, (el) => el.hover((s) => s.bg(c.hover)))
+      .cursor_pointer()
+      .on_click((_e, cx) => {
+        this.opened = t.id;
+        this.commenting = null;
+        cx.notify();
+      })
+      .child(
+        h_flex()
+          .gap(10)
+          .items_center()
+          .child(this.mark(c, t.status))
+          .child(div().flex_1().min_w(0).truncate().text_size(13).font_medium().text_color(t.status === "abandoned" ? c.faint : finished ? c.muted : c.ink).child(t.title ?? t.id))
+          .child(div().flex_none().text_size(11.5).text_color(c.faint).child(age(t.updated ?? t.created))),
+      )
+      .child(
+        h_flex()
+          .pl(26)
+          .gap(8)
+          .items_center()
+          .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(blocked ? c.warning : c.muted).child(facts))
+          .when(steps.length > 0 && !finished, (el) => el
+            .child(this.pips(c, steps))
+            .child(div().flex_none().text_size(11.5).text_color(c.faint).child(`${done}/${steps.length}`))),
+      );
+  }
+
+  /** A task's mark: an open ring, a lit ring while agents work, a filled tick when done. */
+  mark(c, status) {
+    const box = div().flex_none().size(16).flex().items_center().justify_center().rounded_full();
+    if (status === "done") return box.bg(c.accent).child(svg(ICON("check")).size(10).text_color(c.accentInk));
+    if (status === "abandoned") return box.border_1().border_color(c.faint).child(div().w(7).h(1.5).rounded(1).bg(c.faint));
+    if (status === "active") return box.border_1().border_color(c.accent).child(div().size(6).rounded_full().bg(c.accent).loop("opacity", { from: 0.35, to: 1, period: 1600 }));
+    return box.border_1().border_color(c.faint);
+  }
+
+  /** A pip per step: done ones lit, the running one half lit. */
+  pips(c, steps) {
+    const shown = steps.slice(0, 12);
+    return h_flex().flex_none().gap(2).items_center().children(shown.map((s) =>
+      div().flex_none().w(6).h(6).rounded(2).bg(s.status === "done" || s.status === "skipped" ? c.accent : s.status === "active" ? `${c.accent}80` : s.status === "blocked" ? c.warning : c.edge)));
+  }
+
+  taskDetail(c, t, width) {
+    const glyph = { todo: "○", active: "◐", done: "✓", blocked: "!", skipped: "–" };
+    const colour = (s) => (s === "active" ? c.accent : s === "blocked" ? c.warning : s === "done" ? c.ink : c.faint);
+    const steps = t.steps ?? [];
+    const comments = (t.comments ?? []).filter((x) => x.open !== false);
+    const finished = t.status === "done" || t.status === "abandoned";
+    const facts = [t.status, t.track ? `${t.track} track` : "", `worked ${duration(workedOf(t))}`, `started ${day(t.created)}`].filter(Boolean).join(" · ");
+    return v_flex()
+      .w(width)
+      .gap(14)
+      .pb(24)
+      .child(
+        h_flex()
+          .gap(10)
+          .items_start()
+          .child(
+            v_flex()
+              .flex_1()
+              .min_w(0)
+              .gap(3)
+              .child(div().text_size(17).font_semibold().line_height("24px").child(t.title ?? t.id))
+              .child(div().text_size(12).text_color(c.muted).child(`${t.id} · ${facts}`)),
+          )
+          .when(!finished, (el) => el.child(this.button(c, `bh-resume-${t.id}`, "Resume", () => sendFromChat(`Resume task ${t.id}`))))
+          .child(this.chip(c, `bh-arch-${t.id}`, t.archived ? "Unarchive" : "Archive", false, (_e, cx) => this.act(["task", t.archived ? "unarchive" : "archive", t.id], cx))),
+      )
+      .when(Boolean(t.git?.branch), (el) => el.child(
+        h_flex().gap(6).items_center().text_size(12).text_color(c.muted)
+          .child(svg(ICON("folder")).size(13).text_color(c.faint))
+          .child(div().min_w(0).truncate().child(t.git.mode === "worktree" ? `Worktree ${t.git.path} · branch ${t.git.branch}` : `Branch ${t.git.branch}${t.git.from ? ` (from ${t.git.from})` : ""}`)),
+      ))
+      .when(Boolean(t.request), (el) => el.child(div().text_size(13).line_height("20px").text_color(c.muted).child(String(t.request).slice(0, 600))))
+      .child(
+        v_flex()
+          .gap(2)
+          .child(h_flex().h(26).gap(8).items_center()
+            .child(div().text_size(12).font_semibold().text_color(c.muted).child("STEPS"))
+            .child(div().text_size(11.5).text_color(c.faint).child(steps.length ? "Click a step to comment on it." : "None yet: the Orchestrator adds them.")))
+          .children(steps.map((s) => {
+            const on = this.commenting?.kind === "task" && this.commenting.id === t.id && this.commenting.at === s.n;
+            const notes = comments.filter((x) => x.step === s.n);
+            const time = s.workedMs || s.status === "active" ? duration((s.workedMs ?? 0) + (s.status === "active" && s.started ? Date.now() - Date.parse(s.started) : 0)) : "";
+            return v_flex()
+              .flex_none()
+              .child(
+                h_flex()
+                  .id(`bh-step-${t.id}-${s.n}`)
+                  .px(8)
+                  .py(6)
+                  .gap(10)
+                  .items_start()
+                  .rounded(SIZE.nested)
+                  .cursor_pointer()
+                  .when(on, (el) => el.bg(c.hover))
+                  .hover((st) => st.bg(c.hover))
+                  .on_click((_e, cx) => this.startInline("task", t.id, s.n, cx))
+                  .child(div().w(14).flex_none().text_size(13).text_color(colour(s.status)).child(glyph[s.status] ?? "○"))
+                  .child(div().flex_1().min_w(0).text_size(13).line_height("19px").child(`${s.n}. ${s.title}`))
+                  .child(div().flex_none().text_size(11.5).text_color(c.faint).child([s.agent, time].filter(Boolean).join(" · ")))
+                  .when(notes.length > 0, (el) => el.child(h_flex().flex_none().gap(3).items_center().text_size(11.5).text_color(c.accent)
+                    .child(svg(ICON("comment")).size(12)).child(String(notes.length)))),
+              )
+              .children(notes.map((x) => this.commentNote(c, x.text)))
+              .when(on, (el) => el.child(this.inlineBox(c)));
+          })),
+      )
+      .when(comments.some((x) => !x.step), (el) => el.child(
+        v_flex()
+          .gap(6)
+          .child(div().text_size(12).font_semibold().text_color(c.muted).child("YOUR COMMENTS"))
+          .children(comments.filter((x) => !x.step).map((x) => this.commentNote(c, x.text))),
+      ))
       .child(
         h_flex()
           .gap(8)
           .items_center()
-          .child(div().flex_1().text_size(12.5).text_color(c.muted).child(`${list.length} task${list.length === 1 ? "" : "s"}`))
-          .child(this.chip(c, "bh-archived", "Show archived", this.archived, (_e, cx) => {
-            this.archived = !this.archived;
-            cx.notify();
-          })),
-      )
-      .child(
-        h_flex()
-          .gap(GAP)
-          .items_start()
-          .children(COLUMNS.map((col) => {
-            const here = list.filter((t) => col.has.includes(t.status ?? "backlog"));
-            return v_flex()
-              .id(`bh-col-${col.id}`)
-              .flex_none()
-              .w(colW)
-              .gap(8)
-              .child(
-                h_flex()
-                  .h(24)
-                  .gap(6)
-                  .items_center()
-                  .child(div().text_size(12.5).font_semibold().child(col.label))
-                  .child(div().text_size(12).text_color(c.faint).child(String(here.length))),
-              )
-              .children(here.map((t) => this.taskCard(c, t, colW)))
-              .when(!here.length, (el) => el.child(div().h(56).rounded(SIZE.radius).border_1().border_color(c.edge).opacity(0.6)));
-          })),
+          .child(this.inputBox(c, this.taskComment))
+          .child(this.button(c, "bh-task-comment", "Comment", (_e, cx) => this.sendTaskComment(cx))),
       );
   }
 
-  taskCard(c, t, width) {
-    const steps = t.steps ?? [];
-    const done = steps.filter((s) => s.status === "done" || s.status === "skipped").length;
-    const open = this.opened === t.id;
-    const share = steps.length ? done / steps.length : 0;
-    return v_flex()
-      .id(`bh-task-${t.id}`)
+  /** A comment of yours under what it is about: a quiet line with the accent at its edge. */
+  commentNote(c, text) {
+    return h_flex()
       .flex_none()
-      .p(12)
+      .ml(32)
+      .mr(8)
+      .mb(4)
       .gap(8)
-      .rounded(SIZE.radius)
+      .items_start()
+      .child(div().flex_none().w(2).h_full().min_h(18).rounded(1).bg(c.accent))
+      .child(div().flex_1().min_w(0).text_size(12.5).line_height("18px").text_color(c.muted).child(text));
+  }
+
+  /** The text box for the comment being written under a line or step. */
+  inlineBox(c) {
+    return h_flex()
+      .flex_none()
+      .ml(32)
+      .mr(8)
+      .mt(4)
+      .mb(8)
+      .gap(8)
+      .items_center()
+      .child(this.inputBox(c, this.inline))
+      .child(this.button(c, "bh-inline-send", "Comment", (_e, cx) => this.sendInline(cx)))
+      .child(this.chip(c, "bh-inline-cancel", "Cancel", false, (_e, cx) => {
+        this.commenting = null;
+        cx.notify();
+      }));
+  }
+
+  inputBox(c, state) {
+    return div()
+      .flex_1()
+      .min_w(0)
+      .h(32)
+      .px(10)
+      .flex()
+      .items_center()
+      .rounded(SIZE.control)
       .bg(c.fill)
       .border_1()
-      .border_color(open ? c.accent : c.edge)
-      .cursor_pointer()
-      .on_click((_e, cx) => {
-        this.opened = open ? null : t.id;
-        cx.notify();
-      })
-      .child(div().text_size(13.5).font_semibold().child(t.title ?? t.id))
-      .child(
-        h_flex()
-          .gap(6)
-          .text_size(11.5)
-          .text_color(c.muted)
-          .child(div().child(steps.length ? `${done}/${steps.length} steps` : "No steps yet"))
-          .child(div().child("·"))
-          .child(div().child(duration(workedOf(t))))
-          .when(Boolean(t.track), (el) => el.child(div().child("·")).child(div().child(t.track)))
-          .child(div().flex_1())
-          .child(div().text_color(c.faint).child(day(t.created))),
-      )
-      .when(steps.length > 0, (el) => el.child(
-        div().h(3).rounded(2).bg(c.well).child(div().h(3).w(Math.max(0, Math.round((width - 26) * share))).rounded(2).bg(c.accent)),
-      ))
-      .when(open, (el) => el.child(this.taskDetail(c, t)));
+      .border_color(c.edge)
+      .child(Input.new(state).w_full().h_full().text_size(13).text_color(c.ink));
   }
 
-  taskDetail(c, t) {
-    const glyph = { todo: "○", active: "◐", done: "✓", blocked: "!", skipped: "–" };
-    const colour = (s) => (s === "active" ? c.accent : s === "blocked" ? c.danger : s === "done" ? c.ink : c.faint);
-    return v_flex()
-      .gap(8)
-      .pt(4)
-      .child(div().text_size(12.5).text_color(c.muted).child(String(t.request ?? "").slice(0, 400)))
-      .children((t.steps ?? []).map((s) =>
+  /** A row of choices with counts, one lit (Tasks / Archived). */
+  segmented(c, items, onPick) {
+    return h_flex()
+      .flex_none()
+      .h(30)
+      .p(2)
+      .gap(2)
+      .items_center()
+      .rounded(SIZE.control)
+      .bg(c.well)
+      .children(items.map((x) =>
         h_flex()
-          .gap(8)
-          .items_start()
+          .id(`bh-seg-${x.id}`)
+          .flex_1()
+          .h(26)
+          .px(10)
+          .gap(6)
+          .items_center()
+          .justify_center()
+          .rounded(SIZE.nested)
           .text_size(12.5)
-          .child(div().w(14).flex_none().text_color(colour(s.status)).child(glyph[s.status] ?? "○"))
-          .child(div().flex_1().min_w(0).child(`${s.n}. ${s.title}`))
-          .child(div().flex_none().text_size(11.5).text_color(c.faint).child([s.agent, s.workedMs || s.status === "active" ? duration((s.workedMs ?? 0) + (s.status === "active" && s.started ? Date.now() - Date.parse(s.started) : 0)) : ""].filter(Boolean).join(" · ")))))
-      .child(
-        h_flex()
-          .pt(4)
-          .gap(8)
-          .when(t.status !== "done" && t.status !== "abandoned", (el) => el.child(this.button(c, `bh-resume-${t.id}`, "Resume", (_e, cx) => {
-            cx.stop_propagation();
-            sendFromChat(`Resume task ${t.id}`);
-          })))
-          .child(this.chip(c, `bh-arch-${t.id}`, t.archived ? "Unarchive" : "Archive", false, (_e, cx) => {
-            cx.stop_propagation();
-            this.act(["task", t.archived ? "unarchive" : "archive", t.id], cx);
-          })),
-      );
+          .font_medium()
+          .cursor_pointer()
+          .when(x.on, (el) => el.bg(c.fill).text_color(c.ink).shadow_sm())
+          .when(!x.on, (el) => el.text_color(c.muted).hover((s) => s.text_color(c.ink)))
+          .on_click((_e, cx) => onPick(x.id, cx))
+          .child(x.label)
+          .child(div().text_size(11.5).text_color(c.faint).child(String(x.count)))));
   }
 
   // Plans
@@ -425,14 +655,15 @@ export class Work {
           .when(p.status === "ready" && !p.task, (el) => el.child(this.button(c, "bh-plan-start", "Start task", () => sendFromChat(`The plan ${p.id} ("${p.title}") is agreed: make it a task (bh plan task ${p.id}) and start it.`))))
           .child(this.chip(c, "bh-plan-arch", p.status === "archived" ? "Unarchive" : "Archive", false, (_e, cx) => this.act(["plan", p.status === "archived" ? "unarchive" : "archive", p.id], cx))),
       )
+      .when(Boolean(p.markdown), (el) => el.child(div().text_size(11.5).text_color(c.faint).child("Click any line to comment on it.")))
       .child(p.markdown
-        ? div().text_size(13.5).line_height(`${SIZE.line}px`).child(TextView.markdown(`bh-plan-md-${p.id}-${p.round ?? 0}`, p.markdown).selectable(true))
+        ? this.planLines(c, p)
         : div().text_size(13).text_color(c.muted).child("No draft yet: the panel is still asking."))
-      .when(open.length > 0, (el) => el.child(
+      .when(open.some((x) => !x.line), (el) => el.child(
         v_flex()
           .gap(6)
-          .child(div().text_size(12).font_semibold().text_color(c.muted).child("Your open comments"))
-          .children(open.map((x) => div().text_size(12.5).text_color(c.muted).child(`${x.line ? `Line ${x.line}: ` : ""}${x.text}`))),
+          .child(div().text_size(12).font_semibold().text_color(c.muted).child("Your comments on the plan"))
+          .children(open.filter((x) => !x.line).map((x) => this.commentNote(c, x.text))),
       ))
       .child(
         h_flex()
@@ -454,6 +685,39 @@ export class Work {
           )
           .child(this.button(c, "bh-plan-comment", "Comment", (_e, cx) => this.sendComment(cx))),
       );
+  }
+
+  /** The draft in pieces (a heading, an item, a paragraph…), each one a click away from a comment. */
+  planLines(c, p) {
+    const parts = blocks(p.markdown);
+    const lines = String(p.markdown).split("\n").length;
+    return v_flex()
+      .gap(1)
+      .children(parts.map((b, i) => {
+        const next = parts[i + 1]?.line ?? lines + 1;
+        const notes = commentsOn(p.comments, b.line, next);
+        const on = this.commenting?.kind === "plan" && this.commenting.id === p.id && this.commenting.at === b.line;
+        return v_flex()
+          .flex_none()
+          .child(
+            h_flex()
+              .id(`bh-plan-b-${p.id}-${b.line}`)
+              .px(8)
+              .py(2)
+              .gap(8)
+              .items_start()
+              .rounded(SIZE.nested)
+              .cursor_pointer()
+              .when(on, (el) => el.bg(c.hover))
+              .hover((st) => st.bg(c.hover))
+              .on_click((_e, cx) => this.startInline("plan", p.id, b.line, cx))
+              .child(div().flex_1().min_w(0).text_size(13.5).line_height(`${SIZE.line}px`).child(TextView.markdown(`bh-plan-md-${p.id}-${p.round ?? 0}-${b.line}`, b.text)))
+              .when(notes.length > 0, (el) => el.child(h_flex().flex_none().pt(3).gap(3).items_center().text_size(11.5).text_color(c.accent)
+                .child(svg(ICON("comment")).size(12)).child(String(notes.length)))),
+          )
+          .children(notes.map((x) => this.commentNote(c, x.text)))
+          .when(on, (el) => el.child(this.inlineBox(c)));
+      }));
   }
 
   // Knowledge

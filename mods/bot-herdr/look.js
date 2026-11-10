@@ -18,6 +18,12 @@ export const LIGHT = {
   stop: "#9e3d3a",
   stopHover: "#a8302c",
   danger: "#b91c1c",
+  bubble: "#efede5", // your messages in the chat: a step off the ground, with an edge
+  bubbleEdge: "#dcd8cc",
+  info: "#1d4ed8",
+  success: "#047857",
+  warning: "#b45309",
+  scrim: "#14141380", // behind a picture opened large
 };
 
 export const DARK = {
@@ -38,6 +44,12 @@ export const DARK = {
   stop: "#c45e5a",
   stopHover: "#cf4f4a",
   danger: "#f87171",
+  bubble: "#3a3a37",
+  bubbleEdge: "#51514d",
+  info: "#60a5fa",
+  success: "#34d399",
+  warning: "#fbbf24",
+  scrim: "#000000a6",
 };
 
 /** Sizes in px at zoom 1 (herdr scales them). After the user's radii: outer 12, controls 10, nested 8. */
@@ -54,6 +66,7 @@ export const SIZE = {
   maxRows: 10,
   line: 21, // the text's line height
   filesRow: 40,
+  imagesRow: 80, // attachments with image previews
   tools: 46,
   iconButton: 32,
   chip: 28,

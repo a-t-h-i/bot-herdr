@@ -46,6 +46,16 @@ if (!existsSync(layout) || old || args.has("--force")) {
   cpSync(join(here, "layouts", "bot-herdr.json"), layout);
   console.log(`layout   ${layout}${old ? " (yours from before is kept as bot-herdr.json.old)" : ""}`);
 } else {
+  // Notifications rise out of the chat's composer: the root names our mod as its toast.
+  try {
+    const kept = JSON.parse(readFileSync(layout, "utf8"));
+    if (!kept.toast) {
+      kept.toast = "bot-herdr";
+      writeFileSync(layout, `${JSON.stringify(kept, null, 2)}\n`);
+    }
+  } catch {
+    // not JSON we can read: leave it as it is
+  }
   console.log(`layout   kept your ${layout} (--force replaces it)`);
 }
 

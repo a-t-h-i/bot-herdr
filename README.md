@@ -66,6 +66,7 @@ Each card shows the exact command. A change applies to an agent's next message w
   - **Full access**: anything, without asking. Only for a folder or machine you're happy to let agents loose in.
   - Claude Code and the ACP harnesses follow the list; Codex runs commands in its workspace-write sandbox; pi and Oh My Pi have no permission system and run as they would in a terminal.
   - Headless agents can't change these settings, the team or the harness table themselves: `bh` refuses them there.
+- **Git isolation**: **Off** (the default; tasks work in the project folder), **Branch** (each new task gets a git branch named after it, checked out in the project folder) or **Worktree** (each new task gets its own worktree and branch under `.bot-herdr/worktrees/`, and every agent of the task runs there, apart from your checkout). `bh task new --branch|--worktree|--no-git` decides for one task. If git can't (not a repository, no commit yet), the task says why and runs without.
 
 **Harnesses**: a harness herdr doesn't know can be added by its command; it is written to herdr's `programs.json` and listed everywhere within a minute.
 
@@ -73,13 +74,19 @@ Each card shows the exact command. A change applies to an agent's next message w
 
 ## Chat
 
-Your messages are on the right, with who they went to; agents' replies are on the left under their names, as Markdown. The feed is per space and kept across restarts.
+Your messages are on the right, with who they went to; a long one folds after twelve lines, with **Show more**. Agents' replies are on the left under their names, as Markdown. The feed is per space and kept across restarts.
+
+**Mockups**: a ```` ```mockup ```` (or ```` ```html ````) block in a reply is drawn as a picture by a browser you already have (Chrome, Edge, Chromium or Brave, run headless; `BH_BROWSER` picks one). Click it to open it large, with the reply's other mockups beside it and **Open in browser**. With no browser found, the card says so and opens the page in your browser instead.
+
+**Working**: one agent at a time, under the last message: its role's word ("Planning", "Writing", "Checking"…) shimmers in its colour beside a small motion that acts out the job, then its name and what it is doing. With several at work they take turns every few seconds (click **1 of 3** for the next). The word changes every 30 to 60 seconds.
+
+**Toasts** rise out of the composer's top edge, one at a time, and sink back in. herdr's own notifications (an agent needs you or finished) come the same way while the chat shows (the layout names this mod as its `toast`); on another page they show in herdr's corner, drawn the same.
 
 A headless agent's reply is its own last message of the turn, saved for the chat by its terminal; while it works, the chat shows what it is doing ("Dev: Read src/app.tsx"). An agent run as its CLI replies with `bh reply`, which writes the same file (`<app home>/data/bot-herdr/replies/<its address>.md`). An agent that stops without one, or that waits for you in its terminal, gets a line with **Open terminal**.
 
 In a headless agent's terminal you can type to it too: **Enter** sends, **Esc** stops the turn (so does **/stop** in the chat), `/cli` opens the full CLI on the same conversation, `/new` starts a fresh one, `/exit` quits.
 
-**Questions**: an agent asks with `bh ask` (numbered questions, options with what each means, a recommendation, and HTML mockups for anything you'll see). They show as a card above the composer: pick options, type your own answer, open a mockup in your browser, then **Send answers**. Anything left open is the agent's call.
+**Questions**: an agent asks with `bh ask` (numbered questions, options with what each means, a recommendation, and HTML mockups for anything you'll see). They grow out of the composer's top, one at a time: who asks and about what, **‹ Back**, where you are (**2 of 3**) and **Dismiss**. Click an option to answer and move on, or type your own answer and press **Enter**. Mockups show as a grid of pictures; the corner button opens them large, where **Choose this** (or Enter) picks one. **Esc** puts the questions away behind a bar (**Answer questions · 2 left**) that brings them back. Your answers go back together after the last question.
 
 ## The composer
 
@@ -87,14 +94,14 @@ In a headless agent's terminal you can type to it too: **Enter** sends, **Esc** 
 - A plain message goes to the space's **Orchestrator**, started in a tab of that name on the first message. With the classifier on, a message that clearly belongs to one agent (a styling question to Design) goes there instead, and the chat says so.
 - **@** reaches anyone: the team (started if not running), any running agent, child agents under their parents, `@all`, or `@new-<harness>` for a plain one.
 - **/task** hands the message to the team as a task; **/plan** has the panel plan it first. **/new**, **/settings**, **/all**, **/stop**, **/peek** and **/team** (send the brief again) work as before; any other `/command` goes to the agent as typed.
-- Attach files by dropping them, "Attach document…" or "Attach folder…".
+- Attach files by dropping them, "Attach document…" or "Attach folder…". Paste an image (or files copied in your file manager) to attach it: images show a preview on the composer that opens large on a click.
 
 Each agent is briefed once: a headless one as its system prompt (Claude Code, pi) or in front of its first turn, one run as its CLI in front of its first message from here (a terminal label, `bot-herdr.briefed3`, remembers). The brief has its role, the team and how to start them as child agents, the bh tool, the project's knowledge and how to reply.
 
 ## Tasks, Plans and Knowledge
 
-- **Tasks**: a board of Backlog, In progress and Completed. A task opens to its steps, with who did each and for how long. **Resume** hands it back to the Orchestrator; **Archive** hides it.
-- **Plans**: the panel's drafts. Read one, comment on it (the Orchestrator revises the draft), **Start task** once it is ready.
+- **Tasks**: a list (under way, then finished; **Archived** switches to the archived ones) beside the chosen task: its steps with who did each and for how long, its branch or worktree, and your comments. Click a step to comment on it; the comment goes to the Orchestrator and stays under the step. **Resume** hands the task back to the Orchestrator; **Archive** hides it.
+- **Plans**: the panel's drafts. Click any line to comment on it, or comment on the whole plan (the Orchestrator revises the draft), **Start task** once it is ready.
 - **Knowledge**: what each agent is told about the project. The Orchestrator adds what agents learn; you can edit and save it.
 
 Each page shows the project of the space you are looking at.
@@ -103,13 +110,14 @@ Each page shows the project of the space you are looking at.
 
 Everything above lives in one command line, so every harness can use it: `node <app home>/mods/bot-herdr/engine/bh.mjs` (the briefs call it `bh`). `bh help` lists it all:
 
-- `bh task new|list|show|steps|step|status|archive`, `bh board post|read`: tasks, their steps (with active time) and a board for contracts, decisions, blockers and questions between agents.
+- `bh task new|list|show|steps|step|status|comment|resolve|archive`, `bh board post|read`: tasks, their steps (with active time), the person's comments, and a board for contracts, decisions, blockers and questions between agents.
 - `bh plan new|show|write|comment|task`: the planning panel's drafts.
 - `bh knowledge [add|note|write|search]`: one file per agent.
 - `bh scripts [run|save|pick]`, `bh check`: shared scripts (repo map, symbol search, tests for what changed, failure digests, …) and lint, typecheck and tests for the change.
 - `bh spawn <agent> --name <n> --task <id> --step <n> "<brief>"`: starts a team member as a child agent with `hc run`, with its harness, model, effort (`--effort auto` lets the classifier lower it) and role. A headless harness starts as `bh agent`, so `hc wait --children` sees each of its turns end.
 - `bh agent <agent> [--mode lead|child] [-- "<first message>"]`: runs an agent headless in the current terminal (what the chat and `bh spawn` start).
 - `bh ask`, `bh reply`, `bh classify route|triage|effort|qa-risk`, `bh brief`, `bh sync`, `bh access`.
+- `bh mockup <file.html>`, `bh clip`, `bh preview <image>`: pictures for the chat (a mockup drawn by a headless browser, the clipboard's image, a copy herdr can show).
 
 A project's tasks, plans, knowledge and scripts are kept in its `.bot-herdr/` folder. Your own data (the team, the classifier settings, replies and questions) is in `<app home>/data/bot-herdr/`.
 
@@ -128,6 +136,11 @@ A project's tasks, plans, knowledge and scripts are kept in its `.bot-herdr/` fo
 | `mods/bot-herdr/engine/` | the bh tool: `lib/`, `classifier/`, `roles/`, `scripts/` (tested) |
 | `mods/bot-herdr/engine/lib/runner.mjs`, `agent.mjs` | headless turns for each harness, and the agent terminal (tested against fake harnesses) |
 | `mods/bot-herdr/pick.js` | the dropdown list Settings opens as a popup |
+| `mods/bot-herdr/lightbox.js`, `media.js` | a picture opened large; mockups and images for the chat |
+| `mods/bot-herdr/toast.js`, `toasts.js` | herdr's notifications; the toast queue (tested) |
+| `mods/bot-herdr/indicators.js`, `working.js` | the working words and their motions (`icons/fx/`); which one shows (tested) |
+| `mods/bot-herdr/drawer.js`, `doc.js` | the questions drawer's steps; a plan in pieces to comment on (tested) |
+| `mods/bot-herdr/engine/lib/workspace.mjs`, `media.mjs` | git isolation for tasks; drawing mockups and the clipboard (tested) |
 | `mods/bot-herdr/look.js`, `icons/` | colours, sizes, motion; Lucide icons (ISC licence) and the fillet shapes |
 | `layouts/bot-herdr.json`, `themes/` | herdr's main layout with the switch and the pages; the Claude-style palette |
 | `programs.json` | harnesses the installer adds to herdr's table |
@@ -135,6 +148,6 @@ A project's tasks, plans, knowledge and scripts are kept in its `.bot-herdr/` fo
 
 ## Not checked yet
 
-This was written without a running herdr, so `herdr-app check` and a first look in the app are the real test. Most likely to need a tweak: the effort slider's dragging, the model list's look, and the question card's height in a short window. Agents on another machine write replies and questions there, so those don't show here yet; open their terminal.
+This was written without a running herdr, so `herdr-app check` and a first look in the app are the real test. Most likely to need a tweak: the effort slider's dragging, the model list's look, the questions drawer's height (worked out from the words), the toast's spring, and the working motions' exact positions. Agents on another machine write replies and questions there, so those don't show here yet; open their terminal.
 
 Headless mode is tested against fake harnesses that print each one's JSON. Real ones may differ: the ACP harnesses' model setting, Oh My Pi (assumed to match pi), and Windows' quoting of long tool lists are the first places to look if an agent errors on its first message. Its terminal shows the harness's own error. Codex's sandbox may also keep it from reaching `hc` (child agents, reports to its parent) in standard access.

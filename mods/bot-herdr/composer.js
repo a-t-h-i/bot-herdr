@@ -16,8 +16,12 @@
 // Any other agent is its harness's own CLI, told once how to start child agents and where to
 // write its reply (brief.js): in front of its first message from here, or of the task it is
 // started with. `/team` repeats it.
+//
+// An agent's questions (bh ask) grow out of the same top edge, one at a time; put away with Esc,
+// they shrink to a bar that brings them back. Toasts rise out of it too, one at a time, and sink
+// back in when they go.
 
-import { div, svg } from "gpui-kit";
+import { div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextareaState, Textarea } from "gpui-base";
 import {
   agents, terminals, spaces, focused, settings, run, hc, exec, knownAgents, pickFolder, home,
@@ -31,6 +35,12 @@ import {
 import { ROSTER_KEY, HEADLESS_KEY, roster, argvOf, runnable, runningAs, slug, headless } from "./roster.js";
 import { BRIEFED, teamBrief, orchestratorBrief, briefed } from "./brief.js";
 import { bh, bhPath, enc, projectDir, ROUTING_KEY } from "./bh.js";
+import { queue, push as pushToast, dismiss as dismissToast, stayFor, toastSize, noteText, TOAST_KEY } from "./toasts.js";
+import { TOAST_ICONS, toneOf } from "./toast.js";
+import * as Drawer from "./drawer.js";
+import { alpha } from "./working.js";
+import { mockupFile, fromClipboard, previews, isImage, openInBrowser } from "./media.js";
+import { openLightbox, CHOSEN } from "./lightbox.js";
 
 /** A terminal running `bh agent` (an agent run headless) carries this label. */
 const HEADLESS_LABEL = "bot-herdr.headless";
@@ -60,7 +70,17 @@ export class Composer {
     this.ready = false; // a pane's first frame is drawn closed, then opens, so it animates
     this.files = [];
     this.known = [];
-    this.notice = null;
+    this.toasts = queue(); // toasts waiting their turn (toasts.js)
+    this.toast = null; // the one on screen: { item, phase: "start" | "up" | "out", at, n }
+    this.toastN = 0;
+    this.noteAt = shared(TOAST_KEY)?.at ?? 0; // the last herdr notification taken in
+    this.questions = []; // agents' open questions, oldest first (the chat reads them)
+    this.walk = null; // the questions being answered: drawer.js state
+    this.putAway = new Set(); // question sets Esc put away: a bar brings them back
+    this.dismissing = null; // the set whose Dismiss asks "Dismiss it?"
+    this.chosenAt = shared(CHOSEN)?.at ?? 0; // the last "Choose this" from a picture opened large
+    this.shownPane = null; // the pane drawn last, so a new one opens with its animation
+    this.pageHeight = 700;
     this.sending = false;
     this.width = SIZE.maxWidth;
     this.justBriefed = new Set(); // briefed this session; the label can take a moment to show
@@ -82,7 +102,9 @@ export class Composer {
       if (this.menuOpen()) this.pick(this.rows()[this.at], cx);
       else this.send(cx);
     });
-    this.input.on("paste_other", (_e, cx) => this.say("Images go in as files: drop them on the composer.", cx));
+    // A paste with no text: the clipboard's image (or files copied in the file manager) goes on
+    // as attachments, images with a preview.
+    this.input.on("paste_other", (_e, cx) => this.pasteOther(cx));
 
     // Keys while the text box has the keyboard ("A > Input": the text box inside our element).
     // Later bindings win over the text box's own at the same depth, and the menu ones are added
@@ -319,19 +341,15 @@ export class Composer {
       this.offset = 0;
     }
     this.lastQuery = trigger?.query;
-    this.notice = null;
     cx.notify();
   }
 
-  // A pane's first frame is drawn small and clear, then opens, so it grows into place.
+  // A pane's first frame is drawn small and clear, then opens, so it grows into place (render
+  // sees the pane change).
   open(pane, cx) {
     if (this.pane === pane) return;
     this.pane = pane;
-    this.ready = false;
-    cx.timer.after(16, (cx) => {
-      this.ready = true;
-      cx.notify();
-    });
+    cx.notify();
   }
 
   toggle(pane, cx) {
@@ -342,6 +360,12 @@ export class Composer {
   }
 
   close(cx) {
+    // Esc on the questions puts them away; the bar brings them back.
+    if (!this.pane && this.paneNow() === "ask") {
+      this.putAway.add(this.asking().id);
+      this.dismissing = null;
+      return cx.notify();
+    }
     if (this.pane === "suggest") this.dismissed = this.text;
     this.pane = null;
     this.mode = null;
@@ -385,28 +409,100 @@ export class Composer {
     cx.notify();
   }
 
-  say(text, cx, level = "info") {
-    this.notice = { text, level };
-    cx.notify();
-    const shown = this.notice;
-    cx.timer.after(5000, (cx) => {
-      if (this.notice === shown) {
-        this.notice = null;
-        cx.notify();
+  // ── Toasts ─────────────────────────────────────────────────────────────────────────────────
+
+  /** A toast over the composer. `action`: { label, run } (a button on it). */
+  say(text, cx, level = "info", action = null) {
+    pushToast(this.toasts, level, text, { action });
+    this.pumpToast(cx);
+  }
+
+  /** Brings up the next toast when none shows; with more waiting, the one on screen goes sooner. */
+  pumpToast(cx) {
+    const shown = this.toast;
+    if (shown) {
+      if (this.toasts.waiting.length && shown.phase === "up") {
+        const wait = Math.max(1, shown.at + stayFor(this.toasts) - Date.now());
+        cx.timer.after(wait, (cx) => this.dropToast(shown.item.id, cx));
       }
+      cx.notify();
+      return;
+    }
+    const item = this.toasts.current;
+    if (!item) return;
+    const t = { item, phase: "start", at: Date.now(), n: ++this.toastN };
+    this.toast = t;
+    cx.notify();
+    // Its first frame is a low swell in the composer's top edge; then it springs up.
+    cx.timer.after(16, (cx) => {
+      if (this.toast !== t) return;
+      t.phase = "up";
+      t.at = Date.now();
+      cx.notify();
+      cx.timer.after(stayFor(this.toasts), (cx) => this.dropToast(item.id, cx));
     });
+  }
+
+  /** The toast sinks back into the composer, then the next comes up. */
+  dropToast(id, cx) {
+    const t = this.toast;
+    if (!t || t.item.id !== id || t.phase === "out") return;
+    t.phase = "out";
+    cx.notify();
+    cx.timer.after(380, (cx) => {
+      if (this.toast !== t) return;
+      this.toast = null;
+      dismissToast(this.toasts, id);
+      this.pumpToast(cx);
+      cx.notify();
+    });
+  }
+
+  /** herdr's notifications, handed over by toast.js while this page shows. */
+  takeNotes(cx) {
+    const note = shared(TOAST_KEY);
+    if (!note?.at || note.at <= this.noteAt) return;
+    this.noteAt = note.at;
+    const action = note.action?.name ? { label: "Show", run: () => run(note.action.name, note.action.args ?? {}) } : null;
+    cx.timer.after(1, (cx) => this.say(noteText(note), cx, note.level ?? "info", action));
   }
 
   // ── Files ──────────────────────────────────────────────────────────────────────────────────
 
-  addFiles(paths, cx) {
+  /** Attaches files; images get a preview herdr can show (`image`, a path under its home). */
+  addFiles(paths, cx, shown = {}) {
+    const fresh = [];
     for (const path of paths) {
       if (!path || this.files.some((f) => f.path === path)) continue;
-      this.files.push({ path, name: path.split(/[\\/]/).filter(Boolean).pop() ?? path });
+      const file = { path, name: path.split(/[\\/]/).filter(Boolean).pop() ?? path, image: shown[path] ?? null };
+      this.files.push(file);
+      if (isImage(path) && !file.image) fresh.push(path);
     }
     this.pane = null;
     this.input.focus();
     cx.notify();
+    if (!fresh.length) return;
+    cx.spawn(async (cx) => {
+      for (const got of await previews(fresh)) {
+        const f = this.files.find((x) => x.path === got.file);
+        if (f && got.image) f.image = got.image;
+      }
+      cx.notify();
+    });
+  }
+
+  pasteOther(cx) {
+    cx.spawn(async (cx) => {
+      const got = await fromClipboard();
+      if (!got.length) return this.say("The clipboard holds no image or files to attach.", cx);
+      this.addFiles(got.map((x) => x.file), cx, Object.fromEntries(got.filter((x) => x.image).map((x) => [x.file, x.image])));
+    });
+  }
+
+  /** The attached images, opened large from the one clicked. */
+  openImages(path) {
+    const shown = this.files.filter((f) => f.image);
+    openLightbox({ items: shown.map((f) => ({ image: f.image, title: f.name, note: "Attached to your message" })), at: Math.max(0, shown.findIndex((f) => f.path === path)) });
   }
 
   pickFiles(cx) {
@@ -459,6 +555,17 @@ export class Composer {
 
   send(cx) {
     if (this.sending) return;
+    // With a question up, what you type answers it.
+    if (!this.pane && this.paneNow() === "ask") {
+      const q = this.asking();
+      const typed = this.input.value().trim();
+      const at = Drawer.current(q, this.walking(q));
+      const picks = this.walk.answers[at.step].picks;
+      if (!typed && !(at.question?.multi && picks.length)) return;
+      this.input.set_value("");
+      this.text = "";
+      return this.answerAsk(q, { text: typed }, cx);
+    }
     const content = this.input.content();
     const all = agents();
     const target = this.target();
@@ -607,17 +714,101 @@ export class Composer {
     });
   }
 
+  // ── Questions ──────────────────────────────────────────────────────────────────────────────
+
+  /** The question set up now (the oldest), or null. */
+  asking() {
+    return this.questions[0] ?? null;
+  }
+
+  /** Where you are in that set: kept while it stays the same set. */
+  walking(q) {
+    if (!this.walk || this.walk.id !== q.id) {
+      this.walk = Drawer.start(q);
+      this.dismissing = null;
+    }
+    return this.walk;
+  }
+
+  /** The pane showing: the one you opened, else the questions (or their bar when put away). */
+  paneNow() {
+    if (this.pane) return this.pane;
+    const q = this.asking();
+    if (!q) return null;
+    return this.putAway.has(q.id) ? "bar" : "ask";
+  }
+
+  /** Answers the question up now and moves on; after the last, the answers go back together. */
+  answerAsk(q, given, cx) {
+    const walk = this.walking(q);
+    const done = Drawer.answer(q, walk, given);
+    this.dismissing = null;
+    if (done) {
+      this.walk = null;
+      this.putAway.delete(q.id);
+      this.questions = this.questions.filter((x) => x.id !== q.id);
+      this.hooks.answered?.(q, Drawer.payload(walk), cx);
+    }
+    this.input.focus();
+    cx.notify();
+  }
+
+  /** Dismiss: the agent gets no answers and makes the calls itself. */
+  dismissAsk(q, cx) {
+    const walk = Drawer.start(q);
+    this.walk = null;
+    this.dismissing = null;
+    this.putAway.delete(q.id);
+    this.questions = this.questions.filter((x) => x.id !== q.id);
+    this.hooks.answered?.(q, Drawer.payload(walk), cx, { dismissed: true });
+    cx.notify();
+  }
+
+  /** A "Choose this" from a question's mockups opened large. */
+  takeChoice(cx) {
+    const got = shared(CHOSEN);
+    if (!got?.at || got.at <= this.chosenAt) return;
+    this.chosenAt = got.at;
+    const map = this.choosing;
+    const q = this.asking();
+    if (!map || got.key !== map.key || !q) return;
+    const label = map.labels[got.index];
+    if (label !== undefined) cx.timer.after(1, (cx) => this.answerAsk(q, { picks: [label] }, cx));
+  }
+
   // ── Drawing ────────────────────────────────────────────────────────────────────────────────
 
   /** The box's height at a width: attachments, the text's rows, the tools row. */
   height(width) {
-    return (this.files.length ? SIZE.filesRow : 0) + SIZE.textTop + rowsFor(this.text, width - SIZE.textX * 2 - 2) * SIZE.line + SIZE.tools + 2;
+    return this.filesH() + SIZE.textTop + rowsFor(this.text, width - SIZE.textX * 2 - 2) * SIZE.line + SIZE.tools + 2;
+  }
+
+  /** The attachments row: taller when it shows images. */
+  filesH() {
+    if (!this.files.length) return 0;
+    return this.files.some((f) => f.image) ? SIZE.imagesRow : SIZE.filesRow;
   }
 
   /** The bubble, for the foot of a page `pageWidth` wide. Its pane grows upward from it. */
-  render(cx, pageWidth) {
+  render(cx, pageWidth, pageHeight = this.pageHeight) {
     this.adopt();
+    this.cx = cx; // mockups start drawing while the questions are drawn
     this.width = pageWidth;
+    this.pageHeight = pageHeight;
+    this.takeNotes(cx);
+    this.takeChoice(cx);
+    // A pane that just changed is drawn closed for one frame, then opens, so it grows into place.
+    const now = this.paneNow();
+    if (now !== this.shownPane) {
+      this.shownPane = now;
+      this.ready = false;
+      if (now) {
+        cx.timer.after(16, (cx) => {
+          this.ready = true;
+          cx.notify();
+        });
+      }
+    }
     const c = settings().dark ? DARK : LIGHT;
     const width = Math.max(320, Math.min(SIZE.maxWidth, pageWidth - SIZE.gutter * 2));
     return this.bubble(c, width);
@@ -627,7 +818,7 @@ export class Composer {
     // One element carries all our key contexts (a context is a set of names).
     const contexts = ["BotHerdr"];
     if (this.menuOpen()) contexts.push("BotHerdrMenu");
-    if (this.pane) contexts.push("BotHerdrPane");
+    if (this.pane || this.paneNow() === "ask") contexts.push("BotHerdrPane");
     const menu = this.paneView(c, width);
     return v_flex()
       .id("bc")
@@ -641,7 +832,9 @@ export class Composer {
       .items_center()
       .w(width)
       .text_color(c.ink)
-      // Painted first, so the pane above (painted after) covers the box's top edge where they join.
+      // The toast first: the box and the pane, painted after, cover the part still inside them.
+      .when(Boolean(this.toast), (el) => el.child(this.toastView(c, width)))
+      // Painted before the pane, so the pane covers the box's top edge where they join.
       .child(this.box(c, width, Boolean(menu)))
       .when(Boolean(menu), (el) => el.child(menu));
   }
@@ -651,11 +844,11 @@ export class Composer {
     const target = this.target();
     const busy = target?.status === "working";
     const empty = !this.text.trim() && !this.files.length;
-    const placeholder = busy ? `${this.leadEntry().name} is working. Enter steers it…` : PLACEHOLDER;
+    const placeholder = !this.pane && this.paneNow() === "ask" ? "Or type your own reply…" : busy ? `${this.leadEntry().name} is working. Enter steers it…` : PLACEHOLDER;
     // Every height here is stated. The text box stretches to fill its parent, and a floating
     // surface may be offered the whole window, so nothing is left to size itself.
     const textH = rowsFor(this.text, width - SIZE.textX * 2 - 2) * SIZE.line;
-    const filesH = this.files.length ? SIZE.filesRow : 0;
+    const filesH = this.filesH();
     return v_flex()
       .id("bc-box")
       .relative()
@@ -721,16 +914,51 @@ export class Composer {
   }
 
   filesRow(c) {
+    const pics = this.files.some((f) => f.image);
+    const remove = (i, id) => div()
+      .id(id)
+      .size(20)
+      .rounded(6)
+      .flex()
+      .items_center()
+      .justify_center()
+      .text_color(c.muted)
+      .cursor_pointer()
+      .hover((s) => s.bg(c.well).text_color(c.ink))
+      .on_click((_e, cx) => {
+        cx.stop_propagation();
+        this.files.splice(i, 1);
+        cx.notify();
+      })
+      .child(svg(ICON("x")).size(12));
     return h_flex()
       .id("bc-files")
       .flex_none()
-      .h(SIZE.filesRow)
+      .h(pics ? SIZE.imagesRow : SIZE.filesRow)
       .overflow_hidden()
       .gap(6)
       .px(12)
       .pt(12)
-      .children(this.files.map((f, i) =>
-        h_flex()
+      .items_start()
+      .children(this.files.map((f, i) => f.image
+        // An image: its preview, opened large on a click.
+        ? div()
+          .id(`bc-file-${i}`)
+          .relative()
+          .flex_none()
+          .w(88)
+          .h(64)
+          .rounded(SIZE.nested)
+          .bg(c.well)
+          .border_1()
+          .border_color(c.edge)
+          .overflow_hidden()
+          .cursor_pointer()
+          .hover((s) => s.border_color(c.faint))
+          .on_click(() => this.openImages(f.path))
+          .child(image(f.image).w(86).h(62))
+          .child(div().absolute().top(3).right(3).rounded(6).bg(c.fill).child(remove(i, `bc-file-x-${i}`)))
+        : h_flex()
           .id(`bc-file-${i}`)
           .h(28)
           .pl(8)
@@ -744,23 +972,85 @@ export class Composer {
           .text_size(12)
           .child(svg(ICON("file")).size(14).text_color(c.muted))
           .child(div().max_w(220).truncate().child(f.name))
-          .child(
-            div()
-              .id(`bc-file-x-${i}`)
-              .size(20)
-              .rounded(6)
-              .flex()
-              .items_center()
-              .justify_center()
-              .text_color(c.muted)
-              .cursor_pointer()
-              .hover((s) => s.bg(c.well).text_color(c.ink))
-              .on_click((_e, cx) => {
-                this.files.splice(i, 1);
-                cx.notify();
-              })
-              .child(svg(ICON("x")).size(12)),
-          )));
+          .child(remove(i, `bc-file-x-${i}`))));
+  }
+
+  /**
+   * The toast: one more bubble of the composer's surface. It swells out of the top edge, springs
+   * up to sit a little above it, and when it goes it sinks back in. The box and any pane are
+   * painted over it, so while it is low it is still inside them.
+   */
+  toastView(c, width) {
+    const t = this.toast;
+    const item = t.item;
+    const GAP = 12;
+    const { w: W, h: H } = toastSize(item, Math.min(512, width - 32), textWidth);
+    const slot = GAP + H;
+    const up = t.phase === "up";
+    const w = up ? W : Math.round(W * 0.4);
+    const h = up ? H : Math.round(H * 0.45);
+    const top = up ? 0 : Math.round(GAP + H * 0.85);
+    // Up it springs (rising a beat ahead of filling out); down it sinks, gathering speed.
+    const move = (el, prop, spring) => (t.phase === "out" ? el.transition(prop, { duration: 300, delay: 60, easing: "ease-in" }) : el.spring(prop, spring));
+    const rise = { response: 420, damping: 0.82 };
+    let shape = div()
+      .id(`bc-toast-shape-${t.n}`)
+      .absolute()
+      .top(top)
+      .left(Math.round((width - w) / 2))
+      .w(w)
+      .h(h)
+      .bg(c.fill)
+      .border_1()
+      .border_color(c.edge)
+      .rounded(SIZE.radius)
+      .shadow_md()
+      .child(div().absolute().top(0).left(SIZE.radius).right(SIZE.radius).h(1).bg(c.rim));
+    shape = move(shape, "top", rise);
+    shape = move(shape, "height", { response: 360, damping: 0.66 });
+    shape = move(shape, "width", { response: 440, damping: 0.7 });
+    shape = move(shape, "left", { response: 440, damping: 0.7 });
+    const tone = toneOf(c, item.kind);
+    let body = h_flex()
+      .id(`bc-toast-body-${t.n}`)
+      .absolute()
+      .top(top)
+      .left(Math.round((width - W) / 2))
+      .w(W)
+      .h(H)
+      .px(14)
+      .gap(10)
+      .items_center()
+      .opacity(up ? 1 : 0)
+      .transition("opacity", up ? { duration: 200, delay: 240, easing: "ease-out" } : { duration: 90, easing: "ease-in" })
+      .text_size(13.5)
+      .line_height("19px")
+      .text_color(c.ink)
+      .child(svg(ICON(TOAST_ICONS[item.kind] ?? "info")).flex_none().size(16).text_color(tone))
+      .child(div().flex_1().min_w(0).child(item.message))
+      .when(Boolean(item.action), (el) => el.child(
+        div()
+          .id(`bc-toast-act-${t.n}`)
+          .flex_none()
+          .h(28)
+          .px(10)
+          .flex()
+          .items_center()
+          .rounded(SIZE.nested)
+          .border_1()
+          .border_color(c.edge)
+          .text_size(12)
+          .font_medium()
+          .cursor_pointer()
+          .hover((s) => s.bg(c.hover))
+          .on_click((_e, cx) => {
+            item.action.run?.(cx);
+            this.dropToast(item.id, cx);
+          })
+          .child(item.action.label),
+      ));
+    body = move(body, "top", rise);
+    return div().id("bc-toast").absolute().left(0).right(0).top(-slot).h(slot).child(shape).child(body);
   }
 
   tools(c, target, busy, empty) {
@@ -769,7 +1059,9 @@ export class Composer {
       ? [kbd("↑"), kbd("↓"), "choose", kbd("↵"), "insert"]
       : this.pane
         ? [kbd("Esc"), "close"]
-        : [kbd("Shift"), kbd("↵"), "new line"];
+        : this.paneNow() === "ask"
+          ? [kbd("↵"), "answer", kbd("Esc"), "put away"]
+          : [kbd("Shift"), kbd("↵"), "new line"];
     const space = this.space();
     const canSend = !empty && !this.sending;
     return h_flex()
@@ -800,11 +1092,9 @@ export class Composer {
           .child(svg(ICON("chevron-down")).size(12).text_color(c.faint)),
       )
       .child(div().flex_1())
-      .when(Boolean(this.notice), (el) =>
-        el.child(div().max_w(320).truncate().text_size(12).text_color(this.notice.level === "error" ? c.danger : c.muted).child(this.notice.text)))
-      .when(!this.notice && Boolean(target), (el) =>
+      .when(Boolean(target), (el) =>
         el.child(div().max_w(220).truncate().text_size(12).text_color(c.faint).child(`to ${this.leadEntry().name}`)))
-      .when(!this.notice && !target && Boolean(this.lead()), (el) =>
+      .when(!target && Boolean(this.lead()), (el) =>
         el.child(div().max_w(220).truncate().text_size(12).text_color(c.faint).child(`starts ${this.leadEntry().name} · ${this.lead().name}`)))
       .when(this.width >= 560, (el) => el.child(h_flex().flex_none().gap(4).items_center().text_size(11.5).text_color(c.muted).children(hints)))
       .when(busy, (el) =>
@@ -859,10 +1149,19 @@ export class Composer {
   // ── The pane that grows out of the top ─────────────────────────────────────────────────────
 
   paneView(c, width) {
-    if (!this.pane) return null;
+    const kind = this.paneNow();
+    if (!kind) return null;
     let size;
     let body;
-    if (this.pane === "suggest") {
+    let pad = { x: SIZE.menuPad, top: 8, bottom: SIZE.menuPad };
+    if (kind === "ask" || kind === "bar") {
+      const w = width - SIZE.fillet * 2 - 16;
+      const got = kind === "ask" ? this.askBody(c, this.asking(), w - 26) : this.barBody(c, this.asking());
+      size = { w, h: got.h + (kind === "ask" ? 24 : 12) };
+      body = got.body;
+      // The head stays in view if a guess at a height falls short: the foot is cut, not the top.
+      if (kind === "ask") pad = { x: 12, top: 12, bottom: 12, top_first: true };
+    } else if (kind === "suggest") {
       const rows = this.rows();
       if (!rows.length) return null;
       const shown = rows.slice(this.offset, this.offset + SIZE.rowsShown);
@@ -879,7 +1178,7 @@ export class Composer {
           cx.notify();
         })
         .children(shown.map((r, i) => this.row(c, r, this.offset + i, shown.length - 1 - i)));
-    } else if (this.pane === "attach") {
+    } else if (kind === "attach") {
       size = { w: 260, h: 12 + 3 * SIZE.row };
       body = v_flex()
         .w_full()
@@ -947,10 +1246,10 @@ export class Composer {
       .border_color(c.edge)
       .rounded_t(SIZE.radius)
       .overflow_hidden()
-      .px(SIZE.menuPad)
-      .pt(8)
-      .pb(SIZE.menuPad)
-      .justify_end()
+      .px(pad.x)
+      .pt(pad.top)
+      .pb(pad.bottom)
+      .when(!pad.top_first, (el) => el.justify_end())
       .child(div().absolute().top(0).left(SIZE.radius).right(SIZE.radius).h(1).bg(c.rim))
       .child(body);
     // The joins: a concave curve each side, so the pane and the box read as one shape. Each is
@@ -981,6 +1280,315 @@ export class Composer {
       .child(h_flex().absolute().top(0).bottom(0).left(F).right(F).items_end().child(pane))
       .child(fillet("left"))
       .child(fillet("right"));
+  }
+
+  /** Who asked, in their colour: the colour reads on the pane. */
+  askerTone(c, q) {
+    const tile = agents().find((a) => a.address === q.from)?.program?.tile ?? terminals().find((t) => t.address === q.from)?.program?.tile ?? null;
+    return tile ? readable(c, tile, c.fill) : c.accent;
+  }
+
+  /**
+   * The question up now: who asks and about what, Back, where it is in the set and Dismiss; the
+   * question; its options as rows (or a grid of mockups), each answering it with a click. Every
+   * height is worked out here, so the pane can grow to fit. Returns { h, body }.
+   */
+  askBody(c, q, inner) {
+    const walk = this.walking(q);
+    const at = Drawer.current(q, walk);
+    const x = at.question ?? { text: "", options: [] };
+    const who = q.fromName ?? this.nameOf(q.from);
+    const tone = this.askerTone(c, q);
+    const picks = walk.answers[at.step]?.picks ?? [];
+    const rowsOf = (text, size, w) => Math.max(1, Math.ceil(textWidth(String(text ?? ""), size) / Math.max(40, w)));
+    const glyph = (n, size = 20) => div()
+      .flex_none()
+      .size(size)
+      .flex()
+      .items_center()
+      .justify_center()
+      .rounded(6)
+      .bg(alpha(tone, 0.14))
+      .border_1()
+      .border_color(alpha(tone, 0.38))
+      .text_size(11)
+      .font_semibold()
+      .text_color(tone)
+      .child(String(n));
+    const link = (id, label, onClick, color = c.muted) => div()
+      .id(id)
+      .flex_none()
+      .h(22)
+      .px(7)
+      .flex()
+      .items_center()
+      .rounded(6)
+      .text_size(12)
+      .text_color(color)
+      .cursor_pointer()
+      .hover((s) => s.bg(c.hover).text_color(c.ink))
+      .on_click(onClick)
+      .child(label);
+
+    // The head row.
+    const asking = this.dismissing === q.id;
+    const head = h_flex()
+      .flex_none()
+      .h(24)
+      .gap(8)
+      .items_center()
+      .child(div().flex_none().text_size(12.5).font_semibold().text_color(tone).child(who))
+      .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(c.muted).child(q.title && q.title !== "Questions" ? q.title : "has a question"))
+      .when(at.step > 0 && !asking, (el) => el.child(link("bc-ask-back", "‹ Back", (_e, cx) => {
+        Drawer.back(walk);
+        cx.notify();
+      })))
+      .when(at.count > 1 && !asking, (el) => el.child(div().flex_none().text_size(12).text_color(c.faint).child(`${at.step + 1} of ${at.count}`)))
+      .when(!asking, (el) => el.child(link("bc-ask-dismiss", "Dismiss", (_e, cx) => {
+        this.dismissing = q.id;
+        cx.notify();
+      })))
+      .when(asking, (el) => el
+        .child(div().flex_none().text_size(12).text_color(c.ink).child("Dismiss it? The agent decides."))
+        .child(link("bc-ask-yes", "Dismiss", (_e, cx) => this.dismissAsk(q, cx), c.danger))
+        .child(link("bc-ask-no", "Keep", (_e, cx) => {
+          this.dismissing = null;
+          cx.notify();
+        })));
+    let h = 24 + 8;
+
+    // The intro (first question only) and the question.
+    const intro = at.step === 0 && q.intro ? String(q.intro).trim() : "";
+    const introRows = intro ? Math.min(4, rowsOf(intro, 13, inner)) : 0;
+    if (intro) h += introRows * 19 + 6;
+    const qRows = rowsOf(x.text, 15.5, inner);
+    h += qRows * 22 + 12;
+
+    const options = x.options ?? [];
+    const multi = Boolean(x.multi);
+    let list;
+    if (Drawer.hasMockups(x)) {
+      // A grid of mockups: two across for two or four, else three.
+      const cols = Drawer.gridCols(options.length);
+      const gap = 10;
+      const tileW = Math.floor((inner - gap * (cols - 1)) / cols);
+      const thumbH = Math.round((tileW * 11) / 16);
+      const drawn = options.map((o) => (o.mockupFile ? mockupFile(o.mockupFile, this.cx) : null));
+      const ready = options.map((o, i) => ({ o, i, d: drawn[i] })).filter((y) => y.d?.state === "ready");
+      const key = `ask:${q.id}:${at.step}`;
+      const open = (i) => {
+        this.choosing = { key, labels: ready.map((y) => y.o.label) };
+        openLightbox({
+          items: ready.map((y) => ({ image: y.d.image, title: y.o.label, note: `${who} · ${x.text}`, html: y.o.mockupFile, glyph: y.i + 1, tone })),
+          at: Math.max(0, ready.findIndex((y) => y.i === i)),
+          choose: key,
+        });
+      };
+      const rows = [];
+      for (let r = 0; r < options.length; r += cols) rows.push(options.slice(r, r + cols).map((o, k) => ({ o, i: r + k })));
+      let gridH = 0;
+      const rowEls = rows.map((row, ri) => {
+        const rowH = Math.max(...row.map(({ o }) => thumbH + 6 + 20 + (o.meaning ? 2 + Math.min(3, rowsOf(o.meaning, 12.5, tileW)) * 17 : 0)));
+        gridH += rowH + (ri ? gap : 0);
+        return h_flex()
+          .flex_none()
+          .h(rowH)
+          .gap(gap)
+          .items_start()
+          .children(row.map(({ o, i }) => {
+            const d = drawn[i];
+            const on = picks.includes(o.label);
+            return v_flex()
+              .id(`bc-ask-tile-${i}`)
+              .flex_none()
+              .w(tileW)
+              .gap(6)
+              .cursor_pointer()
+              .opacity(this.ready ? 1 : 0)
+              .transition("opacity", { ...MOTION.row, delay: i * MOTION.rowStagger })
+              .on_click((_e, cx) => (multi ? this.toggleAsk(q, o.label, cx) : this.answerAsk(q, { picks: [o.label] }, cx)))
+              .child(
+                div()
+                  .relative()
+                  .flex_none()
+                  .w(tileW)
+                  .h(thumbH)
+                  .rounded(SIZE.control)
+                  .bg(c.well)
+                  .border_1()
+                  .border_color(on ? tone : c.edge)
+                  .overflow_hidden()
+                  .flex()
+                  .items_center()
+                  .justify_center()
+                  .when(d?.state === "ready", (el) => el.child(image(d.image).w(tileW - 2).h(thumbH - 2)))
+                  .when(d?.state === "drawing", (el) => el.child(div().text_size(12).text_color(c.faint).child("Drawing…")))
+                  .when(d?.state === "failed" || !d, (el) => el.child(
+                    v_flex().items_center().gap(4).px(10)
+                      .child(div().text_size(12).text_color(c.muted).child("Couldn't draw it here"))
+                      .when(Boolean(o.mockupFile), (col) => col.child(link(`bc-ask-open-${i}`, "Open in browser", (_e, cx) => {
+                        cx.stop_propagation();
+                        openInBrowser(o.mockupFile, cx);
+                      }))),
+                  ))
+                  .when(d?.state === "ready", (el) => el.child(
+                    div()
+                      .id(`bc-ask-zoom-${i}`)
+                      .absolute()
+                      .top(6)
+                      .right(6)
+                      .size(22)
+                      .flex()
+                      .items_center()
+                      .justify_center()
+                      .rounded(6)
+                      .bg(c.fill)
+                      .border_1()
+                      .border_color(c.edge)
+                      .text_color(c.muted)
+                      .cursor_pointer()
+                      .hover((s) => s.text_color(c.ink))
+                      .on_click((_e, cx) => {
+                        cx.stop_propagation();
+                        open(i);
+                      })
+                      .child(svg(ICON("expand")).size(11)),
+                  )),
+              )
+              .child(h_flex().h(20).gap(6).items_center().child(glyph(i + 1, 18)).child(div().flex_1().min_w(0).truncate().text_size(13).font_medium().child(o.label)))
+              .when(Boolean(o.meaning), (el) => el.child(div().max_h(51).overflow_hidden().text_size(12.5).line_height("17px").text_color(c.muted).child(o.meaning)));
+          }));
+      });
+      h += gridH;
+      list = v_flex().flex_none().gap(gap).children(rowEls);
+    } else {
+      // Option rows: the number, the label and what it means, in full.
+      const textW = inner - 16 - 20 - 10 - (multi ? 26 : 0);
+      let listH = 0;
+      const rowEls = options.map((o, i) => {
+        const descRows = o.meaning ? rowsOf(o.meaning, 13, textW) : 0;
+        const rowH = Math.max(34, 15 + 18 + descRows * 19);
+        listH += rowH + (i ? 2 : 0);
+        const on = picks.includes(o.label);
+        return h_flex()
+          .id(`bc-ask-opt-${i}`)
+          .flex_none()
+          .h(rowH)
+          .pl(8)
+          .pr(10)
+          .pt(7)
+          .gap(10)
+          .items_start()
+          .rounded(SIZE.nested)
+          .cursor_pointer()
+          .when(on, (el) => el.bg(c.hover))
+          .hover((s) => s.bg(c.hover))
+          .opacity(this.ready ? 1 : 0)
+          .transition("opacity", { ...MOTION.row, delay: i * MOTION.rowStagger })
+          .on_click((_e, cx) => (multi ? this.toggleAsk(q, o.label, cx) : this.answerAsk(q, { picks: [o.label] }, cx)))
+          .child(glyph(i + 1))
+          .child(
+            v_flex()
+              .flex_1()
+              .min_w(0)
+              .child(h_flex().h(18).gap(6).items_center()
+                .child(div().text_size(13).font_medium().child(o.label))
+                .when(Boolean(o.recommended), (el) => el.child(div().text_size(11).text_color(c.accent).child("Recommended"))))
+              .when(Boolean(o.meaning), (el) => el.child(div().text_size(13).line_height("19px").text_color(c.muted).child(o.meaning))),
+          )
+          .when(multi, (el) => el.child(
+            div()
+              .flex_none()
+              .mt(1)
+              .size(16)
+              .flex()
+              .items_center()
+              .justify_center()
+              .rounded(4)
+              .border_1()
+              .border_color(on ? c.accent : c.faint)
+              .when(on, (b) => b.bg(c.accent).child(svg(ICON("check")).size(11).text_color(c.accentInk))),
+          ));
+      });
+      h += listH;
+      list = v_flex().flex_none().gap(2).children(rowEls);
+    }
+    // A multi-select moves on when you say so.
+    const more = multi
+      ? h_flex()
+        .id("bc-ask-multi")
+        .flex_none()
+        .h(34)
+        .mt(6)
+        .px(10)
+        .gap(8)
+        .items_center()
+        .rounded(SIZE.nested)
+        .text_size(13)
+        .font_medium()
+        .when(picks.length > 0, (el) => el.text_color(c.accent).cursor_pointer().hover((s) => s.bg(c.hover)).on_click((_e, cx) => this.answerAsk(q, { text: "" }, cx)))
+        .when(!picks.length, (el) => el.text_color(c.faint))
+        .child(picks.length ? `Answer with ${picks.length} picked` : "Pick one or more")
+      : null;
+    if (multi) h += 40;
+
+    // Taller than there is room for: the questions scroll, the head stays.
+    const most = Math.max(200, Math.round(this.pageHeight * 0.62) - this.height(this.width) - 40);
+    const content = v_flex()
+      .flex_none()
+      .when(Boolean(intro), (el) => el.child(div().flex_none().h(introRows * 19).mb(6).overflow_hidden().text_size(13).line_height("19px").text_color(c.muted).child(intro)))
+      .child(div().flex_none().mb(12).text_size(15.5).font_medium().line_height("22px").child(x.text))
+      .child(list)
+      .when(Boolean(more), (el) => el.child(more));
+    h += 4; // a little room: the heights of wrapped words are a guess
+    const scroll = h > most;
+    const shownH = scroll ? most : h;
+    const body = v_flex()
+      .w_full()
+      .h(shownH)
+      .child(head)
+      .child(
+        div()
+          .id(`bc-ask-scroll-${q.id}-${at.step}`)
+          .flex_none()
+          .mt(8)
+          .h(shownH - 32)
+          .overflow_y_scroll()
+          .child(content),
+      );
+    return { h: shownH, body };
+  }
+
+  toggleAsk(q, label, cx) {
+    Drawer.toggle(this.walking(q), label);
+    cx.notify();
+  }
+
+  /** The questions put away: one row that brings them back. */
+  barBody(c, q) {
+    const n = Drawer.left(q, this.walk?.id === q.id ? this.walk : null);
+    const more = this.questions.length - 1;
+    return {
+      h: 30,
+      body: h_flex()
+        .id("bc-ask-bar")
+        .w_full()
+        .h(30)
+        .px(8)
+        .gap(8)
+        .items_center()
+        .rounded(SIZE.nested)
+        .cursor_pointer()
+        .hover((s) => s.bg(c.hover))
+        .on_click((_e, cx) => {
+          this.putAway.delete(q.id);
+          this.input.focus();
+          cx.notify();
+        })
+        .child(svg(ICON("ask")).size(15).text_color(c.accent))
+        .child(div().text_size(13).font_medium().text_color(c.accent).child(`Answer questions · ${n} left`))
+        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(c.muted).child(`from ${q.fromName ?? this.nameOf(q.from)}${more > 0 ? ` and ${more} more` : ""}`)),
+    };
   }
 
   row(c, r, index, fromBottom) {

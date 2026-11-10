@@ -6,6 +6,7 @@
     "dark": "bot-herdr-dark"
   },
   "titlebar": "none",
+  "toast": "bot-herdr",
   "traffic_lights": [
     12,
     16

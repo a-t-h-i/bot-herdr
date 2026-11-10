@@ -15,17 +15,20 @@ import * as K from "./lib/knowledge.mjs";
 import * as S from "./lib/scripts.mjs";
 import * as Q from "./lib/ask.mjs";
 import * as team from "./lib/team.mjs";
+import * as W from "./lib/workspace.mjs";
 import * as C from "./classifier/index.mjs";
 import { replyText } from "./lib/agent.mjs";
 
 const HELP = `bh: bot-herdr's tools. Run from the project folder. Add --json for machine-readable output.
 
 Tasks
-  bh task new "<request>" [--title T] [--track fast|full] [--plan P]   start a task (prints its triage)
+  bh task new "<request>" [--title T] [--track fast|full] [--plan P] [--branch|--worktree|--no-git]
+                                  start a task (prints its triage, and its branch or worktree when Settings isolates tasks)
   bh task list [--all]            bh task show [<id>]            bh task current
   bh task steps <id> "<step>" "<step>" …   (or --file plan.md: its ## Steps list)
   bh task step <id> <n> start|done|block|skip [--agent A] [--note N]
   bh task status <id> active|paused|done|abandoned     bh task archive <id>
+  bh task comment <id> [--step N] "<text>"     bh task resolve <id>     (the person's comments)
   bh board post <task> contract|decision|blocker|question|done|note "<text>" [--from A] [--to B]
   bh board read <task> [--kinds a,b] [--since N]
 
@@ -59,7 +62,8 @@ The team
 Used by the bot-herdr chat and Settings (--data takes URI-encoded JSON; agents can't change these)
   bh team save --data <roster>    bh config [--data <changes>]    bh questions    bh open <file>
   bh harness add <key> --name "<Name>" --run "<command and arguments>"
-  bh access [standard|full] [--allow "npm test, git commit"]     how agents run, what they may do without asking`;
+  bh access [standard|full] [--allow "npm test, git commit"]     how agents run, what they may do without asking
+  bh mockup <file.html> | --data <html>     bh clip     bh preview <image>…     pictures for the chat`;
 
 /**
  * Settings that decide what agents may do are the person's: refused when a headless agent runs
@@ -71,6 +75,19 @@ function personOnly(what) {
 }
 
 const out = (flags, value, text) => console.log(flags.json ? JSON.stringify(value, null, 2) : typeof text === "function" ? text(value) : text ?? value);
+
+/**
+ * Settings → Git isolation (or --branch / --worktree / --no-git for this one task): gives a new
+ * task its branch or worktree. Returns why it couldn't, or "".
+ */
+function isolate(root, task, flags) {
+  const mode = flags["no-git"] ? "off" : flags.worktree ? "worktree" : flags.branch ? "branch" : accessOf().git;
+  if (mode === "off") return "";
+  const made = W.createWorkspace({ cwd: root, root, name: task.title, mode });
+  if (typeof made === "string") return `Git isolation (${mode}) not set up: ${made}. The task works in the project folder.`;
+  task.git = made;
+  return "";
+}
 
 function git(root, args) {
   return sh("git", args, { cwd: root });
@@ -105,8 +122,14 @@ async function main(argv) {
         const task = T.newTask(root, { request, title: flags.title, plan: flags.plan ?? null, track: flags.track ?? C.trackFor(triage), by: myAddress() });
         task.triage = triage;
         task.base = git(root, ["rev-parse", "HEAD"]).out.trim() || null;
+        const isolation = isolate(root, task, flags);
         T.saveTask(root, task);
-        return out(flags, task, (t) => `${t.id}: ${t.title}\nTrack: ${t.track} (suggested from the triage)\nTriage (${triage.by}): size ${triage.size}, ${triage.kind ?? "kind unknown"}; domains ${Object.entries(triage.domains).map(([d, p]) => `${d} ${p}`).join(", ")}; research ${triage.research}; ambiguous ${triage.ambiguous}`);
+        return out(flags, { ...task, isolation }, (t) => [
+          `${t.id}: ${t.title}`,
+          `Track: ${t.track} (suggested from the triage)`,
+          `Triage (${triage.by}): size ${triage.size}, ${triage.kind ?? "kind unknown"}; domains ${Object.entries(triage.domains).map(([d, p]) => `${d} ${p}`).join(", ")}; research ${triage.research}; ambiguous ${triage.ambiguous}`,
+          W.gitLine(t.git) || isolation,
+        ].filter(Boolean).join("\n"));
       }
       if (sub === "list") return out(flags, T.listTasks(root, { all: Boolean(flags.all) }), (l) => l.map(T.taskLine).join("\n") || "No tasks yet.");
       if (sub === "current") return out(flags, T.currentTask(root), (t) => t?.id ?? "No task.");
@@ -114,7 +137,10 @@ async function main(argv) {
       need(id, `bh task ${sub} <id>`);
       const task = T.loadTask(root, id);
       const rest2 = args[0] === id ? args.slice(1) : args;
-      if (sub === "show" || sub === undefined) return out(flags, { ...task, worked: T.worked(task), board: T.board(root, id) }, () => T.taskText(task, T.board(root, id)));
+      if (sub === "show" || sub === undefined) {
+        const where = [W.gitLine(task.git), W.missingWorktree(task)].filter(Boolean).join("\n");
+        return out(flags, { ...task, worked: T.worked(task), board: T.board(root, id), cwd: W.taskCwd(task, root) }, () => T.taskText(task, T.board(root, id)).replace(/\n/, `\n${where ? `${where}\n` : ""}`));
+      }
       if (sub === "steps") {
         const titles = typeof flags.file === "string" ? T.stepsFromMarkdown(bodyText(flags, [])) : rest2;
         need(titles.length || "", `bh task steps <id> "<step 1>" "<step 2>" …`);
@@ -134,12 +160,22 @@ async function main(argv) {
         T.saveTask(root, task);
         return out(flags, task, (t) => `${t.id} is ${t.status}.`);
       }
+      if (sub === "comment") {
+        const x = T.comment(task, { step: flags.step ?? null, text: need(rest2.join(" ") || bodyText(flags, []), 'bh task comment <id> [--step N] "<text>"') });
+        T.saveTask(root, task);
+        return out(flags, x, () => `Comment ${x.id} added.`);
+      }
+      if (sub === "resolve") {
+        task.comments = (task.comments ?? []).map((x) => ({ ...x, open: false }));
+        T.saveTask(root, task);
+        return out(flags, task, () => "Comments marked addressed.");
+      }
       if (sub === "archive" || sub === "unarchive") {
         task.archived = sub === "archive";
         T.saveTask(root, task);
         return out(flags, task, (t) => `${t.id} ${t.archived ? "archived" : "back in the list"}.`);
       }
-      throw new UsageError("bh task new|list|show|steps|step|status|archive");
+      throw new UsageError("bh task new|list|show|steps|step|status|comment|resolve|archive");
     }
 
     case "board": {
@@ -184,11 +220,12 @@ async function main(argv) {
         const steps = T.stepsFromMarkdown(plan.markdown);
         const task = T.newTask(root, { request: `${plan.idea}\n\nThe agreed plan: bh plan show ${plan.id}`, title: plan.title, plan: plan.id, track: "planned", by: myAddress(), steps });
         task.base = git(root, ["rev-parse", "HEAD"]).out.trim() || null;
+        const isolation = isolate(root, task, flags);
         T.saveTask(root, task);
         plan.status = "task";
         plan.task = task.id;
         P.savePlan(root, plan);
-        return out(flags, task, (t) => `${t.id}: ${t.title} (${t.steps.length} steps from the plan)`);
+        return out(flags, { ...task, isolation }, (t) => [`${t.id}: ${t.title} (${t.steps.length} steps from the plan)`, W.gitLine(t.git) || isolation].filter(Boolean).join("\n"));
       }
       if (sub === "archive" || sub === "unarchive") {
         plan.status = sub === "archive" ? "archived" : "grilling";
@@ -335,7 +372,8 @@ async function main(argv) {
         `When done or stuck, write your report to ${report} and send its path with a one-line summary: hc send ${parent ?? "<the agent that started you>"} "<summary> — ${report}".`,
       ].filter(Boolean).join(" ");
       const first = `${text}\n\n(${about})`;
-      const cwd = flags.cwd ?? root;
+      // A task with a worktree: its agents run there.
+      const cwd = flags.cwd ?? (task ? W.taskCwd(T.loadTask(root, task), root) : root);
       let r;
       if (team.runsHeadless(agent)) {
         // The agent terminal: it runs the harness headless, writes its own brief, and reports
@@ -433,6 +471,30 @@ async function main(argv) {
     case "path":
       return console.log(BH);
 
+    case "mockup": {
+      // The chat's pictures: a mockup drawn by a headless browser (`bh mockup <file.html>`, or
+      // its HTML with --data), shown as an image.
+      const M = await import("./lib/media.mjs");
+      const r = typeof flags.data === "string" ? M.drawHtml(bodyText(flags, [])) : M.drawMockup(need(sub, "bh mockup <file.html>  or  bh mockup --data <html>"), { force: Boolean(flags.force) });
+      if (r.error && !flags.json) throw new Error(r.error);
+      return out(flags, r, (x) => x.png);
+    }
+
+    case "clip": {
+      // A paste that held no text: the clipboard's image (saved as a PNG) or copied files.
+      const M = await import("./lib/media.mjs");
+      const { files } = M.clipboard();
+      return out(flags, files.map((file) => ({ file, ...M.preview(file) })), (l) => l.map((x) => x.file).join("\n") || "The clipboard holds no image or files.");
+    }
+
+    case "preview": {
+      // Image files as herdr can show them (it reads images from its own folder only).
+      const M = await import("./lib/media.mjs");
+      const files = [sub, ...args].filter(Boolean);
+      need(files.length || "", "bh preview <image file>…");
+      return out(flags, files.map((file) => ({ file, ...M.preview(file) })), (l) => l.map((x) => x.image ?? `${x.file}: ${x.error}`).join("\n"));
+    }
+
     case "agent": {
       const { runAgent } = await import("./lib/agent.mjs");
       const word = need(sub, 'bh agent <agent> [--mode lead|child|panel|review] [--name N] [--parent T] [--task T] [--model M] [--effort E] [-- "<first message>"]');
@@ -446,20 +508,25 @@ async function main(argv) {
       const saved = readJson(file, {}) ?? {};
       const next = accessOf();
       const level = rest[0];
-      if (level && level !== "standard" && level !== "full") throw new UsageError('bh access [standard|full] [--allow "npm test, git commit"]   or   bh access --data <changes>');
+      if (level && level !== "standard" && level !== "full") throw new UsageError('bh access [standard|full] [--allow "npm test, git commit"] [--git off|branch|worktree]   or   bh access --data <changes>');
       const patch = typeof flags.data === "string" ? JSON.parse(bodyText(flags, [])) : {};
       if (level) patch.access = level;
       if (typeof flags.allow === "string") patch.allow = flags.allow;
+      if (typeof flags.git === "string") patch.git = flags.git;
       if (Object.keys(patch).length) {
         personOnly("Agent access");
         if (patch.access === "standard" || patch.access === "full") next.access = patch.access;
         if (patch.allow !== undefined) next.allow = (Array.isArray(patch.allow) ? patch.allow : String(patch.allow).split(/[,\n]/)).map((x) => String(x).trim()).filter(Boolean);
         const was = accessOf().headless;
         if (typeof patch.headless === "boolean") next.headless = patch.headless;
+        if (patch.git !== undefined) {
+          if (!W.ISOLATIONS.includes(patch.git)) throw new UsageError("Git isolation is off, branch or worktree.");
+          next.git = patch.git;
+        }
         writeJson(file, { ...saved, agents: next });
         if (next.headless !== was) team.sync(root); // the templates start agents the new way
       }
-      return out(flags, next, (x) => `Agents run ${x.headless ? "headless" : "as their CLI"}; access ${x.access}${x.allow.length ? `; also allowed: ${x.allow.join(", ")}` : ""}.`);
+      return out(flags, next, (x) => `Agents run ${x.headless ? "headless" : "as their CLI"}; access ${x.access}${x.allow.length ? `; also allowed: ${x.allow.join(", ")}` : ""}; git isolation ${x.git}.`);
     }
 
     default:

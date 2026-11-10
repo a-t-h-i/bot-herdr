@@ -25,6 +25,8 @@ export function accessOf() {
     access: saved.access === "full" ? "full" : "standard",
     allow: Array.isArray(saved.allow) ? saved.allow.map((x) => String(x).trim()).filter(Boolean) : [],
     headless: saved.headless !== false,
+    // Settings → Git isolation: a new task's own branch, or worktree, or neither.
+    git: ["branch", "worktree"].includes(saved.git) ? saved.git : "off",
   };
 }
 
@@ -33,11 +35,16 @@ export const bhCommand = () => `node "${BH.replace(/\\/g, "/")}"`;
 
 /** The project a command is about: the git work tree around `cwd`, else `cwd` itself. */
 export function projectRoot(cwd = process.cwd()) {
+  let top = cwd;
   try {
-    return execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || cwd;
+    top = execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || cwd;
   } catch {
-    return cwd;
+    top = cwd;
   }
+  // A task's worktree (.bot-herdr/worktrees/<branch>) belongs to the project it was made from:
+  // its agents read and post to that project's tasks.
+  const inWorktree = /^(.*?)[\\/]\.bot-herdr[\\/]worktrees[\\/]/.exec(`${top}/`);
+  return inWorktree ? inWorktree[1] : top;
 }
 
 /** The project's .bot-herdr folder (made on first use), or a path inside it. */

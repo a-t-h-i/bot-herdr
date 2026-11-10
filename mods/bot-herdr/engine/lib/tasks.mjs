@@ -128,6 +128,19 @@ export function board(root, id, { kinds = null, since = 0 } = {}) {
   return readJsonl(join(dir(root, id), "board.jsonl")).filter((e) => e.n > since && (!kinds || kinds.includes(e.kind)));
 }
 
+/** The person's comment on a task, or on one of its steps (`step`, its number). */
+export function comment(task, { step = null, text }) {
+  const n = step === null || step === undefined ? null : Number(step);
+  if (n !== null && !task.steps.some((s) => s.n === n)) throw new Error(`Task ${task.id} has no step ${step}. It has ${task.steps.length}.`);
+  const words = String(text ?? "").trim();
+  if (!words) throw new Error("A comment needs words.");
+  const c = { id: `c${(task.comments?.length ?? 0) + 1}`, step: n, quote: n === null ? "" : task.steps.find((s) => s.n === n).title, text: words, at: now(), open: true };
+  task.comments = [...(task.comments ?? []), c];
+  return c;
+}
+
+export const openComments = (task) => (task.comments ?? []).filter((c) => c.open);
+
 export const reportsDir = (root, id) => join(dir(root, id), "reports");
 
 /** One line per task for `bh task list`. */
@@ -147,6 +160,7 @@ export function taskText(t, entries = []) {
     "",
     "## Steps",
     ...(t.steps.length ? t.steps.map((s) => `${s.n}. [${s.status}] ${s.title}${s.agent ? ` (${s.agent})` : ""}${s.note ? ` — ${s.note}` : ""}`) : ["(none yet: `bh task steps`)"]),
+    ...(openComments(t).length ? ["", "## Open comments from the person", ...openComments(t).map((c) => `- ${c.step ? `step ${c.step} ("${c.quote}")` : "the task"}: ${c.text}`)] : []),
   ];
   if (t.triage) lines.push("", "## Classifier triage", JSON.stringify(t.triage));
   if (t.qa) lines.push("", "## QA risk", `${t.qa.risk}: ${t.qa.reasoning ?? ""}`);
