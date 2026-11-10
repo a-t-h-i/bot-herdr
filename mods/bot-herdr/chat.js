@@ -8,15 +8,15 @@
 
 import { div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextView } from "gpui-base";
-import { terminals, spaces, focused, settings, shared, readTextFile } from "herdr";
+import { terminals, spaces, focused, settings, shared, setShared, readTextFile } from "herdr";
 import * as fs from "fs/promises";
 import { LIGHT, DARK, SIZE, ICON, readable, textWidth } from "./look.js";
 import { Composer, outboxDir, liveAgents } from "./composer.js";
 import { isQuiet, quietStatus } from "./live.js";
-import { FOCUS, OUTGOING, activePage, openTerminal } from "./pages.js";
+import { FOCUS, OUTGOING, OPEN_TASK, activePage, openTerminal, showPage } from "./pages.js";
 import { replyFile, replyBody, push, shown, isNew, outcome, clock, segments, fold, linkFiles, fileTarget, FILE_LINK } from "./feed.js";
 import { openFile } from "./viewer.js";
-import { bh, enc, projectDir } from "./bh.js";
+import { bh, bhJson, enc, projectDir } from "./bh.js";
 import { roleWord } from "./indicators.js";
 import { indicatorFor, roleOf, onTurn, TURN_MS } from "./working.js";
 import { findAgent, roster, ROSTER_KEY } from "./roster.js";
@@ -30,6 +30,8 @@ const questionsDir = () => `${outboxDir().replace(/\/replies$/, "")}/questions`;
 const activityDir = () => `${outboxDir().replace(/\/replies$/, "")}/activity`;
 
 const POLL_MS = 2500;
+const TASKS_MS = 5000;
+const WIDGET_W = 260;
 const WHEEL_STEP = 70; // px of wheel per entry
 
 const load = (key, fallback) => {
@@ -80,6 +82,12 @@ export class Chat {
       }
     });
     cx.timer.every(POLL_MS, (cx) => this.poll(cx));
+    this.tasks = []; // the project's tasks under way, for the widget beside the chat
+    this.taskOpen = undefined; // the task row open in it (undefined: the first; null: none)
+    this.loadTasks(cx);
+    cx.timer.every(TASKS_MS, (cx) => {
+      if (activePage() === "chat") this.loadTasks(cx);
+    });
     // The working line: one agent at a time, the next one's turn every few seconds; and a new
     // word when its 30 to 60 seconds are up.
     cx.timer.every(TURN_MS, (cx) => this.nextTurn(cx));
@@ -191,6 +199,106 @@ export class Chat {
         this.reading = false;
       }
     });
+  }
+
+  /** The tasks under way in this space's project, for the widget. */
+  loadTasks(cx) {
+    if (this.loadingTasks) return;
+    this.loadingTasks = true;
+    cx.spawn(async (cx) => {
+      try {
+        const got = await bhJson(["task", "list"], { cwd: projectDir() });
+        const now = (Array.isArray(got) ? got : []).filter((t) => !t.archived && (t.status === "active" || t.status === "paused"));
+        if (JSON.stringify(now) !== JSON.stringify(this.tasks)) {
+          this.tasks = now;
+          cx.notify();
+        }
+      } finally {
+        this.loadingTasks = false;
+      }
+    });
+  }
+
+  /**
+   * The tasks under way, beside the chat on a wide window: a row each with its steps done, one
+   * open at a time into its steps as a checklist, the one being worked on marked live.
+   */
+  taskWidget(c) {
+    const rows = this.tasks;
+    const open = this.taskOpen === undefined ? rows[0]?.id : this.taskOpen;
+    const box = (mark) => {
+      const el = div().flex_none().mt(2).size(14).rounded(4).flex().items_center().justify_center();
+      if (mark === "done") return el.bg(c.accent).child(svg(ICON("check")).size(10).text_color(c.accentInk));
+      if (mark === "now") return el.border_1().border_color(c.accent).child(div().size(6).rounded(3).bg(c.accent).opacity(0.45).loop("opacity", { from: 0.25, to: 0.9, period: 1600, easing: "ease-in-out" }));
+      if (mark === "wait") return el.border_1().border_color(c.warning);
+      if (mark === "skip") return el.border_1().border_color(c.edge).child(div().w(6).h(1.5).bg(c.faint));
+      return el.border_1().border_color(c.edge);
+    };
+    const markOf = (s) => (s.status === "done" ? "done" : s.status === "skipped" ? "skip" : s.status === "active" ? "now" : "open");
+    return v_flex()
+      .id("bh-tasks-widget")
+      .absolute()
+      .top(14)
+      .left(14)
+      .w(WIDGET_W)
+      .max_h(Math.max(160, this.size.height - 220))
+      .p(8)
+      .gap(2)
+      .rounded(SIZE.radius)
+      .bg(c.fill)
+      .border_1()
+      .border_color(c.edge)
+      .shadow_sm()
+      .child(h_flex().px(6).pb(4).gap(6).items_center()
+        .child(div().text_size(11.5).font_semibold().text_color(c.muted).child(rows.length === 1 ? "Task" : "Tasks"))
+        .when(rows.length > 1, (el) => el.child(div().text_size(11).text_color(c.faint).child(String(rows.length)))))
+      .child(v_flex().id("bh-tasks-widget-list").overflow_y_scroll().gap(2).children(rows.map((t) => {
+        const steps = t.steps ?? [];
+        const done = steps.filter((s) => s.status === "done" || s.status === "skipped").length;
+        const live = steps.some((s) => s.status === "active");
+        const isOpen = open === t.id;
+        return v_flex()
+          .flex_none()
+          .child(h_flex()
+            .id(`bh-tw-${t.id}`)
+            .px(6)
+            .py(5)
+            .gap(8)
+            .items_start()
+            .rounded(SIZE.nested)
+            .cursor_pointer()
+            .hover((s) => s.bg(c.hover))
+            .on_click((_e, cx) => {
+              this.taskOpen = isOpen ? null : t.id;
+              cx.notify();
+            })
+            .child(box(live ? "now" : t.status === "paused" ? "wait" : "open"))
+            .child(div().flex_1().min_w(0).text_size(13).font_medium().line_height("18px").truncate().child(t.title ?? t.id))
+            .when(steps.length > 0, (el) => el.child(div().flex_none().text_size(11.5).line_height("18px").text_color(c.faint).child(`${done}/${steps.length}`)))
+            .child(svg(ICON(isOpen ? "chevron-down" : "chevron-right")).flex_none().mt(3).size(12).text_color(c.faint)))
+          .when(isOpen, (el) => el.child(v_flex().pl(10).pr(6).pb(6).gap(3)
+            .when(!steps.length, (x) => x.child(div().pl(12).text_size(12).text_color(c.faint).child("No plan yet.")))
+            .children(steps.map((s) => h_flex().gap(8).items_start()
+              .child(box(markOf(s)))
+              .child(div().flex_1().min_w(0).text_size(12.5).line_height("18px")
+                .text_color(s.status === "done" || s.status === "skipped" ? c.faint : s.status === "active" ? c.ink : c.muted)
+                .child(s.title ?? `Step ${s.n}`))))
+            .child(h_flex()
+              .id(`bh-tw-open-${t.id}`)
+              .mt(4)
+              .gap(4)
+              .items_center()
+              .text_size(12)
+              .text_color(c.accent)
+              .cursor_pointer()
+              .hover((st) => st.opacity(0.85))
+              .on_click(() => {
+                setShared(OPEN_TASK, { id: t.id, at: Date.now() });
+                showPage("tasks");
+              })
+              .child("Open in Tasks")
+              .child(svg(ICON("external-link")).size(11)))));
+      })));
   }
 
   /** Reads new question files; a file that went (answered) drops its card. */
@@ -337,6 +445,8 @@ export class Chat {
                 .when(view.back === 0 && working.length > 0, (col) => col.child(this.working(c, working, width))),
             )),
       )
+      // The tasks under way, top left, when the window has room for them beside the chat.
+      .when(this.tasks.length > 0 && (this.size.width - width) / 2 >= WIDGET_W + 28, (el) => el.child(this.taskWidget(c)))
       // The composer, bottom centre. Its suggestions grow upward over the feed.
       .child(
         v_flex()

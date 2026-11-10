@@ -19,6 +19,8 @@ export const FOCUS = "bot-herdr.focus";
 export const HOLD = "bot-herdr.hold";
 /** A message another page wants sent the chat's way ({ text, at }): the composer sends it. */
 export const OUTGOING = "bot-herdr.outgoing";
+/** A task to show open on the Tasks page: { id, at } (the chat's task widget sets it). */
+export const OPEN_TASK = "bot-herdr.open-task";
 
 export function find(node, id) {
   if (node?.id === id) return node;

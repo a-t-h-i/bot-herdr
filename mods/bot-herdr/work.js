@@ -13,7 +13,7 @@ import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, TextView, InputState, Input, TextareaState, Textarea } from "gpui-base";
 import { settings, shared } from "herdr";
 import { LIGHT, DARK, SIZE, ICON } from "./look.js";
-import { activePage, sendFromChat } from "./pages.js";
+import { activePage, sendFromChat, OPEN_TASK } from "./pages.js";
 import { ROSTER_KEY, roster, slug } from "./roster.js";
 import { bh, bhJson, enc, projectDir } from "./bh.js";
 import { blocks, commentsOn, outline, notesOn } from "./doc.js";
@@ -285,6 +285,12 @@ export class Work {
   // ── Drawing ────────────────────────────────────────────────────────────────────────────────
 
   render() {
+    const want = shared(OPEN_TASK);
+    if (want?.at > (this.openAt ?? 0)) {
+      this.openAt = want.at;
+      this.opened = want.id;
+      this.archived = false;
+    }
     const c = settings().dark ? DARK : LIGHT;
     const content = Math.max(320, Math.min(MAX, this.width - SIZE.gutter * 2));
     const body = this.tab === "plans" ? this.plansView(c, content) : this.tab === "knowledge" ? this.knowledgeView(c, content) : this.tasksView(c, content);
