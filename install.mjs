@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Installs Bot Lobby's herdr pieces into the Herdr app's home: the composer mod, the "bot-herdr"
+// Installs bot-herdr into the Herdr app's home: the composer mod, the "bot-herdr"
 // layout (Herdr's main layout with the composer under the panes) and its light and dark themes,
 // and the composer's key (ctrl+shift+m). Then checks the mod with `herdr-app check` if it can.
 //

@@ -1,7 +1,6 @@
-// Bot Lobby's composer for herdr: one text box for every agent herdr runs.
+// bot-herdr's composer: one text box for every agent herdr runs.
 //
-// It is Bot Lobby's composer (webui/src/app/Composer.tsx, docs/web-ui/composer-design) drawn in
-// GPUI: one raised bubble with the text on top and a tools row under it (attach, the space chip,
+// Drawn in GPUI: one raised bubble with the text on top and a tools row under it (attach, the space chip,
 // key hints, stop, a round send key). The `/` commands, the `@` agents, the attach menu and the
 // spaces list grow out of its top edge as a smaller bubble joined to it by curved fillets.
 //
@@ -10,20 +9,26 @@
 // a new tab with the message. `/stop` and `/peek` act on the agent; any other `/command` is sent
 // as typed, so each harness's own commands still work. Sending is `hc send` (paste, then Enter).
 //
+// Agents can start child agents (`hc run`). Each agent is told how, once: the brief in brief.js
+// goes in front of its first message from the composer (and of the task it is started with), and
+// the terminal is labelled so it is not told twice. `/team` sends the brief again. Child agents
+// show in the `@` list under their parent, so you can talk to them directly.
+//
 // The block it sits in only reserves the resting height: the bubble itself is drawn in a Popup
-// anchored to the block's foot, so it can grow upward over the terminals as you type, the way
-// the web app's floated over the chat. Props: { float: false } draws it inside the block instead.
+// anchored to the block's foot, so it can grow upward over the terminals as you type, floating
+// over them. Props: { float: false } draws it inside the block instead.
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, TextareaState, Textarea, Popup } from "gpui-base";
 import {
-  agents, spaces, focused, settings, run, hc, exec, knownAgents, pickFolder, home,
-  props, nextCommand, notify, window as appWindow,
+  agents, terminals, spaces, focused, settings, run, hc, exec, knownAgents, pickFolder, home,
+  props, nextCommand, window as appWindow,
 } from "herdr";
 import { LIGHT, DARK, SIZE, MOTION, ICON, tint, textWidth } from "./look.js";
 import {
   triggerAt, caretAfterEdit, slashRows, mentionRows, tokenFor, plan, defaultTarget, withoutEnter, messageText,
 } from "./route.js";
+import { BRIEFED, teamBrief, withBrief, briefed } from "./brief.js";
 
 const PLACEHOLDER = "Write a message, run a command, or ask an agent";
 const CLEAR = "#00000000";
@@ -44,7 +49,7 @@ export default class BotHerdr extends View {
     this.sending = false;
     this.lastTarget = null;
     this.width = SIZE.maxWidth;
-    this.hot = null; // the hovered tool, for its pressed-in look
+    this.justBriefed = new Set(); // briefed this session; the label can take a moment to show
 
     this.input = TextareaState.new({ rows: SIZE.minRows });
     this.input.set_auto_grow(SIZE.minRows, SIZE.maxRows);
@@ -64,16 +69,22 @@ export default class BotHerdr extends View {
     });
     this.input.on("paste_other", (_e, cx) => this.say("Images go in as files: drop them on the composer.", cx));
 
-    // Keys while the text box has the keyboard. Later bindings win over the text box's own at
-    // the same depth, and the menu ones are added last so they win over send.
-    cx.bind_keys([
-      { keystroke: "enter", action: "bot_herdr_send", context: "BotHerdr Input" },
-      { keystroke: "enter", action: "bot_herdr_pick", context: "BotHerdrMenu Input" },
-      { keystroke: "tab", action: "bot_herdr_pick", context: "BotHerdrMenu Input" },
-      { keystroke: "up", action: "bot_herdr_up", context: "BotHerdrMenu Input" },
-      { keystroke: "down", action: "bot_herdr_down", context: "BotHerdrMenu Input" },
-      { keystroke: "escape", action: "bot_herdr_close", context: "BotHerdrPane" },
-    ]);
+    // Keys while the text box has the keyboard ("A > Input": the text box inside our element).
+    // Later bindings win over the text box's own at the same depth, and the menu ones are added
+    // last so they win over send. A failure here must not stop the composer: the `submit`
+    // fallback above still sends.
+    try {
+      cx.bind_keys([
+        { keystroke: "enter", action: "bot_herdr_send", context: "BotHerdr > Input" },
+        { keystroke: "enter", action: "bot_herdr_pick", context: "BotHerdrMenu > Input" },
+        { keystroke: "tab", action: "bot_herdr_pick", context: "BotHerdrMenu > Input" },
+        { keystroke: "up", action: "bot_herdr_up", context: "BotHerdrMenu > Input" },
+        { keystroke: "down", action: "bot_herdr_down", context: "BotHerdrMenu > Input" },
+        { keystroke: "escape", action: "bot_herdr_close", context: "BotHerdrPane > Input" },
+      ]);
+    } catch (e) {
+      console.log("bot-herdr: key bindings not installed:", String(e?.message ?? e));
+    }
 
     this.loadKnown(cx);
     cx.timer.every(60000, (cx) => this.loadKnown(cx));
@@ -111,6 +122,41 @@ export default class BotHerdr extends View {
     return list.find((a) => a.address === t) ?? null;
   }
 
+  /** Live child agents that have no pane of their own (those with one are in agents()). */
+  children() {
+    const listed = new Set(agents().map((a) => a.address));
+    const all = terminals().filter((t) => t.state === "live");
+    const nameOf = (address) => {
+      const t = all.find((x) => x.address === address);
+      return t?.name || t?.program?.name || address;
+    };
+    return all
+      .filter((t) => t.parent && !listed.has(t.address) && (t.program?.agent || t.status))
+      .map((t) => ({ address: t.address, parent: t.parent, parentName: nameOf(t.parent), name: t.name ?? null, status: t.status ?? null, program: t.program }));
+  }
+
+  /** What to call a terminal in a message to the person. */
+  nameOf(address) {
+    const a = agents().find((x) => x.address === address);
+    if (a) return a.program?.name ?? address;
+    const t = terminals().find((x) => x.address === address);
+    return t?.name || t?.program?.name || address;
+  }
+
+  needsBrief(address) {
+    if (this.justBriefed.has(address)) return false;
+    return !briefed(terminals().find((t) => t.address === address));
+  }
+
+  async markBriefed(address) {
+    this.justBriefed.add(address);
+    try {
+      await hc(["label", address, `${BRIEFED}=1`]);
+    } catch {
+      // the label is only a memory aid; this session still remembers
+    }
+  }
+
   menuOpen() {
     return this.pane === "suggest" && this.rows().length > 0;
   }
@@ -120,6 +166,7 @@ export default class BotHerdr extends View {
     if (this.trigger.kind === "slash") return slashRows(this.trigger.query);
     return mentionRows(this.trigger.query, {
       agents: agents(),
+      children: this.children(),
       known: this.known,
       space: this.space()?.id ?? null,
       startOnly: this.startOnly,
@@ -131,6 +178,7 @@ export default class BotHerdr extends View {
   changed(cx) {
     const before = this.text;
     this.text = this.input.value();
+    if (this.text === before) return; // our own edit (pick, send), already accounted for
     const caret = caretAfterEdit(before, this.text);
     const trigger = this.text === this.dismissed ? null : triggerAt(this.text, caret);
     if (!trigger || trigger.kind !== "mention") this.startOnly = this.startOnly && trigger?.kind === "mention";
@@ -138,17 +186,17 @@ export default class BotHerdr extends View {
     this.trigger = trigger;
     if (trigger) this.open("suggest", cx);
     else if (this.pane === "suggest") this.pane = null;
-    else if (this.pane && this.text !== before) this.pane = null;
+    else if (this.pane) this.pane = null;
     if (this.pane === "suggest" && (was !== "suggest" || trigger?.query !== this.lastQuery)) {
       this.at = 0;
       this.offset = 0;
     }
     this.lastQuery = trigger?.query;
-    if (this.text !== before) this.notice = null;
+    this.notice = null;
     cx.notify();
   }
 
-  // A pane's first frame is drawn small and clear, then opens, so it grows the way the web app's did.
+  // A pane's first frame is drawn small and clear, then opens, so it grows into place.
   open(pane, cx) {
     if (this.pane === pane) return;
     this.pane = pane;
@@ -320,7 +368,7 @@ export default class BotHerdr extends View {
 
   async runStep(step, all) {
     const agent = all.find((a) => a.address === step.address);
-    const name = agent?.program?.name ?? step.address;
+    const name = step.address ? this.nameOf(step.address) : "";
     if (step.do === "peek") return run("terminal.peek", { terminal: step.address });
     if (step.do === "interrupt") {
       const r = await hc(["interrupt", step.address]);
@@ -328,7 +376,14 @@ export default class BotHerdr extends View {
       return;
     }
     if (step.do === "start") {
-      run("tab.new", { argv: step.run, task: messageText(step.text, step.files), space: this.space()?.id });
+      // A new agent gets the brief with its task, so it knows from its first turn.
+      run("tab.new", { argv: step.run, task: withBrief(messageText(step.text, step.files), { known: this.known }), space: this.space()?.id });
+      return;
+    }
+    if (step.do === "brief") {
+      const r = await hc(["send", step.address, teamBrief({ known: this.known, self: step.address })]);
+      if (r.code !== 0) throw new Error(`Couldn't brief ${name}: ${(r.stderr || r.stdout).trim()}`);
+      await this.markBriefed(step.address);
       return;
     }
     // On another machine, files go over first (`hc put`), and the message names where they landed.
@@ -341,7 +396,11 @@ export default class BotHerdr extends View {
         paths.push(r.stdout.trim().split(/\r?\n/).pop());
       }
     }
-    const r = await hc(["send", step.address, messageText(step.text, paths)]);
+    // An agent's first message from here carries the brief; a harness's own /command goes bare.
+    const body = messageText(step.text, paths);
+    const brief = !body.startsWith("/") && this.needsBrief(step.address);
+    const r = await hc(["send", step.address, brief ? withBrief(body, { known: this.known, self: step.address }) : body]);
+    if (r.code === 0 && brief) await this.markBriefed(step.address);
     if (r.code !== 0) {
       const why = (r.stderr || r.stdout).trim();
       if (agent?.status === "blocked") throw new Error(`${name} is waiting for you. Answer it in its pane first.`);
@@ -388,6 +447,7 @@ export default class BotHerdr extends View {
   }
 
   bubble(c, width) {
+    // One element carries all our key contexts (a context is a set of names).
     const contexts = ["BotHerdr"];
     if (this.menuOpen()) contexts.push("BotHerdrMenu");
     if (this.pane) contexts.push("BotHerdrPane");

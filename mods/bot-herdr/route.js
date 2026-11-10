@@ -9,6 +9,7 @@ export const COMMANDS = [
   { name: "all", hint: "Send to every agent in this space" },
   { name: "stop", hint: "Stop the agent where it is" },
   { name: "peek", hint: "Peek at the agent's terminal" },
+  { name: "team", hint: "Tell the agent again how to start child agents" },
 ];
 
 /** Where the text was edited, from the text before and after: the end of what changed.
@@ -43,7 +44,7 @@ function rank(rows, query, key) {
 }
 
 export function slashRows(query) {
-  return rank(COMMANDS.map((c) => ({ id: `/${c.name}`, kind: "command", name: c.name, hint: c.hint, tag: "lobby" })), query, (r) => r.name);
+  return rank(COMMANDS.map((c) => ({ id: `/${c.name}`, kind: "command", name: c.name, hint: c.hint, tag: "command" })), query, (r) => r.name);
 }
 
 /** A short handle for an agent: its program's key ("claude"), or its name in one word. */
@@ -57,10 +58,22 @@ export function handle(agent) {
  * are not running yet, which start in a new tab with the message. `startOnly` (after `/new`)
  * leaves out the running ones.
  */
-export function mentionRows(query, { agents = [], known = [], space = null, startOnly = false } = {}) {
+export function mentionRows(query, { agents = [], children = [], known = [], space = null, startOnly = false } = {}) {
   const here = agents.filter((a) => a.space === space);
   const there = agents.filter((a) => a.space !== space);
-  const running = startOnly ? [] : [...here, ...there].map((a) => ({
+  // Child agents (started by an agent with `hc run`) sit right under their parent.
+  const withKids = (list) => list.flatMap((a) => [a, ...childrenOf(children, a.address)]);
+  const running = startOnly ? [] : [...withKids(here), ...withKids(there)].map((a) => a.parent ? ({
+    id: `agent:${a.address}`,
+    kind: "agent",
+    name: a.name || handle(a),
+    label: a.name || a.program?.name || "Agent",
+    hint: `child of ${a.parentName ?? a.parent}${a.status === "working" ? " · working" : a.status === "blocked" || a.status === "error" ? " · needs you" : ""}`,
+    tag: "child",
+    color: a.program?.tile ?? null,
+    address: a.address,
+    space: a.space ?? null,
+  }) : ({
     id: `agent:${a.address}`,
     kind: "agent",
     name: handle(a),
@@ -71,7 +84,7 @@ export function mentionRows(query, { agents = [], known = [], space = null, star
     address: a.address,
     space: a.space,
   }));
-  const all = startOnly ? [] : (here.length > 1 ? [{ id: "all", kind: "all", name: "all", label: "Everyone", hint: "Every agent in this space", tag: "lobby" }] : []);
+  const all = startOnly ? [] : (here.length > 1 ? [{ id: "all", kind: "all", name: "all", label: "Everyone", hint: "Every agent in this space", tag: "command" }] : []);
   const start = known.filter((k) => k.installed).map((k) => ({
     id: `start:${k.key}`,
     kind: "start",
@@ -83,6 +96,13 @@ export function mentionRows(query, { agents = [], known = [], space = null, star
     run: k.run,
   }));
   return rank([...running, ...all, ...start], query, (r) => `${r.name} ${r.label}`);
+}
+
+/** Every live descendant of `address` among `children` (entries with `parent`), depth first. */
+export function childrenOf(children, address, seen = new Set()) {
+  if (seen.has(address)) return [];
+  seen.add(address);
+  return children.filter((k) => k.parent === address).flatMap((k) => [k, ...childrenOf(children, k.address, seen)]);
 }
 
 /** The token a picked row leaves in the text: the word as typed, drawn as a chip. */
@@ -100,6 +120,7 @@ export function tokenFor(row) {
  *   { do: "start", run, name, text, files } a new tab running that agent, with this first message
  *   { do: "interrupt", address }         the agent's stop key
  *   { do: "peek", address }              terminal.peek
+ *   { do: "brief", address }             send the child-agent brief again
  */
 export function plan(content, ctx) {
   const tokens = [...(content.tokens ?? [])].sort((a, b) => a.range.start - b.range.start);
@@ -144,9 +165,10 @@ export function plan(content, ctx) {
   const unique = [...new Set(recipients)];
   if (!unique.length && !starts.length && ctx.target) unique.push(ctx.target);
 
-  if (command === "stop" || command === "peek") {
-    if (!unique.length) return { error: "No agent to " + command + " here." };
-    return { steps: unique.map((address) => ({ do: command === "stop" ? "interrupt" : "peek", address })) };
+  if (command === "stop" || command === "peek" || command === "team") {
+    if (!unique.length) return { error: command === "team" ? "No agent here to brief." : "No agent to " + command + " here." };
+    const act = { stop: "interrupt", peek: "peek", team: "brief" }[command];
+    return { steps: unique.map((address) => ({ do: act, address })) };
   }
   if (command === "new" && !starts.length) return { error: "Pick an agent to start: type @ after /new." };
   if (!text && !files.length) return { error: null, steps: [] };

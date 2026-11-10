@@ -1,5 +1,4 @@
-// Bot Lobby's composer look (webui/src/index.css, the `.bubble` tokens; docs/web-ui/composer-design),
-// in GPUI terms. Colours are the web app's Claude palette, resolved to hex, light and dark.
+// bot-herdr's composer look in GPUI terms: a Claude-style palette as hex, light and dark.
 
 export const LIGHT = {
   ground: "#faf9f5",
@@ -43,7 +42,7 @@ export const DARK = {
 
 /** Sizes in px at zoom 1 (herdr scales them). After the user's radii: outer 12, controls 10, nested 8. */
 export const SIZE = {
-  maxWidth: 720, // the chat column (46rem at the web app's 90% scale), a little wider for terminals
+  maxWidth: 720, // the chat column width
   gutter: 24, // room either side of the composer in its block
   foot: 14, // from the composer's foot to the block's
   radius: 12,
@@ -73,14 +72,14 @@ export const MOTION = {
 
 export const ICON = (name) => `mods/bot-herdr/icons/${name}.svg`;
 
-/** A row's or chip's colour: lobby commands the accent, agents their program's tile. */
+/** A row's or chip's colour: our commands the accent, agents their program's tile. */
 export function tint(c, row) {
   if (row?.color) return row.color;
   if (row?.tag === "start") return c.muted;
   return c.accent;
 }
 
-/** Rough text width at a size, for sizing the suggestion bubble the way the web app measured it. */
+/** Rough text width at a size, for sizing the suggestion bubble. */
 export function textWidth(s, size) {
   let w = 0;
   for (const ch of s) w += /[mwMW@]/.test(ch) ? 0.82 : /[il.,:;'|!]/.test(ch) ? 0.3 : /[A-Z]/.test(ch) ? 0.66 : 0.55;

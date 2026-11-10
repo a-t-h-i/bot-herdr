@@ -90,3 +90,16 @@ test("Enter's newline comes out", () => {
   assert.equal(withoutEnter("abcd\n", "abcd"), "abcd");
   assert.equal(messageText("look", ["/x.png", "/y"]), "look\n/x.png\n/y");
 });
+
+test("children sit under their parent in the @ list, and /team briefs", () => {
+  const kids = [
+    { address: "t5", parent: "t1", parentName: "Claude Code", name: "review", status: "working", program: { key: "pi", name: "pi" } },
+    { address: "t6", parent: "t5", parentName: "review", name: "lint", status: "idle", program: { key: "pi", name: "pi" } },
+  ];
+  const rows = mentionRows("", { agents: [claude, codex], children: kids, known: [], space: "s1" });
+  assert.deepEqual(rows.map((r) => r.id), ["agent:t1", "agent:t5", "agent:t6", "agent:t2", "all"]);
+  assert.equal(rows[1].tag, "child");
+  assert.match(rows[1].hint, /child of Claude Code · working/);
+  assert.equal(mentionRows("rev", { agents: [claude], children: kids, space: "s1" })[0].id, "agent:t5");
+  assert.deepEqual(plan({ text: "/team", tokens: [] }, { agents: [claude], target: "t1", space: "s1" }).steps, [{ do: "brief", address: "t1" }]);
+});
