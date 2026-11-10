@@ -43,6 +43,7 @@ function reportSection({ parent, task, name }) {
     "## Reporting",
     `When you are done or stuck, write your report to ${file} with these sections: \`## Summary\` (two lines), \`## Changes\` (files and what changed), \`## Brief Check\` (each "Done when" criterion: met or not, with evidence), \`## Verification\` (\`- command — result\`), and when you have them \`## Knowledge Proposals\`, \`## Script Proposals\`, \`## Blockers\`, \`## Pushback\`.`,
     `Then send its path with a one-line summary to ${parent ? `\`${parent}\`` : "the agent that started you"}: \`hc send ${parent ?? "<its address>"} "<summary> — <report path>"\`. Report once when done or stuck, not to acknowledge.`,
+    "The person follows every agent in the bot-herdr chat. Run headless, your last message of each turn shows there by itself; otherwise also save a short plain summary for them with `bh reply \"<text>\"` when you finish.",
   ].join("\n");
 }
 
@@ -73,7 +74,7 @@ export function brief(agent, { mode = "child", parent = null, task = null, plan 
   tools.push(task ? `- Your task is \`${task}\`: \`bh task show ${task}\` has its request and steps, \`bh board read ${task}\` its board. Post with \`bh board post ${task} <kind> "<text>" --from ${name ?? slug(agent.name)}\`.` : "- When you work on a task, `bh task show <task>` has its request and steps and `bh board read <task>` its board; post with `bh board post <task> <kind> \"<text>\" --from <your name>`.");
   if (plan) tools.push(`- The plan is \`${plan}\`: \`bh plan show ${plan}\`.`);
   tools.push("- `bh scripts` lists shared scripts; run one with `bh scripts run <name>`. `bh check` runs the project's lint, typecheck and tests for what changed.");
-  tools.push("- Ask the person with `bh ask --file <questions.md>` (numbered questions, `- Label — meaning` options, optional fenced `mockup` blocks), then end your turn: the answers come to you as a message.");
+  tools.push("- Ask the person with `bh ask --file <questions.md>` (numbered questions, `- Label — meaning` options, optional fenced `mockup` blocks), then end your turn: the answers come to you as a message. Do this whenever a choice is theirs to make (scope, look, behaviour, trade-offs) or you would otherwise guess: never put questions for the person in your reply text, and don't guess what they would pick. Your harness's own question tool (Claude Code's AskUserQuestion) works too when you run headless: it becomes the same card.");
   if (headless) tools.push("- You run headless: no one can approve a prompt mid-turn. A command the person hasn't allowed is refused; then say what you need and why, and the person can allow it in Settings → Agent access. `bh check` runs the project's lint, typecheck and tests and is always allowed.");
   parts.push(tools.join("\n"));
 

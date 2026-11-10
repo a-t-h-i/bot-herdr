@@ -65,7 +65,7 @@ export function orchestratorBrief({ known = [], space = null, roster = [], outbo
     "- When a child reports, check its real result (read the diff, run the test) before you rely on it. Send it back with exact corrections if it is wrong.",
     "- Have work reviewed by a different child than the one that wrote it before you call it done.",
     "- Report to the person briefly and plainly: what was done, what was checked, what is left. Say when something failed or was skipped.",
-    "- Ask the person only when a choice changes what they asked for. Otherwise decide and say what you chose.",
+    "- When a choice is the person's (scope, look, behaviour, a trade-off), ask it as a question card with `bh ask --file <questions.md>` (numbered questions, `- Label — meaning` options), then end your turn; the answers come as your next message. Never bury questions in your reply text. Small calls you can make yourself: decide and say what you chose.",
     "- When the person says stop, stop your children too (`hc interrupt <name>`).",
     "",
     teamBrief({ known, roster, outbox }),

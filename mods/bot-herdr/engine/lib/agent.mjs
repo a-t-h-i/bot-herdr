@@ -15,6 +15,7 @@ import { slug } from "../../roster.js";
 import { DATA, accessOf, ensureDir, now, projectRoot, readJson, writeJson, writeText } from "./core.mjs";
 import * as team from "./team.mjs";
 import { HEADLESS, headless, interactive, launch, turn } from "./runner.mjs";
+import * as Q from "./ask.mjs";
 
 export { accessOf };
 
@@ -226,6 +227,14 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
         say(`${DIM}  · ${e.line}${OFF}`);
         status("working", e.line);
         activity(e.line);
+      } else if (e.kind === "ask" && address) {
+        // The harness's own question tool: the same card as bh ask; the answers come back as a message.
+        try {
+          const q = Q.ask({ title: e.title ?? "Questions", questions: e.questions, from: address, fromName: who, cwd });
+          say(`${DIM}  · Asked the person (${q.questions.length} question${q.questions.length === 1 ? "" : "s"}); the answers come as the next message.${OFF}`);
+        } catch (err) {
+          say(`${DIM}  · Couldn't ask: ${err.message}${OFF}`);
+        }
       } else if (e.kind === "text" && e.text.trim() && e.text !== shown) {
         shown = e.text;
         say(`\n${e.text.trim()}\n`);
@@ -256,7 +265,8 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
       say(`${RED}${r.error}${OFF}`);
       reply = `${reply ? `${reply}\n\n` : ""}**Couldn't finish:**\n\n\`\`\`\n${String(r.error).slice(-1500)}\n\`\`\``;
     }
-    if (mode === "lead" && address && reply) writeText(join(DATA, "replies", `${fileKey(address)}.md`), replyText(reply));
+    // Every agent's answer reaches the chat, a child's too (it also reports to its parent).
+    if (address && reply) writeText(join(DATA, "replies", `${fileKey(address)}.md`), replyText(reply));
     status(r.error ? "error" : "done", r.error ? String(r.error).split("\n")[0] : undefined);
   }
 

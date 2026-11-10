@@ -58,6 +58,30 @@ export function toolLine(name, input = {}) {
   return `${verb}${what ? ` ${String(what).split("\n")[0].slice(0, 140)}` : ""}`;
 }
 
+/**
+ * Claude Code's own question tool (AskUserQuestion) as bh ask's questions:
+ * { questions: [{ question, header, options: [{ label, description }], multiSelect }] }.
+ * Run headless it can't show its own prompt, so the chat shows the questions instead.
+ */
+export function fromAskTool(input) {
+  const list = Array.isArray(input?.questions) ? input.questions : [];
+  const questions = list
+    .filter((q) => q && typeof q.question === "string")
+    .map((q) => ({
+      seat: null,
+      text: q.question,
+      multi: Boolean(q.multiSelect),
+      options: (Array.isArray(q.options) ? q.options : []).filter((o) => o?.label).map((o) => ({
+        label: String(o.label).replace(/\s*\(Recommended\)\s*/i, "").trim(),
+        meaning: String(o.description ?? ""),
+        recommended: /\(Recommended\)/i.test(String(o.label)),
+        mockup: null,
+      })),
+    }));
+  if (!questions.length) return null;
+  return { title: list[0]?.header || "Questions", questions };
+}
+
 /** Reads a child's stdout as JSON lines. */
 function lines(child, onLine) {
   let buf = "";
@@ -119,7 +143,11 @@ function claudeTurn({ agent, known, state, briefFile, prompt, cwd, on, access, a
   return oneShot(argv, prompt, cwd, (event, turn) => {
     if (event.type === "assistant") {
       for (const b of event.message?.content ?? []) {
-        if (b.type === "tool_use") on({ kind: "tool", line: toolLine(b.name, b.input) });
+        if (b.type === "tool_use") {
+          const asked = b.name === "AskUserQuestion" ? fromAskTool(b.input) : null;
+          if (asked) on({ kind: "ask", ...asked });
+          else on({ kind: "tool", line: toolLine(b.name, b.input) });
+        }
         if (b.type === "text" && b.text?.trim()) {
           turn.text = b.text;
           on({ kind: "text", text: b.text });
