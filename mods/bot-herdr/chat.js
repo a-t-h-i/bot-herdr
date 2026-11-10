@@ -10,7 +10,8 @@ import { div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextView } from "gpui-base";
 import { terminals, spaces, focused, settings, shared, setShared, readTextFile } from "herdr";
 import * as fs from "fs/promises";
-import { LIGHT, DARK, SIZE, ICON, readable, textWidth } from "./look.js";
+import { SIZE, ICON, readable, textWidth } from "./look.js";
+import { colors } from "./theme.js";
 import { Composer, outboxDir, liveAgents } from "./composer.js";
 import { isQuiet, quietStatus } from "./live.js";
 import { FOCUS, OUTGOING, OPEN_TASK, activePage, openTerminal, showPage } from "./pages.js";
@@ -401,7 +402,7 @@ export class Chat {
       cx.timer.after(1, (cx) => this.composer.sendText(String(out.text ?? ""), cx));
     }
 
-    const c = settings().dark ? DARK : LIGHT;
+    const c = colors();
     const width = Math.max(320, Math.min(SIZE.maxWidth, this.size.width - SIZE.gutter * 2));
     const space = this.space();
     const view = shown(this.entries, space, this.back);

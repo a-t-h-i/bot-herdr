@@ -130,6 +130,63 @@ export function tint(c, row) {
   return c.accent;
 }
 
+const rgb = (h) => {
+  const m = /^#?([0-9a-f]{6})/i.exec(String(h ?? ""));
+  return m ? [0, 2, 4].map((i) => parseInt(m[1].slice(i, i + 2), 16)) : null;
+};
+/** a mixed toward b by t (0..1), as #rrggbb; a when either isn't a colour. */
+export function mix(a, b, t) {
+  const x = rgb(a);
+  const y = rgb(b);
+  if (!x || !y) return a;
+  return `#${x.map((v, i) => hex(v + (y[i] - v) * t)).join("")}`;
+}
+
+/** Whether a theme is ours (the Claude look above): the layout's own pair, or none named. */
+export const ownTheme = (name) => !name || /^bot-herdr/.test(String(name));
+
+/**
+ * Our tokens for any herdr theme: ours when the theme is ours; otherwise every token from the
+ * theme's own colours (herdr names the same ones in every theme), so Graphite, Ink, Moss, Paper,
+ * Atom One Dark, Herdr 98 and any theme file all look like themselves here.
+ */
+export function palette(s = {}, t = {}) {
+  if (ownTheme(s.theme) || !t?.foreground) return s.dark ? DARK : LIGHT;
+  const dark = s.dark ?? (luminance(String(t.background ?? t.surface ?? "#000").replace("#", "")) ?? 0) < 0.4;
+  const base = dark ? DARK : LIGHT;
+  const ground = t.canvas ?? t.surface ?? t.background ?? base.ground;
+  const fill = t.raised ?? t.popover ?? t.surface ?? base.fill;
+  const ink = t.foreground;
+  const edge = t.border ?? mix(fill, ink, 0.18);
+  const accent = t.accent ?? base.accent;
+  const red = t.ansi1 ?? t.blocked ?? base.danger;
+  return {
+    ground,
+    fill,
+    edge,
+    edgeDark: mix(edge, "#000000", 0.18),
+    rim: fill,
+    ink,
+    muted: t.muted ?? mix(ink, fill, 0.35),
+    faint: t.dim ?? mix(ink, fill, 0.5),
+    hover: t.hover ?? mix(fill, ink, 0.06),
+    well: t.input ?? mix(ground, ink, 0.06),
+    kbd: t.selected ?? mix(fill, ink, 0.08),
+    accent,
+    accentInk: t.accent_foreground ?? base.accentInk,
+    accentLip: mix(accent, "#000000", 0.2),
+    stop: red,
+    stopHover: mix(red, "#000000", 0.1),
+    danger: red,
+    bubble: t.selected ?? mix(ground, ink, 0.07),
+    bubbleEdge: mix(t.selected ?? ground, ink, 0.16),
+    info: t.ansi4 ?? base.info,
+    success: t.ansi2 ?? base.success,
+    warning: t.ansi3 ?? base.warning,
+    scrim: dark ? "#000000a6" : "#14141380",
+  };
+}
+
 /** Rough text width at a size, for sizing the suggestion bubble. */
 export function textWidth(s, size) {
   let w = 0;

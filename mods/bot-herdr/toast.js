@@ -7,7 +7,8 @@
 import { div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { props, settings, setShared, closeOverlay, run } from "herdr";
-import { LIGHT, DARK, ICON } from "./look.js";
+import { ICON } from "./look.js";
+import { colors } from "./theme.js";
 import { activePage } from "./pages.js";
 import { TOAST_KEY, noteText } from "./toasts.js";
 
@@ -36,7 +37,7 @@ export class Toast {
 
   render() {
     if (this.handed) return div();
-    const c = settings().dark ? DARK : LIGHT;
+    const c = colors();
     const p = this.p;
     const kind = TOAST_ICONS[p.level] ? p.level : "info";
     const action = p.action?.name ? p.action : null;

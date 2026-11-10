@@ -12,7 +12,8 @@
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, TextView, InputState, Input, TextareaState, Textarea } from "gpui-base";
 import { settings, shared } from "herdr";
-import { LIGHT, DARK, SIZE, ICON } from "./look.js";
+import { SIZE, ICON } from "./look.js";
+import { colors } from "./theme.js";
 import { activePage, sendFromChat, OPEN_TASK } from "./pages.js";
 import { ROSTER_KEY, roster, slug } from "./roster.js";
 import { bh, bhJson, enc, projectDir } from "./bh.js";
@@ -294,7 +295,7 @@ export class Work {
       this.opened = want.id;
       this.archived = false;
     }
-    const c = settings().dark ? DARK : LIGHT;
+    const c = colors();
     const content = Math.max(320, Math.min(MAX, this.width - SIZE.gutter * 2));
     const body = this.tab === "plans" ? this.plansView(c, content) : this.tab === "knowledge" ? this.knowledgeView(c, content) : this.tasksView(c, content);
     return div()

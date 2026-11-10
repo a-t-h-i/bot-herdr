@@ -24,6 +24,8 @@ node install.mjs --switch
 
 This copies `mods/bot-herdr` into herdr's app home (`~/.config/herdr-app`, or `$HERDR_APP_HOME`). It also adds the `bot-herdr` layout, its Claude light and dark themes, a few harnesses herdr's own table doesn't start from its menus (Oh My Pi, Droid, Qwen Code, Aider, Goose, Auggie, Cline: see `programs.json`), and **ctrl+shift+m** for the chat. Then it runs `herdr-app check` on the mod and switches the window to the layout. `ctrl+shift+l` cycles layouts.
 
+Pick any other herdr theme (Graphite, Ink, Moss, Paper, Atom One Dark, Herdr 98 or a theme file of your own) in herdr's settings and every bot-herdr page follows it.
+
 Run `node install.mjs` again after a `git pull`. A layout from before the Tasks, Plans and Knowledge pages is replaced (yours is kept as `bot-herdr.json.old`); otherwise your layout stays unless you pass `--force`. Harness entries are only added, never changed.
 
 ## The team

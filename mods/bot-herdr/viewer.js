@@ -5,7 +5,8 @@
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, Editor, EditorState } from "gpui-base";
 import { props, settings, theme, readTextFile, closeOverlay, openOverlay } from "herdr";
-import { LIGHT, DARK, SIZE, ICON } from "./look.js";
+import { SIZE, ICON } from "./look.js";
+import { colors } from "./theme.js";
 import { bh } from "./bh.js";
 
 const LANG = { ts: "js", tsx: "js", mts: "js", cts: "js", jsx: "js", mjs: "js", cjs: "js", toml: "yaml", yml: "yaml", jsonc: "json", svelte: "html", vue: "html", htm: "html", md: "markdown" };
@@ -68,7 +69,7 @@ export class FileView {
   }
 
   render() {
-    const c = settings().dark ? DARK : LIGHT;
+    const c = colors();
     const shown = this.p.shown ?? this.p.path ?? "";
     const name = String(shown).split(/[\\/]/).pop();
     const action = (id, icon, label, onClick) => h_flex()

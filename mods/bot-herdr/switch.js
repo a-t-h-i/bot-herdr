@@ -5,7 +5,8 @@
 import { div } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { focused, settings, shared, theme, nextCommand } from "herdr";
-import { LIGHT, DARK, SIZE } from "./look.js";
+import { SIZE } from "./look.js";
+import { colors } from "./theme.js";
 import { PAGES, HOLD, activePage, showPage } from "./pages.js";
 
 const HOLD_MS = 3000;
@@ -38,7 +39,7 @@ export class Switch {
 
   render(cx) {
     this.follow(cx);
-    const c = settings().dark ? DARK : LIGHT;
+    const c = colors();
     const t = theme();
     const active = activePage();
     // Drawn as one bar with herdr's tabs beside it: the same ground and bottom line.

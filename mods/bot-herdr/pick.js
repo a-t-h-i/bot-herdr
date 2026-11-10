@@ -5,7 +5,8 @@
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { props, settings, setShared, closeOverlay, openOverlay } from "herdr";
-import { LIGHT, DARK, SIZE, ICON } from "./look.js";
+import { SIZE, ICON } from "./look.js";
+import { colors } from "./theme.js";
 
 export const PICKED = "bot-herdr.picked";
 const ROW = 30;
@@ -38,7 +39,7 @@ export class Pick {
   }
 
   render() {
-    const c = settings().dark ? DARK : LIGHT;
+    const c = colors();
     const options = this.p.options ?? [];
     return v_flex()
       .id("bh-pick")

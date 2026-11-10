@@ -7,7 +7,8 @@
 import { div, svg, image } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { props, settings, setShared, closeOverlay, openOverlay } from "herdr";
-import { LIGHT, DARK, SIZE, ICON } from "./look.js";
+import { SIZE, ICON } from "./look.js";
+import { colors } from "./theme.js";
 import { openInBrowser } from "./media.js";
 
 export const CHOSEN = "bot-herdr.lightbox";
@@ -59,7 +60,7 @@ export class Lightbox {
   }
 
   render() {
-    const c = settings().dark ? DARK : LIGHT;
+    const c = colors();
     const items = this.items();
     const item = items[this.at] ?? {};
     const many = items.length > 1;

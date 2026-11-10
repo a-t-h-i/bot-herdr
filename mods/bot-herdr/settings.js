@@ -14,7 +14,8 @@
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { agents, panes, spaces, exec, settings, shared, setShared, knownAgents, notify } from "herdr";
-import { LIGHT, DARK, SIZE, ICON } from "./look.js";
+import { SIZE, ICON } from "./look.js";
+import { colors } from "./theme.js";
 import { ROSTER_KEY, HEADLESS_KEY, HEADLESS, ROLES, roster, roleOf, argvOf, runnable, runningAs, effortsOf, modelsOf, harnessOf, blank, slug, parseModelList } from "./roster.js";
 import { bh, bhJson, enc, currentSpace, ROUTING_KEY } from "./bh.js";
 import { PICKED, openPick } from "./pick.js";
@@ -379,7 +380,7 @@ export class Settings {
 
   render(cx) {
     if ((shared(PICKED)?.at ?? 0) > this.pickedAt) cx.timer.after(1, (cx) => this.applyPick(cx));
-    const c = settings().dark ? DARK : LIGHT;
+    const c = colors();
     const list = this.list().filter((a) => this.inputs[a.id]);
     const content = Math.max(MIN_CARD, Math.min(MAX, this.width - SIZE.gutter * 2));
     const cols = content >= MIN_CARD * 3 + GAP * 2 ? 3 : content >= MIN_CARD * 2 + GAP ? 2 : 1;

@@ -28,7 +28,8 @@ import {
   shared, appHome, window as appWindow,
 } from "herdr";
 import { showPage, hold } from "./pages.js";
-import { LIGHT, DARK, SIZE, MOTION, ICON, tint, readable, textWidth, rowsFor } from "./look.js";
+import { SIZE, MOTION, ICON, tint, readable, textWidth, rowsFor } from "./look.js";
+import { colors } from "./theme.js";
 import {
   triggerAt, caretAfterEdit, slashRows, mentionRows, tokenFor, plan, orchestratorOf, withoutEnter, messageText, commandColor,
 } from "./route.js";
@@ -820,7 +821,7 @@ export class Composer {
         });
       }
     }
-    const c = settings().dark ? DARK : LIGHT;
+    const c = colors();
     const width = Math.max(320, Math.min(SIZE.maxWidth, pageWidth - SIZE.gutter * 2));
     return this.bubble(c, width);
   }
