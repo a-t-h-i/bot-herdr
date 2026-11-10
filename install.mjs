@@ -37,8 +37,9 @@ for (const name of ["bot-herdr-light.json", "bot-herdr-dark.json"]) {
 console.log(`themes   ${join(appHome, "themes")}/bot-herdr-{light,dark}.json`);
 
 const layout = join(appHome, "layouts", "bot-herdr.json");
-// A layout from before the pages (chat, terminals, tasks, settings) can't show them: replace it.
-const old = existsSync(layout) && !readFileSync(layout, "utf8").includes('"view": "work"');
+// A layout from before the pages (chat, terminals, tasks, plans, knowledge, settings) can't show
+// them: replace it.
+const old = existsSync(layout) && !readFileSync(layout, "utf8").includes('"id": "knowledge"');
 if (old) cpSync(layout, `${layout}.old`);
 if (!existsSync(layout) || old || args.has("--force")) {
   mkdirSync(dirname(layout), { recursive: true });

@@ -22,7 +22,7 @@ import {
 import { showPage, hold } from "./pages.js";
 import { LIGHT, DARK, SIZE, MOTION, ICON, tint, readable, textWidth, rowsFor } from "./look.js";
 import {
-  triggerAt, caretAfterEdit, slashRows, mentionRows, tokenFor, plan, orchestratorOf, withoutEnter, messageText,
+  triggerAt, caretAfterEdit, slashRows, mentionRows, tokenFor, plan, orchestratorOf, withoutEnter, messageText, commandColor,
 } from "./route.js";
 import { ROSTER_KEY, roster, argvOf, runnable, runningAs, slug } from "./roster.js";
 import { BRIEFED, teamBrief, orchestratorBrief, briefed } from "./brief.js";
@@ -354,10 +354,10 @@ export class Composer {
       this.input.set_value("");
       this.mode = null;
       showPage("settings");
-    } else if (row.kind === "command") {
+    } else if (lists) {
       this.input.set_selected_range(range);
-      this.mode = lists ? "start" : null;
-      this.input.replace(lists ? "@" : `/${row.name} `);
+      this.mode = "start";
+      this.input.replace("@");
     } else {
       this.mode = null;
       this.input.replace_range_with_token(range, tokenFor(row));
@@ -669,7 +669,7 @@ export class Composer {
               .bg(CLEAR)
               .border_0()
               .text_size(14)
-              .line_height(SIZE.line)
+              .line_height(`${SIZE.line}px`)
               .text_color(c.ink)
               .token((tok) => this.chip(c, tok.token))
               .on_token_click((ev, cx) => {
@@ -683,7 +683,8 @@ export class Composer {
 
   chip(c, token) {
     const agent = token.id.startsWith("agent:") ? agents().find((a) => a.address === token.id.slice(6)) : null;
-    const color = agent?.program?.tile ? readable(c, agent.program.tile) : token.id.startsWith("start:") ? c.muted : c.accent;
+    const command = token.id.startsWith("cmd:") ? commandColor(token.id.slice(4)) : null;
+    const color = command ? readable(c, command, c.hover) : agent?.program?.tile ? readable(c, agent.program.tile, c.hover) : token.id.startsWith("start:") ? c.muted : c.accent;
     return h_flex()
       .px(6)
       .h(20)
@@ -915,10 +916,9 @@ export class Composer {
       .id("bc-pane")
       .relative()
       .flex_none()
-      .w(w)
+      .w_full()
       .h(h)
       .transition("height", MOTION.menuHeight)
-      .transition("width", MOTION.menuWidth)
       .bg(c.fill)
       .border_t(1)
       .border_l(1)
@@ -932,24 +932,33 @@ export class Composer {
       .justify_end()
       .child(div().absolute().top(0).left(SIZE.radius).right(SIZE.radius).h(1).bg(c.rim))
       .child(body);
-    // The joins: a concave curve each side, so the pane and the box read as one shape.
+    // The joins: a concave curve each side, so the pane and the box read as one shape. Each is
+    // one pixel wider than the gap it fills and is painted over the pane, so it also covers the
+    // foot of the pane's side border: the border turns into the curve instead of running on.
+    const F = SIZE.fillet;
     const fillet = (side) =>
       div()
-        .relative()
-        .size(SIZE.fillet)
-        .flex_none()
-        .child(svg(ICON(`fillet-${side}`)).absolute().top(0).left(0).size(SIZE.fillet).text_color(c.fill))
-        .child(svg(ICON(`fillet-${side}-edge`)).absolute().top(0).left(0).size(SIZE.fillet).text_color(c.edge));
-    return h_flex()
+        .absolute()
+        .bottom(0)
+        .when(side === "left", (el) => el.left(0))
+        .when(side === "right", (el) => el.right(0))
+        .w(F + 1)
+        .h(F)
+        .child(svg(ICON(`fillet-${side}`)).absolute().top(0).left(0).w(F + 1).h(F).text_color(c.fill))
+        .child(svg(ICON(`fillet-${side}-edge`)).absolute().top(0).left(0).w(F + 1).h(F).text_color(c.edge));
+    return div()
       .id("bc-pane-row")
+      .relative()
       .flex_none()
+      .w(w + F * 2)
       .h(h)
-      .items_end()
+      .transition("width", MOTION.menuWidth)
+      .transition("height", MOTION.menuHeight)
       .mb(-1)
       .opacity(this.ready ? 1 : 0)
       .transition("opacity", { duration: 110, easing: "ease-out" })
+      .child(h_flex().absolute().top(0).bottom(0).left(F).right(F).items_end().child(pane))
       .child(fillet("left"))
-      .child(pane)
       .child(fillet("right"));
   }
 
@@ -988,13 +997,13 @@ export class Composer {
             .justify_center()
             .rounded(6)
             .border_1()
-            .border_color(c.edge)
+            .border_color(r.color ? color : c.edge)
             .text_size(10.5)
             .font_semibold()
-            .text_color(c.muted)
+            .text_color(r.color ? color : c.muted)
             .child(r.name.charAt(0).toUpperCase()),
         ))
-      .child(div().flex_none().text_size(13).font_medium().text_color(r.kind === "command" ? c.ink : color).child(showName))
+      .child(div().flex_none().text_size(13).font_medium().text_color(r.kind === "all" ? c.ink : color).child(r.kind === "command" ? `/${showName}` : showName))
       .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(c.muted).child(r.hint))
       .child(div().flex_none().px(5).rounded(5).text_size(10.5).font_medium().text_color(color).child(r.tag));
   }

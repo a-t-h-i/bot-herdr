@@ -1,7 +1,8 @@
-// bot-herdr: one mod, four views, picked by the layout block's props.
+// bot-herdr: one mod, several views, picked by the layout block's props.
 //   { "view": "chat" }      the chat page: every agent's replies and the composer (chat.js)
 //   { "view": "switch" }    the Chat / Terminals / Settings switch in the top bar (switch.js)
-//   { "view": "work" }      the team's tasks, plans and knowledge (work.js)
+//   { "view": "work", "tab": "tasks" | "plans" | "knowledge" }   the team's work (work.js)
+//   { "view": "pick" }      a dropdown list, opened as a popup by Settings (pick.js)
 //   { "view": "settings" }  the agents: harness, model, effort (settings.js)
 
 import { View } from "gpui-kit";
@@ -10,14 +11,15 @@ import { Chat } from "./chat.js";
 import { Switch } from "./switch.js";
 import { Settings } from "./settings.js";
 import { Work } from "./work.js";
+import { Pick } from "./pick.js";
 
-const VIEWS = { chat: Chat, switch: Switch, work: Work, settings: Settings };
+const VIEWS = { chat: Chat, switch: Switch, work: Work, settings: Settings, pick: Pick };
 
 export default class BotHerdr extends View {
   init(given, cx) {
-    const view = (given ?? props())?.view ?? props()?.view ?? "chat";
-    this.page = new (VIEWS[view] ?? Chat)();
-    this.page.init(given, cx);
+    const p = given?.view ? given : props() ?? given ?? {};
+    this.page = new (VIEWS[p.view] ?? Chat)();
+    this.page.init(p, cx);
   }
 
   render(cx) {

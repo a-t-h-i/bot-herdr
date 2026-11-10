@@ -339,7 +339,7 @@ export class Chat {
           .rounded(SIZE.radius)
           .bg(c.well)
           .text_size(14)
-          .line_height(SIZE.line)
+          .line_height(`${SIZE.line}px`)
           .children(lines.map((line) => div().min_h(SIZE.line).child(line)))
           .when((e.files ?? []).length > 0, (el) =>
             el.child(h_flex().pt(4).gap(6).flex_wrap().children(e.files.map((name) =>
@@ -359,7 +359,7 @@ export class Chat {
           .gap(8)
           .items_center()
           // Agents are named in their own colour, no icon and no dot.
-          .child(div().text_size(12.5).font_semibold().text_color(e.from?.tile ? readable(c, e.from.tile) : c.accent).child(e.from?.name ?? "Agent"))
+          .child(div().text_size(12.5).font_semibold().text_color(e.from?.tile ? readable(c, e.from.tile, c.ground) : c.accent).child(e.from?.name ?? "Agent"))
           .child(div().text_size(11).text_color(c.faint).child(clock(e.at)))
           .child(div().flex_1())
           .child(this.link(c, `bh-open-${e.id}`, "Open terminal", () => openTerminal(e.from.address))),
@@ -370,7 +370,7 @@ export class Chat {
           .max_h(460)
           .overflow_y_scroll()
           .text_size(14)
-          .line_height(SIZE.line)
+          .line_height(`${SIZE.line}px`)
           .child(TextView.markdown(`bh-md-${e.id}`, e.text).selectable(true)),
       );
   }
@@ -412,7 +412,7 @@ export class Chat {
           .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(c.muted).child(q.title && q.title !== "Questions" ? `asks about ${q.title}` : "has questions"))
           .child(this.link(c, `bh-q-open-${q.id}`, "Open terminal", () => openTerminal(q.from))),
       )
-      .when(Boolean(q.intro), (el) => el.child(div().text_size(13.5).line_height(SIZE.line).child(TextView.markdown(`bh-q-intro-${q.id}`, q.intro))))
+      .when(Boolean(q.intro), (el) => el.child(div().text_size(13.5).line_height(`${SIZE.line}px`).child(TextView.markdown(`bh-q-intro-${q.id}`, q.intro))))
       .children(q.questions.map((x, i) => this.ask(c, q, x, i)))
       .child(
         h_flex()
@@ -450,7 +450,7 @@ export class Chat {
         h_flex()
           .gap(6)
           .items_start()
-          .child(div().flex_1().min_w(0).text_size(14).font_semibold().line_height(SIZE.line).child(`${i + 1}. ${x.text}`))
+          .child(div().flex_1().min_w(0).text_size(14).font_semibold().line_height(`${SIZE.line}px`).child(`${i + 1}. ${x.text}`))
           .when(Boolean(x.seat), (el) => el.child(div().flex_none().pt(2).text_size(11).text_color(c.faint).child(String(x.seat).toUpperCase()))),
       )
       .when(Boolean(x.multi), (el) => el.child(div().text_size(11.5).text_color(c.faint).child("Pick any that apply.")))

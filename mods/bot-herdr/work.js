@@ -1,4 +1,5 @@
-// The Tasks page: what the team works on in the project of the space you are looking at.
+// The Tasks, Plans and Knowledge pages: the team's work in the project of the space you are
+// looking at. One view; the layout gives each page its own block (props.tab).
 //   Tasks      a board (Backlog, In progress, Completed); a task opens to its steps, each with
 //              who did it and for how long. Resume hands it back to the Orchestrator.
 //   Plans      the panel's drafts: read one, comment on it, start it as a task.
@@ -58,8 +59,10 @@ const day = (iso) => {
 };
 
 export class Work {
-  init(_props, cx) {
-    this.tab = load("tab", "tasks");
+  init(given, cx) {
+    // Each page is its own block (props.tab); without one, a tab row switches between them.
+    this.fixed = TABS.some((t) => t.id === given?.tab) ? given.tab : null;
+    this.tab = this.fixed ?? load("tab", "tasks");
     this.width = 900;
     this.height = 700;
     this.dir = null; // the project folder the data is from
@@ -82,7 +85,7 @@ export class Work {
     this.editor.on("change", (_e, cx) => cx.notify());
     this.reload(cx);
     cx.timer.every(REFRESH_MS, (cx) => {
-      if (activePage() === "work") this.reload(cx);
+      if (activePage() === (this.fixed ?? "work")) this.reload(cx);
     });
   }
 
@@ -211,7 +214,7 @@ export class Work {
                 h_flex()
                   .gap(12)
                   .items_center()
-                  .child(this.tabs(c))
+                  .child(this.fixed ? div().text_size(19).font_semibold().child(TABS.find((t) => t.id === this.fixed).label) : this.tabs(c))
                   .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(c.faint).child(this.dir ?? ""))
                   .child(this.iconButton(c, "bh-work-refresh", "refresh-cw", (_e, cx) => this.reload(cx))),
               )
@@ -423,7 +426,7 @@ export class Work {
           .child(this.chip(c, "bh-plan-arch", p.status === "archived" ? "Unarchive" : "Archive", false, (_e, cx) => this.act(["plan", p.status === "archived" ? "unarchive" : "archive", p.id], cx))),
       )
       .child(p.markdown
-        ? div().text_size(13.5).line_height(SIZE.line).child(TextView.markdown(`bh-plan-md-${p.id}-${p.round ?? 0}`, p.markdown).selectable(true))
+        ? div().text_size(13.5).line_height(`${SIZE.line}px`).child(TextView.markdown(`bh-plan-md-${p.id}-${p.round ?? 0}`, p.markdown).selectable(true))
         : div().text_size(13).text_color(c.muted).child("No draft yet: the panel is still asking."))
       .when(open.length > 0, (el) => el.child(
         v_flex()

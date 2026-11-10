@@ -102,7 +102,7 @@
               "id": "switch",
               "type": "block",
               "size": {
-                "px": 330
+                "px": 452
               },
               "window_drag": true,
               "content": {
@@ -208,12 +208,35 @@
               ]
             },
             {
-              "id": "work",
+              "id": "tasks",
               "type": "block",
               "content": {
                 "mod": "bot-herdr",
                 "props": {
-                  "view": "work"
+                  "view": "work",
+                  "tab": "tasks"
+                }
+              }
+            },
+            {
+              "id": "plans",
+              "type": "block",
+              "content": {
+                "mod": "bot-herdr",
+                "props": {
+                  "view": "work",
+                  "tab": "plans"
+                }
+              }
+            },
+            {
+              "id": "knowledge",
+              "type": "block",
+              "content": {
+                "mod": "bot-herdr",
+                "props": {
+                  "view": "work",
+                  "tab": "knowledge"
                 }
               }
             },

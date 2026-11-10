@@ -8,7 +8,9 @@ export const STACK = "pages";
 export const PAGES = [
   { id: "chat", label: "Chat" },
   { id: "terminals", label: "Terminals" },
-  { id: "work", label: "Tasks" },
+  { id: "tasks", label: "Tasks" },
+  { id: "plans", label: "Plans" },
+  { id: "knowledge", label: "Knowledge" },
   { id: "settings", label: "Settings" },
 ];
 /** Set (to the time) when a view wants the composer to take the keyboard. */

@@ -87,16 +87,28 @@ function luminance(hex) {
   return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2];
 }
 
+const hex = (n) => Math.round(Math.max(0, Math.min(255, n))).toString(16).padStart(2, "0");
+const contrast = (a, b) => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+
 /**
- * An agent's colour, if it reads on our surface; else the ink. herdr gives most agents a
- * near-black tile, which vanishes on the dark theme.
+ * A colour that reads as text on `bg` (our card by default): the colour itself when it has
+ * 4.5:1 contrast there, else the same hue moved toward the ink until it does. herdr gives many
+ * agents a near-black tile, which would vanish on the dark theme, so a name keeps its hue but
+ * never the background's darkness.
  */
-export function readable(c, color) {
-  const a = luminance(color);
-  const b = luminance(c.fill);
-  if (a === null || b === null) return c.ink;
-  const ratio = (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
-  return ratio >= 3 ? color : c.ink;
+export function readable(c, color, bg = c.fill) {
+  const m = /^#?([0-9a-f]{6})/i.exec(String(color ?? ""));
+  const back = luminance(bg);
+  const ink = /^#?([0-9a-f]{6})/i.exec(String(c.ink ?? ""));
+  if (!m || back === null || !ink) return c.ink;
+  if (contrast(luminance(m[1]), back) >= 4.5) return `#${m[1]}`;
+  const from = [0, 2, 4].map((i) => parseInt(m[1].slice(i, i + 2), 16));
+  const to = [0, 2, 4].map((i) => parseInt(ink[1].slice(i, i + 2), 16));
+  for (let t = 0.1; t < 1; t += 0.1) {
+    const mixed = from.map((v, i) => hex(v + (to[i] - v) * t)).join("");
+    if (contrast(luminance(mixed), back) >= 4.5) return `#${mixed}`;
+  }
+  return c.ink;
 }
 
 export function tint(c, row) {

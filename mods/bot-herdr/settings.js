@@ -13,6 +13,7 @@ import { agents, exec, settings, shared, setShared, knownAgents, notify } from "
 import { LIGHT, DARK, SIZE, ICON } from "./look.js";
 import { ROSTER_KEY, ROLES, roster, roleOf, argvOf, runnable, runningAs, effortsOf, modelsOf, harnessOf, blank, slug, parseModelList } from "./roster.js";
 import { bh, bhJson, enc, currentSpace, ROUTING_KEY } from "./bh.js";
+import { PICKED, openPick } from "./pick.js";
 
 const GAP = 14; // between cards
 const MAX = 1140; // the page's widest
@@ -47,11 +48,11 @@ export class Settings {
     this.known = [];
     this.knownSaved = "";
     this.inputs = {}; // agent id → { name, model, args }
-    this.open = null; // "<id>:harness" or "<id>:model": the list shown under that field
+    this.open = null; // "<id>:harness" or "<id>:model": the field whose list is open
+    this.pickedAt = shared(PICKED)?.at ?? 0;
     this.listed = {}; // harness → model ids its own list command printed (pi, Oh My Pi)
     this.listing = {}; // harness → true while asking it
     this.drag = null; // { id, bounds } while an effort slider is held
-    this.typing = null; // the agent whose model box is being typed in (its list filters)
     this.width = 900;
     this.saveGen = 0;
     this.problem = null;
@@ -105,6 +106,7 @@ export class Settings {
         this.known = [];
       }
       this.sync();
+      for (const h of new Set(this.list().map((a) => a.harness))) this.askModels(h, cx);
       // The bh tool starts agents by these commands: keep its copy current.
       const now = JSON.stringify(this.knownForBh());
       if (now !== this.knownSaved) {
@@ -193,14 +195,8 @@ export class Settings {
           const now = this.list().find((x) => x.id === a.id);
           if (!now || now[f.key] === value) return;
           if (f.key === "name" && (!value.trim() || now.role !== "custom")) return;
-          if (f.key === "model") {
-            // Typing filters the model list under the box.
-            this.typing = a.id;
-            this.open = `${a.id}:model`;
-          }
           this.change(a.id, { [f.key]: f.key === "name" ? value : value.trim() }, cx);
         });
-        if (f.key === "model") state.on("focus", (_e, cx) => this.showList(a.id, "model", true, cx));
         set[f.key] = state;
       }
       this.inputs[a.id] = set;
@@ -221,15 +217,38 @@ export class Settings {
     cx.notify();
   }
 
-  showList(id, field, on, cx) {
-    const key = `${id}:${field}`;
-    this.open = on ? key : this.open === key ? null : this.open;
-    this.typing = null;
-    if (on && field === "model") {
-      const a = this.list().find((x) => x.id === id);
-      if (a) this.askModels(a.harness, cx);
+  /** Opens a field's list as a popup under it; the pick comes back through shared state. */
+  openList(a, field, bounds) {
+    const key = `${a.id}:${field}`;
+    this.open = key;
+    if (field === "harness") {
+      const shown = this.known.filter((k) => k.installed || k.key === a.harness);
+      if (!shown.some((k) => k.key === a.harness)) shown.unshift({ key: a.harness, name: a.harness, installed: false });
+      openPick({ key, bounds, selected: a.harness, options: shown.map((k) => ({ value: k.key, label: k.name, note: k.installed ? "" : "not installed" })) });
+      return;
     }
-    cx.notify();
+    const own = modelsOf(a.harness);
+    const listed = (this.listed[a.harness] ?? []).filter((id) => !own.some((m) => m.id === id));
+    const row = (m) => ({ value: m.id, label: m.name, note: m.name !== m.id ? m.id : "" });
+    const options = [{ value: "", label: "The harness's default" }, ...own.filter((m) => m.current).map(row)];
+    if (listed.length) options.push({ heading: own.length ? "Your providers" : "Models it lists" }, ...listed.map((id) => ({ value: id, label: id })));
+    const older = own.filter((m) => !m.current);
+    if (older.length) options.push({ heading: "Older" }, ...older.map(row));
+    if (a.model && !options.some((o) => o.value === a.model)) options.splice(1, 0, { value: a.model, label: a.model, note: "typed" });
+    openPick({ key, bounds, selected: a.model, options });
+  }
+
+  /** A pick from a list (pick.js), applied once. */
+  applyPick(cx) {
+    const picked = shared(PICKED);
+    if (!picked?.at || picked.at <= this.pickedAt) return;
+    this.pickedAt = picked.at;
+    const [id, field] = String(picked.key ?? "").split(":");
+    const a = this.list().find((x) => x.id === id);
+    this.open = null;
+    if (!a) return;
+    if (field === "harness") this.pickHarness(a, picked.value, cx);
+    if (field === "model") this.pickModel(a, picked.value, cx);
   }
 
   /** pi and Oh My Pi print their models (every provider you set up): ask once per harness. */
@@ -297,7 +316,8 @@ export class Settings {
 
   // ── Drawing ────────────────────────────────────────────────────────────────────────────────
 
-  render() {
+  render(cx) {
+    if ((shared(PICKED)?.at ?? 0) > this.pickedAt) cx.timer.after(1, (cx) => this.applyPick(cx));
     const c = settings().dark ? DARK : LIGHT;
     const list = this.list().filter((a) => this.inputs[a.id]);
     const content = Math.max(MIN_CARD, Math.min(MAX, this.width - SIZE.gutter * 2));
@@ -401,9 +421,7 @@ export class Settings {
       )
       .child(div().min_h(34).text_size(12.5).text_color(c.muted).child(role?.does ?? "An agent you added. It works on what you send it with @name."))
       .child(v_flex().gap(5).child(this.label(c, "Harness")).child(this.select(c, a, "harness", harnessName, inner)))
-      .when(this.open === `${a.id}:harness`, (el) => el.child(this.harnessList(c, a)))
-      .child(v_flex().gap(5).child(this.label(c, "Model")).child(this.modelField(c, a, inputs.model)))
-      .when(this.open === `${a.id}:model`, (el) => el.child(this.modelList(c, a)))
+      .child(v_flex().gap(5).child(this.label(c, "Model")).child(this.modelField(c, a, inputs.model, inner)))
       .child(v_flex().gap(5)
         .child(this.label(c, "Effort", efforts.length ? (a.effort || "Default") : null))
         .child(efforts.length
@@ -436,7 +454,7 @@ export class Settings {
   }
 
   select(c, a, field, value, width) {
-    const open = this.open === `${a.id}:${field}`;
+    const open = false;
     return h_flex()
       .id(`bh-sel-${a.id}-${field}`)
       .w(width)
@@ -450,13 +468,17 @@ export class Settings {
       .border_color(open ? c.accent : c.edge)
       .cursor_pointer()
       .hover((s) => s.border_color(c.accent))
-      .on_click((_e, cx) => this.showList(a.id, field, !open, cx))
+      .on_mouse_down("left", (e, cx) => {
+        cx.stop_propagation();
+        this.openList(a, field, e.bounds);
+        cx.notify();
+      })
       .child(div().flex_1().min_w(0).truncate().text_size(13).child(value))
       .child(svg(ICON("chevron-down")).size(14).text_color(c.muted));
   }
 
-  modelField(c, a, state) {
-    const open = this.open === `${a.id}:model`;
+  modelField(c, a, state, inner) {
+    const open = false; // the list is a popup now; the field stays as it is
     return h_flex()
       .h(32)
       .pl(10)
@@ -479,65 +501,16 @@ export class Settings {
           .rounded(6)
           .cursor_pointer()
           .hover((s) => s.bg(c.hover))
-          .on_click((_e, cx) => this.showList(a.id, "model", !open, cx))
+          .on_mouse_down("left", (e, cx) => {
+            cx.stop_propagation();
+            // Under the whole field, not just the arrow.
+            const b = e.bounds;
+            const field = b ? { x: b.x - (inner - 28) * (Number(settings().zoom) || 1), y: b.y - 4, width: inner * (Number(settings().zoom) || 1), height: b.height + 8 } : null;
+            this.openList(a, "model", field);
+            cx.notify();
+          })
           .child(svg(ICON("chevron-down")).size(14).text_color(c.muted)),
       );
-  }
-
-  menu(c, id, rows, empty) {
-    return v_flex()
-      .id(id)
-      .max_h(232)
-      .overflow_y_scroll()
-      .p(4)
-      .gap(1)
-      .rounded(SIZE.control)
-      .bg(c.ground)
-      .border_1()
-      .border_color(c.edge)
-      .children(rows.length ? rows : [div().px(8).py(6).text_size(12.5).text_color(c.faint).child(empty)]);
-  }
-
-  menuRow(c, id, label, note, on, onClick) {
-    return h_flex()
-      .id(id)
-      .flex_none()
-      .min_h(30)
-      .px(8)
-      .gap(8)
-      .items_center()
-      .rounded(SIZE.nested)
-      .cursor_pointer()
-      .when(on, (el) => el.bg(c.well))
-      .hover((s) => s.bg(c.hover))
-      .on_click(onClick)
-      .child(div().flex_1().min_w(0).truncate().text_size(13).text_color(c.ink).child(label))
-      .when(Boolean(note), (el) => el.child(div().flex_none().text_size(11.5).text_color(c.faint).child(note)))
-      .when(on, (el) => el.child(svg(ICON("check")).size(14).text_color(c.accent)));
-  }
-
-  harnessList(c, a) {
-    const shown = this.known.filter((k) => k.installed || k.key === a.harness);
-    if (!shown.some((k) => k.key === a.harness)) shown.unshift({ key: a.harness, name: a.harness, installed: false });
-    const rows = shown.map((k) => this.menuRow(c, `bh-h-${a.id}-${k.key}`, k.name, k.installed ? "" : "not installed", k.key === a.harness, (_e, cx) => this.pickHarness(a, k.key, cx)));
-    return this.menu(c, `bh-hlist-${a.id}`, rows, "herdr found no agent harness on your PATH.");
-  }
-
-  modelList(c, a) {
-    const typed = (this.inputs[a.id]?.model.value() ?? "").trim().toLowerCase();
-    const own = modelsOf(a.harness);
-    const listed = (this.listed[a.harness] ?? []).filter((id) => !own.some((m) => m.id === id)).map((id) => ({ id, name: id, current: true }));
-    const all = [{ id: "", name: "The harness's default", current: true }, ...own, ...listed];
-    // While the box still shows the chosen model, show the whole list; once you type, filter it.
-    const filter = this.typing === a.id ? typed : "";
-    const fits = all.filter((m) => !filter || m.id.toLowerCase().includes(filter) || m.name.toLowerCase().includes(filter));
-    const current = fits.filter((m) => m.current);
-    const older = fits.filter((m) => !m.current);
-    const row = (m) => this.menuRow(c, `bh-m-${a.id}-${m.id || "default"}`, m.name, m.name !== m.id && m.id ? m.id : "", m.id === a.model, (_e, cx) => this.pickModel(a, m.id, cx));
-    const rows = [...current.map(row)];
-    if (older.length) rows.push(div().flex_none().px(8).pt(6).pb(2).text_size(11).text_color(c.faint).child("Older"), ...older.map(row));
-    const empty = this.listing[a.harness] ? "Asking the harness for its models…" : filter ? `No listed model matches; "${typed}" is used as typed.` : "We don't know this harness's models: type one.";
-    return this.menu(c, `bh-mlist-${a.id}`, rows, empty);
   }
 
   slider(c, a, stops, width) {

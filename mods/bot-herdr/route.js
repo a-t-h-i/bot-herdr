@@ -5,15 +5,18 @@
 /** Our own commands. Any other `/word` at the start of a message goes to the agent as typed
  *  (Claude Code's /compact, Codex's /model, ...). */
 export const COMMANDS = [
-  { name: "task", hint: "Hand this to the team as a task" },
-  { name: "plan", hint: "Plan this with the team before building" },
-  { name: "new", hint: "Start an agent with this message" },
-  { name: "settings", hint: "Set up agents: harness, model and effort" },
-  { name: "all", hint: "Send to every agent in this space" },
-  { name: "stop", hint: "Stop the agent where it is" },
-  { name: "peek", hint: "Peek at the agent's terminal" },
-  { name: "team", hint: "Tell the agent again how to start child agents" },
+  { name: "task", hint: "Hand this to the team as a task", color: "#5b8def" },
+  { name: "plan", hint: "Plan this with the team before building", color: "#a47bd6" },
+  { name: "new", hint: "Start an agent with this message", color: "#3fa877" },
+  { name: "settings", hint: "Set up agents: harness, model and effort", color: "#8b9099" },
+  { name: "all", hint: "Send to every agent in this space", color: "#d29a3c" },
+  { name: "stop", hint: "Stop the agent where it is", color: "#cc6460" },
+  { name: "peek", hint: "Peek at the agent's terminal", color: "#3ea3b5" },
+  { name: "team", hint: "Brief the agent again: its role, the team, the tools", color: "#d6825a" },
 ];
+
+/** A command's colour, for its row and its chip in the text. */
+export const commandColor = (name) => COMMANDS.find((c) => c.name === name)?.color ?? null;
 
 /** Where the text was edited, from the text before and after: the end of what changed.
  *  The text box does not report its caret, and typing happens where the last edit was. */
@@ -47,7 +50,7 @@ function rank(rows, query, key) {
 }
 
 export function slashRows(query) {
-  return rank(COMMANDS.map((c) => ({ id: `/${c.name}`, kind: "command", name: c.name, hint: c.hint, tag: "command" })), query, (r) => r.name);
+  return rank(COMMANDS.map((c) => ({ id: `/${c.name}`, kind: "command", name: c.name, hint: c.hint, tag: "command", color: c.color })), query, (r) => r.name);
 }
 
 /** A short handle for an agent: its program's key ("claude"), or its name in one word. */
@@ -124,6 +127,7 @@ export function childrenOf(children, address, seen = new Set()) {
 
 /** The token a picked row leaves in the text: the word as typed, drawn as a chip. */
 export function tokenFor(row) {
+  if (row.kind === "command") return { id: `cmd:${row.name}`, text: `/${row.name}`, label: `/${row.name}` };
   if (row.kind === "agent") return { id: row.id, text: `@${row.name}`, label: row.label };
   if (row.kind === "start") return { id: row.id, text: `@${row.name}`, label: row.id.startsWith("start:cfg:") ? row.label : `New ${row.label}` };
   return { id: "all", text: "@all", label: "Everyone" };
@@ -161,8 +165,9 @@ export function plan(content, ctx) {
     text = text.replace(/(^|\s)@all(?=\s|$)/g, "$1").trim();
   }
 
-  let command = null;
-  const slash = /^\/([a-z]+)\b\s*/i.exec(text);
+  // A command picked from the list is a chip; one typed out is plain text at the start.
+  let command = ids.find((id) => id.startsWith("cmd:"))?.slice(4) ?? null;
+  const slash = command ? null : /^\/([a-z]+)\b\s*/i.exec(text);
   if (slash && COMMANDS.some((c) => c.name === slash[1].toLowerCase())) {
     command = slash[1].toLowerCase();
     text = text.slice(slash[0].length);

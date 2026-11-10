@@ -115,3 +115,11 @@ test("no second Orchestrator while one starts; a bare /command needs someone to 
   assert.match(plan({ text: "and this", tokens: [] }, { agents: [], target: null, lead: known[0], starting: true, space: "s1" }).error, /starting/);
   assert.match(plan({ text: "/compact", tokens: [] }, { agents: [], target: null, lead: known[0], space: "s1" }).error, /No Orchestrator here yet/);
 });
+
+test("a picked /command is a chip: it still acts, and the words after it go as typed", () => {
+  const ctx = { agents: [], known: [], space: "s1", target: "t9", lead: null, files: [] };
+  const content = { text: "/task add a health check", tokens: [{ range: { start: 0, end: 5 }, token: { id: "cmd:task", text: "/task" } }] };
+  assert.deepEqual(plan(content, ctx).steps, [{ do: "send", address: "t9", text: "[task] add a health check", files: [] }]);
+  assert.equal(slashRows("pl")[0].color, "#a47bd6");
+  assert.deepEqual(tokenFor({ kind: "command", name: "plan" }), { id: "cmd:plan", text: "/plan", label: "/plan" });
+});
