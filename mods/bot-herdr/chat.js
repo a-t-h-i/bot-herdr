@@ -10,7 +10,7 @@ import { div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextView, InputState, Input } from "gpui-base";
 import { terminals, spaces, focused, settings, shared, setShared, readTextFile } from "herdr";
 import * as fs from "fs/promises";
-import { SIZE, ICON, readable, textWidth } from "./look.js";
+import { SIZE, ICON, readable, textWidth, agentHue } from "./look.js";
 import { colors } from "./theme.js";
 import { Composer, outboxDir, liveAgents } from "./composer.js";
 import { isQuiet, quietStatus } from "./live.js";
@@ -727,7 +727,10 @@ export class Chat {
                 .when(Boolean(e.paths?.[i]), (x) => x.cursor_pointer().hover((s) => s.text_color(c.ink)).on_click(() => openFile({ path: e.paths[i] })))
                 .child(svg(ICON("file")).size(12)).child(name))))),
       )
-      .child(div().text_size(11).text_color(c.faint).child(`to ${(e.to ?? []).join(", ")} · ${clock(e.at)}`));
+      .child(h_flex().gap(4).items_center().text_size(11)
+        .child(div().text_color(c.faint).child("to"))
+        .children((e.to ?? []).map((n, i) => div().id(`bh-e-to-${e.id}-${i}`).font_medium().text_color(agentHue(n, c.accent)).child(String(n))))
+        .child(div().text_color(c.faint).child(`· ${clock(e.at)}`)));
   }
 
   /** A link in a reply: a file it names opens over the chat; any other link opens in the browser. */

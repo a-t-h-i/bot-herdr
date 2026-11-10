@@ -228,3 +228,13 @@ export function rowsFor(text, innerWidth, size = 14) {
   for (const line of text.split("\n")) rows += Math.max(1, Math.ceil(textWidth(line, size) / Math.max(40, innerWidth)));
   return Math.max(SIZE.minRows, Math.min(SIZE.maxRows, rows));
 }
+
+/** A steady colour for an agent's name: its role's hue, or one hashed from the name. */
+export function agentHue(name, accent) {
+  const key = String(name ?? "").toLowerCase();
+  const hues = { orchestrator: accent, dev: "#5b8def", design: "#d6825a", qa: "#3fa877", research: "#a47bd6", scout: "#3ea3b5" };
+  if (hues[key]) return hues[key];
+  let h = 0;
+  for (const ch of key) h = (h * 31 + ch.charCodeAt(0)) % 360;
+  return `hsl(${h} 42% 58%)`;
+}

@@ -12,7 +12,7 @@
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, TextView, InputState, Input, TextareaState, Textarea } from "gpui-base";
 import { settings, shared } from "herdr";
-import { SIZE, ICON } from "./look.js";
+import { SIZE, ICON, agentHue } from "./look.js";
 import { colors } from "./theme.js";
 import { activePage, sendFromChat, OPEN_TASK } from "./pages.js";
 import { ROSTER_KEY, roster, slug } from "./roster.js";
@@ -1051,13 +1051,7 @@ export class Work {
     const agents = all.map((x) => x.agent);
     const q = (this.knowSearch?.value?.() ?? "").toLowerCase().trim();
     const filter = this.knowFilter ?? new Set();
-    const hueFor = (a) => {
-      const hues = { orchestrator: c.accent, dev: "#5b8def", design: "#d6825a", qa: "#3fa877", research: "#a47bd6", scout: "#3ea3b5" };
-      if (hues[a]) return hues[a];
-      let h = 0;
-      for (const ch of a) h = (h * 31 + ch.charCodeAt(0)) % 360;
-      return `hsl(${h} 42% 58%)`;
-    };
+    const hueFor = (a) => agentHue(a, c.accent);
     const cards = all.flatMap(({ agent, text, notes }) => outline(text ?? "").sections.flatMap((s) => s.entries.map((e) => ({
       agent, section: s.name, entry: e, notes: notesOn(notes ?? [], e.text), text: e.text, title: e.key || (s.name ?? agent),
     })))).filter((card) => !filter.size || filter.has(card.agent))
