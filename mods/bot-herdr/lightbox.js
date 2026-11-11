@@ -93,7 +93,9 @@ export class Lightbox {
         cx.stop_propagation();
       })
       .on_size_change((size, cx) => {
-        this.size = size;
+        // px with the app's zoom multiplied in; drawn sizes are without it.
+        const zoom = Number(settings().zoom) || 1;
+        this.size = { width: size.width / zoom, height: size.height / zoom };
         cx.notify();
       })
       .size_full()

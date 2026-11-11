@@ -477,7 +477,9 @@ export class Settings {
       .bg(c.ground)
       .text_color(c.ink)
       .on_size_change((size, cx) => {
-        this.width = size.width;
+        // px with the app's zoom multiplied in; drawn sizes are without it.
+        const zoom = Number(settings().zoom) || 1;
+        this.width = size.width / zoom;
         cx.notify();
       })
       .child(

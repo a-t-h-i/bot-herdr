@@ -621,7 +621,9 @@ export class Chat {
       .bg(c.ground)
       .text_color(c.ink)
       .on_size_change((size, cx) => {
-        this.size = size;
+        // on_size_change reports px with the app's zoom multiplied in; we draw without it.
+        const zoom = Number(settings().zoom) || 1;
+        this.size = { width: size.width / zoom, height: size.height / zoom };
         cx.notify();
       })
       .track_focus(this.handle)
@@ -743,7 +745,8 @@ export class Chat {
       .transition("top", MOTION.arrive)
       .transition("opacity", MOTION.arrive)
       .on_size_change((size) => {
-        this.heights.set(e.id, size.height + SPACE[4]);
+        const zoom = Number(settings().zoom) || 1;
+        this.heights.set(e.id, size.height / zoom + SPACE[4]);
       });
   }
 
