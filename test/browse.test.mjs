@@ -2,7 +2,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { baseName, parentPath, filterEntries, togglePick, sizeText } from "../mods/bot-herdr/look.js";
+import { baseName, parentPath, upFrom, filterEntries, togglePick, sizeText } from "../mods/bot-herdr/look.js";
 
 test("parentPath: one folder up, both separators, roots have none", () => {
   assert.equal(parentPath("/home/ada/notes"), "/home/ada");
@@ -14,6 +14,13 @@ test("parentPath: one folder up, both separators, roots have none", () => {
   assert.equal(parentPath("C:\\"), null);
   assert.equal(parentPath("C:"), null);
   assert.equal(parentPath(""), null);
+});
+
+test("upFrom: up from a drive's foot is the drive list, roots have nothing above", () => {
+  assert.equal(upFrom("C:\\"), ""); // "" is the drive list `bh files ""` lists
+  assert.equal(upFrom("C:\\Users"), "C:\\");
+  assert.equal(upFrom(""), null);
+  assert.equal(upFrom("/"), null);
 });
 
 test("baseName: the last segment, trailing separators ignored", () => {

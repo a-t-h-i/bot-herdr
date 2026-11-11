@@ -28,7 +28,7 @@ import {
   shared, appHome,
 } from "herdr";
 import { showPage, hold } from "./pages.js";
-import { SIZE, MOTION, ICON, TYPE, LINE, SPACE, ROW, CHIP, CONTROL, TARGET, MARK, DOT, PIP, HAIR, GLYPH, tint, readable, textWidth, rowsFor, baseName, parentPath, filterEntries, togglePick, sizeText, clickable, pressable, focusable } from "./look.js";
+import { SIZE, MOTION, ICON, TYPE, LINE, SPACE, ROW, CHIP, CONTROL, TARGET, MARK, DOT, PIP, HAIR, GLYPH, tint, readable, textWidth, rowsFor, baseName, upFrom, filterEntries, togglePick, sizeText, clickable, pressable, focusable } from "./look.js";
 import { stateView } from "./switch.js";
 import { colors } from "./theme.js";
 import {
@@ -538,7 +538,7 @@ export class Composer {
     this.browse = {
       folders,
       path: projectDir(space),
-      parent: parentPath(projectDir(space)),
+      parent: upFrom(projectDir(space)),
       entries: [],
       truncated: false,
       error: null,
@@ -563,12 +563,17 @@ export class Composer {
   loadBrowse(cx, path = this.browse?.path) {
     const b = this.browse;
     if (!b || b.foreign) return;
+    // "" is the drive list: the one place above a drive's own foot.
+    const drives = path === "";
+    // Every ask takes the next number: a listing that is not the latest is dropped, so a folder
+    // opened quickly after another can't be overwritten by the slower answer.
+    const seq = (b.seq = (b.seq ?? 0) + 1);
     b.loading = true;
     b.error = null;
     cx.notify();
     cx.spawn(async (cx) => {
       const r = await bh(["files", path, ...(b.hidden ? ["--all"] : []), "--json"], { cwd: projectDir() });
-      if (this.browse !== b) return;
+      if (this.browse !== b || b.seq !== seq) return;
       let data = null;
       try {
         data = JSON.parse(r.stdout);
@@ -579,8 +584,8 @@ export class Composer {
       if (r.code !== 0 || !data || !Array.isArray(data.entries)) {
         b.error = String(data?.error ?? ((r.stderr || "").trim() || "Couldn't list that folder."));
       } else {
-        b.path = data.path ?? path;
-        b.parent = data.parent ?? null;
+        b.path = drives ? "" : (data.path ?? path);
+        b.parent = upFrom(b.path);
         b.entries = data.entries;
         b.truncated = Boolean(data.truncated);
         const kept = new Set(data.entries.filter((e) => (b.folders ? e.dir : !e.dir)).map((e) => e.path));
@@ -596,9 +601,10 @@ export class Composer {
     const b = this.browse;
     if (!b || b.foreign) return;
     b.path = path;
-    b.parent = parentPath(path);
+    b.parent = upFrom(path);
     this.browseSearch.set_value("");
     this.browseAt = 0;
+    this.browseHandle.focus(); // Backspace keeps going up after a press on the up button
     this.loadBrowse(cx, path);
   }
 
@@ -732,7 +738,7 @@ export class Composer {
           b.selected = togglePick(b.selected, rows[at].path);
           return this.attachBrowse(cx);
         } else if (e.key === "backspace") {
-          if (!b.parent) return;
+          if (b.parent === null) return;
           return this.openFolder(b.parent, cx);
         } else if (e.key === "escape") {
           this.closeBrowse(cx);
@@ -749,8 +755,8 @@ export class Composer {
       .gap(SPACE[2])
       .child(
         h_flex().gap(SPACE[2]).items_center()
-          .child(this.iconButton(c, "bc-browse-up", "chevron-left", Boolean(b.parent) && !b.foreign, (_e, cx) => b.parent && this.openFolder(b.parent, cx)))
-          .child(div().flex_1().min_w(0).truncate().text_size(TYPE.sm).text_color(c.muted).child(b.foreign ? "Another machine" : b.path))
+          .child(this.iconButton(c, "bc-browse-up", "chevron-left", b.parent !== null && !b.foreign, (_e, cx) => b.parent !== null && this.openFolder(b.parent, cx)))
+          .child(div().flex_1().min_w(0).truncate().text_size(TYPE.sm).text_color(c.muted).child(b.foreign ? "Another machine" : b.path || "Drives"))
           .child(this.iconButton(c, "bc-browse-close", "x", false, (_e, cx) => this.closeBrowse(cx))),
       );
 
@@ -781,12 +787,14 @@ export class Composer {
       .when(b.truncated, (el) => el.child(div().text_size(TYPE.xs).text_color(c.faint).child("Showing the first 2000")))
       .child(
         h_flex().gap(SPACE[3]).items_center()
-          .child(div().flex_1().text_size(TYPE.xs).text_color(c.muted).child(`${b.selected.size} selected`))
+          // The drive list is no folder of its own: nothing to count, nothing to attach, just a
+          // drive to pick.
+          .child(div().flex_1().text_size(TYPE.xs).text_color(c.muted).child(b.path ? `${b.selected.size} selected` : "Pick a drive"))
           .child(toggle("bc-browse-hidden", "Show hidden", b.hidden, (_e, cx) => {
             b.hidden = !b.hidden;
             this.loadBrowse(cx);
           }))
-          .child(primary("bc-browse-attach", b.folders && !b.selected.size ? "Attach this folder" : "Attach", (_e, cx) => this.attachBrowse(cx))),
+          .when(Boolean(b.path), (el) => el.child(primary("bc-browse-attach", b.folders && !b.selected.size ? "Attach this folder" : "Attach", (_e, cx) => this.attachBrowse(cx)))),
       );
     return { h, body: body.id("bc-browse").on_scroll_wheel((_e, cx) => cx.stop_propagation()) };
   }
@@ -1009,6 +1017,12 @@ export class Composer {
     return this.putAway.has(q.id) ? "bar" : "ask";
   }
 
+  /** Whether `paneView` would draw anything: a suggestion list that matches nothing draws none. */
+  paneShown() {
+    const kind = this.paneNow();
+    return Boolean(kind) && !(kind === "suggest" && !this.rows().length);
+  }
+
   /** Answers the question up now and moves on; after the last, the answers go back together. */
   answerAsk(q, given, cx) {
     const walk = this.walking(q);
@@ -1149,10 +1163,12 @@ export class Composer {
       .rounded(SIZE.radius)
       .shadow_md()
       .on_drop((e, cx) => this.addFiles(e.paths, cx))
-      .on_mouse_down("left", () => {
+      .on_mouse_down("left", (_e, cx) => {
+        cx.stop_propagation(); // the box keeps its own presses: the scrim behind must not see them
         this.expanded = true;
         this.input.focus();
       })
+      .on_scroll_wheel((_e, cx) => cx.stop_propagation())
       // The bevel: a lit top edge inside the outline. Not while a pane is joined on top: it
       // would draw a line across the join.
       .when(!joined, (el) => el.child(div().absolute().top(0).left(SIZE.radius).right(SIZE.radius).h(HAIR).bg(c.rim)))
@@ -1610,6 +1626,10 @@ export class Composer {
       .flex_none()
       .w(w + F * 2)
       .h(h)
+      // A press or a wheel inside the pane is the pane's: it never reaches the scrim behind it,
+      // which would put the pane away before the click landed.
+      .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+      .on_scroll_wheel((_e, cx) => cx.stop_propagation())
       .transition("width", MOTION.menuWidth)
       .transition("height", MOTION.pane)
       .mb(-1)

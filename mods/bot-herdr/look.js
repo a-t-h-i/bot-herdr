@@ -50,6 +50,13 @@ export const DARK = {
   warning: "#fbbf24",
 };
 
+/**
+ * What an open composer pane puts between it and the page: black at 32% on the light ground and
+ * 55% on the dark one, since dark needs more to read as a step back. gpui has no blur, so this
+ * scrim stands in for one. Pick it with `isLight(c)`.
+ */
+export const SCRIM = { light: "#00000052", dark: "#0000008c" };
+
 /** Sizes in px at zoom 1 (herdr scales them). After the user's radii: outer 12, controls 10, nested 8. */
 export const SIZE = {
   maxWidth: 660, // the chat column width
@@ -352,6 +359,15 @@ export function parentPath(path) {
   const head = s.slice(0, cut);
   if (/^[A-Za-z]:$/.test(head)) return `${head}${s[cut]}`;
   return head;
+}
+
+/**
+ * The folder above `path` in the file browser: up from a drive's own foot is the drive list, which
+ * is "" (`bh files ""` lists the drives), since Windows has no single root. Up from there, and from
+ * "/", is nothing.
+ */
+export function upFrom(path) {
+  return /^[a-z]:[\\/]$/i.test(String(path ?? "")) ? "" : parentPath(path);
 }
 
 /** Entries whose name contains `query` (case-insensitive), in their given order (folders first). */

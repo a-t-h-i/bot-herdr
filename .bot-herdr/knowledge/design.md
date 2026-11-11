@@ -6,6 +6,7 @@
 - InputState placeholder is fixed at creation (no setter): a per-target placeholder needs one state per target; work.js exports commentRow(c, comment, actions), the shared comment look
 - herdr's built-in theme presets return border, selected and hover with alpha (#rrggbbaa); composite them over their surface before any contrast math.
 - TextareaState exposes no caret or selection; EditorState only value/set_value/on/release (no find, scroll or select); MotionProperty animates only opacity, width, height, left, top (no colour transitions).
+- gpui has no blur or backdrop filter; behind an open file browser or question card the feed is dimmed with bg(ground) at 0.6 instead.
 
 ## Standards
 - When reusing the Composer for non-chat sends (e.g. plan comments), override send but reset input/files/pane state or the composer sticks (chosen by Design)

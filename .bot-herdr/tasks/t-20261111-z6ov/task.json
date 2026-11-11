@@ -1,0 +1,71 @@
+{
+  "id": "t-20261111-z6ov",
+  "title": "Fix browser back, popup backdrop",
+  "request": "File explorer is broken. Can't navigate back from current folder. Also whenever one of the composer embedded popups show, the backdrop should be darker and blurred. Not just on the file explorer.",
+  "status": "active",
+  "track": "fast",
+  "plan": null,
+  "by": "t2z",
+  "created": "2026-11-11T12:36:39.642Z",
+  "updated": "2026-11-11T12:42:39.704Z",
+  "archived": false,
+  "steps": [
+    {
+      "n": 1,
+      "title": "Fix going back a folder in the file browser (clicks reaching the dim)",
+      "agent": "design",
+      "status": "done",
+      "started": "2026-11-11T12:37:40.909Z",
+      "finished": "2026-11-11T12:42:39.593Z",
+      "workedMs": 298684,
+      "note": ""
+    },
+    {
+      "n": 2,
+      "title": "Darker scrim behind every composer popup; clicking it closes the popup",
+      "agent": null,
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-11T12:42:39.704Z",
+      "workedMs": 0,
+      "note": ""
+    }
+  ],
+  "triage": {
+    "size": "small",
+    "kind": "bugfix",
+    "domains": {
+      "design": 0,
+      "dev": 0,
+      "qa": 0
+    },
+    "research": 0,
+    "ambiguous": 0,
+    "by": "rules"
+  },
+  "qa": {
+    "risk": "high",
+    "qaRequired": true,
+    "testBudget": {
+      "min": 2,
+      "max": 6
+    },
+    "focusAreas": [
+      "destructive operations: they touch only what they should, and a failure halfway leaves things recoverable",
+      "state transitions and recovery: no illegal or stuck state, and a crash or failed step recovers",
+      "the reported bug no longer reproduces"
+    ],
+    "riskFactors": [
+      "destructive operations: mods/bot-herdr/composer.js (\"truncate\")",
+      "orchestration and state: mods/bot-herdr/chat.js (\"transition(\")",
+      "4 files, 72 changed lines in mods/bot-herdr, .bot-herdr/tasks/t-20261111-z6ov",
+      "a bug fix: the bug must no longer reproduce"
+    ],
+    "existingTestsLikelySufficient": false,
+    "reasoning": "HIGH: destructive operations: mods/bot-herdr/composer.js (\"truncate\"); orchestration and state: mods/bot-herdr/chat.js (\"transition(\"); 4 files, 72 changed lines in mods/bot-herdr, .bot-herdr/tasks/t-20261111-z6ov. the engine's rules (Jev is off or had nothing to read).",
+    "source": "rules",
+    "at": "2026-11-11T12:42:23.056Z"
+  },
+  "summary": "",
+  "base": "e4788dc3837b436793e137a4015d118b4c9d3799"
+}

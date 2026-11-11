@@ -10,7 +10,7 @@ import { div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextView, InputState, Input } from "gpui-base";
 import { terminals, spaces, focused, settings, shared, setShared, readTextFile } from "herdr";
 import * as fs from "fs/promises";
-import { SIZE, ICON, TYPE, LINE, SPACE, ROW, CHIP, CONTROL, TARGET, HAIR, MARK, DOT, PIP, GLYPH, MOTION, readable, textWidth, agentInk, clickable } from "./look.js";
+import { SIZE, ICON, TYPE, LINE, SPACE, ROW, CHIP, CONTROL, TARGET, HAIR, MARK, DOT, PIP, GLYPH, MOTION, SCRIM, readable, textWidth, agentInk, clickable, isLight } from "./look.js";
 import { stateView } from "./switch.js";
 import { colors } from "./theme.js";
 import { Composer, outboxDir, liveAgents } from "./composer.js";
@@ -611,6 +611,8 @@ export class Chat {
     const working = this.workers();
     const foot = SIZE.foot + this.composer.height(width) + SPACE[4];
     this.composer.questions = this.questions;
+    // A pane with nothing to draw (a suggestion list that matches nothing) dims nothing either.
+    const pane = this.composer.paneShown() ? this.composer.paneNow() : null;
 
     return div()
       .id("bh-chat")
@@ -666,22 +668,26 @@ export class Chat {
       )
       // The tasks under way, top left, when the window has room for them beside the chat.
       .when(this.tasks.length > 0 && (this.size.width - width) / 2 >= WIDGET_W + 28, (el) => el.child(this.taskWidget(c)))
-      // An open question card or file browser dims the feed and the tasks widget behind it, and
-      // takes their clicks and wheel. gpui has no blur, so the dim stands in for one. A click on
-      // it puts the browser away; question cards stay until answered or dismissed.
-      .when(this.composer.paneNow() === "ask" || (this.composer.paneNow() === "attach" && Boolean(this.composer.browse)), (el) => el.child(div()
+      // An open pane on the composer dims the feed and the tasks widget behind it, and takes
+      // their clicks and wheel. gpui has no blur, so the scrim stands in for one. A press on it
+      // puts the pane away; question cards stay until answered or dismissed. It is drawn whether
+      // or not a pane is up, so it fades both ways; with none, it carries no handlers, and an
+      // element with no handlers takes no pointer, so every press and wheel passes through it.
+      .child(div()
         .id("bh-ask-dim")
         .absolute()
         .inset_0()
-        .bg(c.ground)
-        .opacity(0.6)
-        .on_mouse_down("left", (_e, cx) => {
-          cx.stop_propagation();
-          if (this.composer.paneNow() !== "attach") return;
-          this.composer.closeBrowse(cx);
-          this.composer.toggle("attach", cx);
-        })
-        .on_scroll_wheel((_e, cx) => cx.stop_propagation())))
+        .bg(SCRIM[isLight(c) ? "light" : "dark"])
+        .opacity(pane && pane !== "bar" ? 1 : 0)
+        .transition("opacity", MOTION.pane)
+        .when(pane && pane !== "bar", (el) => el
+          .on_mouse_down("left", (_e, cx) => {
+            cx.stop_propagation();
+            if (pane === "ask") return; // answered or dismissed, never put away by a stray press
+            if (pane === "attach") this.composer.closeBrowse(cx);
+            this.composer.close(cx);
+          })
+          .on_scroll_wheel((_e, cx) => cx.stop_propagation())))
       // The composer, bottom centre. Its suggestions grow upward over the feed.
       .child(
         v_flex()
