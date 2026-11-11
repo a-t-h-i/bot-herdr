@@ -6,6 +6,7 @@
 ## Standards
 - gpui-kit declares no rotate or transform and .loop() takes no delay: check mods/bot-herdr/gpui-kit.d.ts (npx tsc -p mods/bot-herdr/jsconfig.json) before using a style method.
 - node --check and bh check miss a missing import in a mod file; herdr-app check mods/bot-herdr loads the mod and catches it (only for the first view it draws). Run it after every mod change.
+- To catch undefined names in mod files (herdr-app check only renders the first view): npx -y -p typescript@5 tsc -p mods/bot-herdr/jsconfig.json --noEmit and read TS2304/TS2552 outside engine/ (engine hits are Node timers, false positives).
 
 ## Decisions
 - Commits must never include the trailer 'Co-authored-by: Claude <noreply@anthropic.com>'
