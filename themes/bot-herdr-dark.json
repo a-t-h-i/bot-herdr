@@ -12,7 +12,7 @@
     "#e879f9",
     "#5eead4",
     "#d6d3c9",
-    "#73726c",
+    "#7b7a75",
     "#fca5a5",
     "#6ee7b7",
     "#fcd34d",
@@ -27,13 +27,13 @@
     "surface": "#30302e",
     "popover": "#30302e",
     "raised": "#3a3936",
-    "hover": "#3a3936",
-    "selected": "#3e3e38",
+    "hover": "#444340",
+    "selected": "#4d4c49",
     "border": "#3e3e38",
     "input": "#4a4a47",
-    "muted": "#a6a39a",
-    "dim": "#73726c",
+    "muted": "#b2afa7",
+    "dim": "#91908a",
     "accent": "#d97757",
-    "accent_foreground": "#ffffff"
+    "accent_foreground": "#1f1e1d"
   }
 }

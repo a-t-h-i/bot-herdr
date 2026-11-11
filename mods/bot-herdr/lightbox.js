@@ -7,7 +7,7 @@
 import { div, svg, image } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { props, settings, setShared, closeOverlay, openOverlay } from "herdr";
-import { SIZE, ICON, TYPE, SPACE, ROW, CONTROL, CHIP, GLYPH, clickable } from "./look.js";
+import { SIZE, ICON, TYPE, SPACE, ROW, CONTROL, CHIP, GLYPH, clickable, accentFill } from "./look.js";
 import { colors } from "./theme.js";
 import { alpha } from "./working.js";
 import { openInBrowser } from "./media.js";
@@ -183,11 +183,10 @@ export class Lightbox {
                 .text_size(TYPE.md)
                 .font_medium()
                 .text_color(c.accentInk)
-                .hover((s) => s.opacity(0.92))
                 .on_click(() => this.choose())
                 .child("Choose this"),
               c,
-              "bh-lb-choose",
+              "bh-lb-choose", { fill: accentFill(c) },
             ),
           )),
       );

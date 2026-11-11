@@ -33,7 +33,13 @@ test("standard access: edits and the team's tools; full only when chosen", async
   assert.match(std[3], /Bash\(hc:\*\)/);
   assert.match(std[3], /Bash\(npm test:\*\)/);
   assert.doesNotMatch(std.join(" "), /bypass/i);
-  assert.deepEqual(claudeAccess("full"), ["--permission-mode", "bypassPermissions"]);
+  assert.deepEqual(claudeAccess("full", [], { root: false }), ["--permission-mode", "bypassPermissions"]);
+  assert.equal(claudeAccess("full", [], { root: true })[1], "acceptEdits");
+  const { userEntry } = await lib("lib/runner.mjs");
+  const passwd = "root:x:0:0::/root:/bin/sh\nathi:x:1002:1002::/home/athi:/usr/bin/fish\n";
+  assert.deepEqual(userEntry("athi", passwd), { name: "athi", uid: 1002, gid: 1002, home: "/home/athi", shell: "/usr/bin/fish" });
+  assert.equal(userEntry(1002, passwd).name, "athi");
+  assert.equal(userEntry("nobody", passwd), null);
   assert.equal(acpAllowed("edit", "standard"), true);
   assert.equal(acpAllowed("execute", "standard", { command: "rm -rf build" }), false);
   assert.equal(acpAllowed("execute", "standard", { command: "hc send t1 done" }), true);

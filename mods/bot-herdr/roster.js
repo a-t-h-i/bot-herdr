@@ -144,8 +144,8 @@ export function roster(stored, known = []) {
     const saved = take((a) => a.role === r.role) ?? (r.role === "orchestrator" ? take((a) => a.role === "custom" && (a.id === "orchestrator" || a.lead)) : null);
     return { ...(saved ?? { id: r.role, harness: fallback, model: "", effort: "", args: "", instructions: "" }), role: r.role, name: r.name, lead: r.role === "orchestrator" };
   });
-  const own = list.filter((a) => !used.has(a)).map((a) => ({ ...a, role: "custom", lead: false }));
-  return [...stock, ...own];
+  // The team is the six roles: agents of the person's own aren't kept (nor reachable).
+  return stock;
 }
 
 /** The roster entry a name, @handle or alias points at ("frontend" is Design). */

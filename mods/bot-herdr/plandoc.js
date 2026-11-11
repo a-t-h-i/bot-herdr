@@ -5,7 +5,7 @@
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, TextView } from "gpui-base";
 import { props, closeOverlay, openOverlay } from "herdr";
-import { SIZE, ICON, TYPE, LINE, SPACE, CHIP, CONTROL, PIP, HAIR, GLYPH, clickable, pressable, focusable } from "./look.js";
+import { SIZE, ICON, TYPE, LINE, SPACE, CHIP, CONTROL, PIP, HAIR, GLYPH, clickable, accentFill, pressable, focusable } from "./look.js";
 import { colors } from "./theme.js";
 import { blocks } from "./doc.js";
 import { bh, enc, projectDir } from "./bh.js";
@@ -242,11 +242,10 @@ export class PlanDoc {
                       .text_size(TYPE.sm)
                       .font_medium()
                       .text_color(c.accentInk)
-                      .hover((s) => s.opacity(0.92))
                       .on_click(() => sendFromChat(`The plan ${p.id} ("${p.title}") is agreed: make it a task (bh plan task ${p.id}) and start it.`))
                       .child("Start task"),
                     c,
-                    "bh-plan-start",
+                    "bh-plan-start", { fill: accentFill(c) },
                   )))
                   .child(clickable(
                     div()

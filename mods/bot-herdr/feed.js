@@ -62,7 +62,7 @@ export function shown(entries, space, back = 0) {
  * entries sit below the view, `px` how far into entry `back` the view has moved; `heights[i]` is
  * the drawn height (gap included) of the entry `i` up from the newest, `fallback` until measured.
  */
-export function scrollBy(state, delta, heights, total, fallback = 120) {
+export function scrollBy(state, delta, heights, total, fallback = 120, room = null) {
   const h = (i) => heights[i] ?? fallback;
   let { back, px } = state;
   px += delta;
@@ -76,6 +76,28 @@ export function scrollBy(state, delta, heights, total, fallback = 120) {
   }
   if (back === 0 && px < 0) px = 0;
   if (back >= total - 1) px = Math.max(0, Math.min(px, h(back) - 1));
+  return room == null ? { back, px } : clampScroll({ back, px }, heights, total, room, fallback);
+}
+
+/**
+ * Keeps the feed from scrolling past its oldest entry: scrolled all the way up, the oldest
+ * entry's top sits at the top of the view (`room` px tall), never below it with empty space
+ * above. With everything fitting in the view, it doesn't scroll at all.
+ */
+export function clampScroll(state, heights, total, room, fallback = 120) {
+  const h = (i) => heights[i] ?? fallback;
+  let content = 0;
+  for (let i = 0; i < total; i++) content += h(i);
+  const most = Math.max(0, content - room);
+  let offset = state.px;
+  for (let i = 0; i < state.back && i < total; i++) offset += h(i);
+  if (offset <= most) return state;
+  let back = 0;
+  let px = most;
+  while (back < total - 1 && px >= h(back)) {
+    px -= h(back);
+    back += 1;
+  }
   return { back, px };
 }
 

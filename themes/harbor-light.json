@@ -14,11 +14,11 @@
     "#e6ebf1",
     "#5a6b80",
     "#dc2626",
-    "#059669",
-    "#ca8a04",
+    "#05875f",
+    "#9e6c03",
     "#1d4ed8",
     "#9333ea",
-    "#0891b2",
+    "#07809d",
     "#f7f9fc"
   ],
   "colors": {
@@ -31,8 +31,8 @@
     "selected": "#dbe6f2",
     "border": "#d3deeb",
     "input": "#c9d6e6",
-    "muted": "#5a6b80",
-    "dim": "#8a99ab",
+    "muted": "#59697e",
+    "dim": "#768596",
     "accent": "#1d4ed8",
     "accent_foreground": "#ffffff"
   }

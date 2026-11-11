@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { roster, argvOf, runnable, runningAs, effortsOf, modelsOf, findAgent, parseModelList, blank, slug, looksLikeInstructions } from "../mods/bot-herdr/roster.js";
-import { replyFile, push, shown, isNew, outcome, scrollBy, KEEP, SHOWN, addComment, editComment, resolveComment, deleteComment } from "../mods/bot-herdr/feed.js";
+import { replyFile, push, shown, isNew, outcome, scrollBy, clampScroll, KEEP, SHOWN, addComment, editComment, resolveComment, deleteComment } from "../mods/bot-herdr/feed.js";
 import { teamBrief, orchestratorBrief } from "../mods/bot-herdr/brief.js";
 
 const known = [
@@ -18,7 +18,7 @@ test("the six roles are always there, in order, on the first installed harness",
   assert.equal(roster(null, [])[0].harness, "claude");
 });
 
-test("saved choices stick to their role; own agents follow; an old lead becomes the Orchestrator", () => {
+test("saved choices stick to their role; the team is the six roles only; an old lead becomes the Orchestrator", () => {
   const list = roster([
     { id: "x", role: "dev", name: "Backend person", harness: "codex", model: "gpt-6.1-sol", effort: "high" },
     { id: "mine", role: "custom", name: "Reviewer", harness: "codex" },
@@ -29,10 +29,11 @@ test("saved choices stick to their role; own agents follow; an old lead becomes 
   assert.equal(dev.model, "gpt-6.1-sol");
   assert.equal(list[0].harness, "codex"); // the old lead's choices
   assert.equal(list[0].name, "Orchestrator");
-  assert.deepEqual(list.slice(6).map((a) => [a.name, a.role, a.lead]), [["Reviewer", "custom", false]]);
+  assert.equal(list.length, 6); // an agent of the person's own isn't part of the team
+  assert.ok(!list.some((a) => a.role === "custom"));
   assert.equal(findAgent(list, "@backend")?.role, "dev");
   assert.equal(findAgent(list, "frontend")?.role, "design");
-  assert.equal(findAgent(list, "reviewer")?.id, "mine");
+  assert.equal(findAgent(list, "reviewer"), null);
 });
 
 test("models and effort levels come from the harness, and for Claude Code from the model", () => {
@@ -101,6 +102,23 @@ test("the feed scrolls by pixels: small deltas move px, crossing an entry moves 
   assert.deepEqual(scrollBy({ back: 2, px: 20 }, -300, heights, 5), { back: 0, px: 0 });
   assert.deepEqual(scrollBy({ back: 2, px: 0 }, 130, heights, 5, 120), { back: 3, px: 10 });
   assert.deepEqual(scrollBy({ back: 0, px: 0 }, 500, [100], 2, 120), { back: 1, px: 119 });
+});
+
+test("the feed stops with its oldest entry's top at the top of the view, and doesn't scroll when it all fits", () => {
+  // Three entries, 100 + 60 + 80 = 240 px, in a 200 px view: at most 40 px up.
+  const heights = [100, 60, 80];
+  assert.deepEqual(scrollBy({ back: 0, px: 0 }, 30, heights, 3, 120, 200), { back: 0, px: 30 });
+  assert.deepEqual(scrollBy({ back: 0, px: 30 }, 500, heights, 3, 120, 200), { back: 0, px: 40 });
+  // Past one entry: 250 px of content in a 100 px view stops 150 up, 50 into the second.
+  assert.deepEqual(scrollBy({ back: 0, px: 0 }, 900, [100, 150], 2, 120, 100), { back: 1, px: 50 });
+  // Everything fits: no scrolling at all.
+  assert.deepEqual(scrollBy({ back: 0, px: 0 }, 50, heights, 3, 120, 400), { back: 0, px: 0 });
+  // Without a view height, as before.
+  assert.deepEqual(scrollBy({ back: 0, px: 0 }, 500, [100], 2, 120), { back: 1, px: 119 });
+  // A taller view (the composer folded) pulls a scrolled feed back down; within it, nothing moves.
+  assert.deepEqual(clampScroll({ back: 2, px: 50 }, heights, 3, 200), { back: 0, px: 40 });
+  assert.deepEqual(clampScroll({ back: 0, px: 20 }, heights, 3, 200), { back: 0, px: 20 });
+  assert.deepEqual(clampScroll({ back: 0, px: 0 }, [], 0, 200), { back: 0, px: 0 });
 });
 
 test("an agent we wrote to: waiting, blocked once, silent after it worked and stopped", () => {

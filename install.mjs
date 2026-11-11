@@ -56,14 +56,44 @@ if (!existsSync(layout) || old || args.has("--force")) {
   // Notifications rise out of the chat's composer: the root names our mod as its toast.
   try {
     const kept = JSON.parse(readFileSync(layout, "utf8"));
+    let changed = false;
     if (!kept.toast) {
       kept.toast = "bot-herdr";
-      writeFileSync(layout, `${JSON.stringify(kept, null, 2)}\n`);
+      changed = true;
     }
+    // The Files / Changes panel sits beside the pages, not inside the Terminals page, so the
+    // tab bar's Files and Changes buttons show it on every page (Chat too).
+    changed = panelBesidePages(kept) || changed;
+    if (changed) writeFileSync(layout, `${JSON.stringify(kept, null, 2)}\n`);
   } catch {
     // not JSON we can read: leave it as it is
   }
   console.log(`layout   kept your ${layout} (--force replaces it)`);
+}
+
+/**
+ * Moves the "panel" node (herdr's Files / Changes) out of the "terminals" page to sit beside the
+ * "pages" stack, in a "work-body" row. Returns whether the layout changed.
+ */
+function panelBesidePages(root) {
+  const parentOf = (node, id) => {
+    for (const child of node?.children ?? []) {
+      if (child.id === id) return node;
+      const found = parentOf(child, id);
+      if (found) return found;
+    }
+    return null;
+  };
+  const from = parentOf(root, "panel");
+  const work = parentOf(root, "pages");
+  if (from?.id !== "terminals" || !work) return false;
+  const panel = from.children.find((c) => c.id === "panel");
+  from.children = from.children.filter((c) => c !== panel);
+  const pages = work.children.find((c) => c.id === "pages");
+  const { children, ...rest } = panel;
+  const body = { id: "work-body", type: "row", children: [pages, { ...rest, padding: rest.padding ?? 8, children }] };
+  work.children = work.children.map((c) => (c === pages ? body : c));
+  return true;
 }
 
 // Keys: add ours, never replace one you already bound.

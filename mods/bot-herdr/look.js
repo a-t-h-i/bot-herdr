@@ -61,7 +61,7 @@ export const SCRIM = { light: "#00000052", dark: "#0000008c" };
 export const SIZE = {
   maxWidth: 660, // the chat column width
   gutter: 24, // room either side of the composer in its block
-  foot: 14, // from the composer's foot to the block's
+  foot: 10, // from the composer's foot to the block's
   radius: 12,
   control: 10,
   nested: 8,
@@ -72,7 +72,7 @@ export const SIZE = {
   line: 20, // the text's line height
   filesRow: 40,
   imagesRow: 80, // attachments with image previews
-  tools: 46,
+  tools: 38, // the button row: 28px buttons with 5px above and below
   rowsShown: 8,
   menuPad: 4,
   fillet: 12,
@@ -108,15 +108,20 @@ export const MOTION = {
   menuClose: { duration: 110, easing: "ease-in" },
   row: { duration: 240, easing: "ease-out" },
   tool: { duration: 160, easing: "ease-out" },
-  toastOut: { duration: 260, easing: "ease-out" },
+  // A toast leaving: as long as its arrival, eased at both ends so it melts away, not snaps.
+  toastOut: { duration: 300, easing: "ease-in-out" },
+  toastTextOut: { duration: 200, easing: "ease-in-out" },
   turn: { duration: 260, easing: "ease-out" },
   verb: { duration: 420, easing: "ease-out" },
 };
 
 /** A pointer over a control: its background takes the hover tone. gpui animates no colours. */
-export function hoverable(el, c) {
-  return el.cursor_pointer().hover((s) => s.bg(c.hover));
+export function hoverable(el, c, fill = null) {
+  return el.cursor_pointer().hover((s) => s.bg(fill ?? c.hover));
 }
+
+/** A filled accent button's hover: the accent a shade deeper, never the page's pale hover tone. */
+export const accentFill = (c) => mix(c.accent, c.accentLip ?? "#000000", 0.28);
 
 /** A press sinks the control a pixel: `top` is one of the properties gpui animates. */
 export function pressable(el) {
@@ -129,8 +134,8 @@ export function focusable(el, id, c) {
 }
 
 /** A control's whole answer to the pointer and the keyboard: hover, press and focus. */
-export function clickable(el, c, id) {
-  return focusable(pressable(hoverable(el, c)), id, c);
+export function clickable(el, c, id, { fill = null } = {}) {
+  return focusable(pressable(hoverable(el, c, fill)), id, c);
 }
 
 export const ICON = (name) => `mods/bot-herdr/icons/${name}.svg`;

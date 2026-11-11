@@ -103,7 +103,7 @@
               "id": "switch",
               "type": "block",
               "size": {
-                "px": 452
+                "px": 600
               },
               "window_drag": true,
               "content": {
@@ -124,132 +124,139 @@
           ]
         },
         {
-          "id": "pages",
-          "type": "stack",
-          "active": "chat",
+          "id": "work-body",
+          "type": "row",
           "children": [
             {
-              "id": "chat",
-              "type": "block",
-              "content": {
-                "mod": "bot-herdr",
-                "props": {
-                  "view": "chat"
-                }
-              }
-            },
-            {
-              "id": "terminals",
-              "type": "row",
-              "padding": 8,
-              "gap": 8,
+              "id": "pages",
+              "type": "stack",
+              "active": "chat",
               "children": [
                 {
-                  "id": "main",
+                  "id": "chat",
                   "type": "block",
                   "content": {
-                    "tab": "active",
-                    "pane": {
-                      "gap": 8,
-                      "radius": 10,
-                      "background": "background",
-                      "lone": true,
-                      "border": {
-                        "width": 1,
-                        "color": "border"
-                      },
-                      "focus": {
-                        "width": 1,
-                        "color": "accent"
-                      },
-                      "header": {
-                        "content": {
-                          "mod": "pane"
-                        },
-                        "height": 30,
-                        "position": "top",
-                        "reveal": "always"
-                      }
+                    "mod": "bot-herdr",
+                    "props": {
+                      "view": "chat"
                     }
                   }
                 },
                 {
-                  "id": "panel",
-                  "type": "column",
-                  "hidden": true,
-                  "size": {
-                    "px": 368
-                  },
-                  "min": 280,
-                  "max": 900,
+                  "id": "terminals",
+                  "type": "row",
+                  "padding": 8,
+                  "gap": 8,
                   "children": [
                     {
-                      "id": "panel-body",
-                      "type": "stack",
-                      "active": "files",
-                      "children": [
-                        {
-                          "id": "files",
-                          "type": "block",
-                          "content": {
-                            "mod": "files"
-                          }
-                        },
-                        {
-                          "id": "changes",
-                          "type": "block",
-                          "content": {
-                            "mod": "changes"
+                      "id": "main",
+                      "type": "block",
+                      "content": {
+                        "tab": "active",
+                        "pane": {
+                          "gap": 8,
+                          "radius": 10,
+                          "background": "background",
+                          "lone": true,
+                          "border": {
+                            "width": 1,
+                            "color": "border"
+                          },
+                          "focus": {
+                            "width": 1,
+                            "color": "accent"
+                          },
+                          "header": {
+                            "content": {
+                              "mod": "pane"
+                            },
+                            "height": 30,
+                            "position": "top",
+                            "reveal": "always"
                           }
                         }
-                      ]
+                      }
                     }
                   ]
+                },
+                {
+                  "id": "tasks",
+                  "type": "block",
+                  "content": {
+                    "mod": "bot-herdr",
+                    "props": {
+                      "view": "work",
+                      "tab": "tasks"
+                    }
+                  }
+                },
+                {
+                  "id": "plans",
+                  "type": "block",
+                  "content": {
+                    "mod": "bot-herdr",
+                    "props": {
+                      "view": "work",
+                      "tab": "plans"
+                    }
+                  }
+                },
+                {
+                  "id": "knowledge",
+                  "type": "block",
+                  "content": {
+                    "mod": "bot-herdr",
+                    "props": {
+                      "view": "work",
+                      "tab": "knowledge"
+                    }
+                  }
+                },
+                {
+                  "id": "settings",
+                  "type": "block",
+                  "content": {
+                    "mod": "bot-herdr",
+                    "props": {
+                      "view": "settings"
+                    }
+                  }
                 }
               ]
             },
             {
-              "id": "tasks",
-              "type": "block",
-              "content": {
-                "mod": "bot-herdr",
-                "props": {
-                  "view": "work",
-                  "tab": "tasks"
+              "id": "panel",
+              "type": "column",
+              "hidden": true,
+              "size": {
+                "px": 368
+              },
+              "min": 280,
+              "max": 900,
+              "padding": 8,
+              "children": [
+                {
+                  "id": "panel-body",
+                  "type": "stack",
+                  "active": "files",
+                  "children": [
+                    {
+                      "id": "files",
+                      "type": "block",
+                      "content": {
+                        "mod": "files"
+                      }
+                    },
+                    {
+                      "id": "changes",
+                      "type": "block",
+                      "content": {
+                        "mod": "changes"
+                      }
+                    }
+                  ]
                 }
-              }
-            },
-            {
-              "id": "plans",
-              "type": "block",
-              "content": {
-                "mod": "bot-herdr",
-                "props": {
-                  "view": "work",
-                  "tab": "plans"
-                }
-              }
-            },
-            {
-              "id": "knowledge",
-              "type": "block",
-              "content": {
-                "mod": "bot-herdr",
-                "props": {
-                  "view": "work",
-                  "tab": "knowledge"
-                }
-              }
-            },
-            {
-              "id": "settings",
-              "type": "block",
-              "content": {
-                "mod": "bot-herdr",
-                "props": {
-                  "view": "settings"
-                }
-              }
+              ]
             }
           ]
         },

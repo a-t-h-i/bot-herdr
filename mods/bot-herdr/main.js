@@ -7,6 +7,7 @@
 //   { "view": "lightbox" }  a picture opened large, as a dialog (lightbox.js)
 //   { "view": "file" }      a file named in a message, opened read only, as a dialog (viewer.js)
 //   { "view": "plan" }      a plan's draft opened in its own window (plandoc.js)
+//   { "view": "note" }      a new knowledge note, as a dialog (noteform.js)
 //   (no view)               herdr's notifications: the layout's "toast" mod (toast.js)
 
 import { View } from "gpui-kit";
@@ -17,11 +18,12 @@ import { Settings } from "./settings.js";
 import { Work } from "./work.js";
 import { Pick } from "./pick.js";
 import { Lightbox } from "./lightbox.js";
+import { NoteForm } from "./noteform.js";
 import { Toast, isNotification } from "./toast.js";
 import { FileView } from "./viewer.js";
 import { PlanDoc } from "./plandoc.js";
 
-const VIEWS = { chat: Chat, switch: Switch, work: Work, settings: Settings, pick: Pick, lightbox: Lightbox, toast: Toast, file: FileView, plan: PlanDoc };
+const VIEWS = { chat: Chat, switch: Switch, work: Work, settings: Settings, pick: Pick, lightbox: Lightbox, toast: Toast, file: FileView, plan: PlanDoc, note: NoteForm };
 
 export default class BotHerdr extends View {
   init(given, cx) {

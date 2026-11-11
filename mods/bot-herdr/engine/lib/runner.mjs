@@ -17,10 +17,10 @@
 //                           is happy to let agents run free in
 // pi and Oh My Pi have no permission system of their own: they run as they would in a terminal.
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { HEADLESS, argvOf, effortsOf, headless } from "../../roster.js";
 import { BH, DATA, ensureDir } from "./core.mjs";
 
@@ -34,11 +34,105 @@ function winQuote(a) {
   return /^[\w@%+=:,./\\-]+$/.test(a) ? a : `"${String(a).replace(/"/g, '""')}"`;
 }
 
+// ── Who agents run as ──────────────────────────────────────────────────────────────────────
+// Started as root, herdr doesn't hand root to its agents: each harness runs as a normal user, so
+// its files, sign-ins (~/.claude and the like) and permissions are that user's. The user is
+// BH_AGENT_USER when set, else the one sudo was run by, else the owner of the project folder.
+// BH_AGENT_USER=root keeps them as root.
+
+const isRoot = () => !WIN && process.getuid?.() === 0;
+
+/** A user's passwd entry: { name, uid, gid, home, shell }, or null. */
+export function userEntry(nameOrUid, passwd = null) {
+  let text = passwd;
+  if (text === null) {
+    try {
+      text = readFileSync("/etc/passwd", "utf8");
+    } catch {
+      text = "";
+    }
+  }
+  for (const line of text.split("\n")) {
+    const [name, , uid, gid, , home, shell] = line.split(":");
+    if (!name || uid === undefined) continue;
+    if (name === String(nameOrUid) || uid === String(nameOrUid)) return { name, uid: Number(uid), gid: Number(gid), home, shell };
+  }
+  return null;
+}
+
+/** The groups a user is a member of in /etc/group, beyond their own. */
+function memberGroups(name) {
+  try {
+    return readFileSync("/etc/group", "utf8").split("\n").map((l) => l.split(":"))
+      .filter((f) => f.length >= 4 && f[3].split(",").includes(name)).map((f) => Number(f[2])).filter(Number.isFinite);
+  } catch {
+    return [];
+  }
+}
+
+const userCache = new Map();
+
+/**
+ * The user agents run as when herdr is root: { name, uid, gid, home, groups }, or null to run
+ * them as herdr itself (herdr isn't root, BH_AGENT_USER=root, or no user to hand them to).
+ */
+export function agentUser(cwd = process.cwd()) {
+  if (!isRoot()) return null;
+  const wanted = process.env.BH_AGENT_USER || process.env.SUDO_USER || "";
+  const key = `${wanted}|${cwd}`;
+  if (userCache.has(key)) return userCache.get(key);
+  let u = null;
+  if (wanted) u = userEntry(wanted);
+  else {
+    let owner = null;
+    try {
+      owner = statSync(cwd).uid;
+    } catch {}
+    if (owner) u = userEntry(owner);
+  }
+  let found = null;
+  if (u && u.uid !== 0) {
+    // Its own groups, and the ones herdr was given: on Android those carry network access
+    // (inet, 3003) and appear in no /etc/group, so a switch that rebuilt them from there would
+    // leave the agent offline.
+    const groups = [...new Set([u.gid, ...memberGroups(u.name), ...(process.getgroups?.() ?? [])])].filter((g) => g !== 0);
+    found = { ...u, groups, how: switcher(u, groups) };
+    if (!found.how) found = null;
+  }
+  userCache.set(key, found);
+  return found;
+}
+
+/** How to become the user: setpriv (keeps the groups), runuser, or node's own uid switch. Tried once. */
+function switcher(u, groups) {
+  const setpriv = ["setpriv", `--reuid=${u.uid}`, `--regid=${u.gid}`, `--groups=${groups.join(",")}`, "--"];
+  const runuser = ["runuser", "-u", u.name, "--"];
+  for (const prefix of [setpriv, runuser]) {
+    const r = spawnSync(prefix[0], [...prefix.slice(1), "id", "-u"], { encoding: "utf8", timeout: 5000 });
+    if (r.status === 0 && String(r.stdout).trim() === String(u.uid)) return { prefix };
+  }
+  const r = spawnSync("id", ["-u"], { uid: u.uid, gid: u.gid, encoding: "utf8", timeout: 5000 });
+  if (r.status === 0 && String(r.stdout).trim() === String(u.uid)) return { uid: u.uid, gid: u.gid };
+  return null;
+}
+
+/** Whether a harness started in `cwd` runs as root, where Claude Code refuses to bypass its permissions. */
+export const asRoot = (cwd = process.cwd()) => isRoot() && !agentUser(cwd);
+
 /** Starts a program, with Windows' .cmd shims working. Long text goes over stdin or in files. */
 export function launch(argv, { cwd, env = process.env, stdio = ["pipe", "pipe", "pipe"] } = {}) {
   const [cmd, ...args] = argv;
   if (WIN) return spawn([cmd, ...args].map(winQuote).join(" "), { cwd, env, stdio, shell: true, windowsHide: true });
-  return spawn(cmd, args, { cwd, env, stdio });
+  const u = agentUser(cwd ?? process.cwd());
+  if (!u) return spawn(cmd, args, { cwd, env, stdio });
+  // The user's own home and name, so the harness finds its sign-in and settings there.
+  const as = { ...env, HOME: u.home, USER: u.name, LOGNAME: u.name };
+  delete as.SUDO_USER;
+  delete as.SUDO_UID;
+  delete as.SUDO_GID;
+  delete as.SUDO_COMMAND;
+  if (u.how.prefix) return spawn(u.how.prefix[0], [...u.how.prefix.slice(1), cmd, ...args], { cwd, env: as, stdio });
+  return spawn(cmd, args, { cwd, env: as, stdio, uid: u.how.uid, gid: u.how.gid });
 }
 
 /** Ends a program and whatever it started. */
@@ -128,9 +222,14 @@ export function standardCommands() {
   return [`node "${bh}"`, `node ${bh}`, "hc", "git status", "git diff", "git log", "git show"];
 }
 
-/** Claude Code's permissions: edits, the team's tools and what the person allowed; everything when chosen. */
-export function claudeAccess(access, allow = []) {
-  if (access === "full") return ["--permission-mode", "bypassPermissions"];
+/**
+ * Claude Code's permissions: edits, the team's tools and what the person allowed; everything when
+ * chosen. When it would run as root (herdr is root and no user to hand it to, or BH_AGENT_USER=root),
+ * Claude Code won't start with bypassPermissions at all, so full access falls back to standard
+ * there rather than failing every turn.
+ */
+export function claudeAccess(access, allow = [], { root = asRoot() } = {}) {
+  if (access === "full" && !root) return ["--permission-mode", "bypassPermissions"];
   const commands = [...standardCommands(), ...allow].map((c) => `Bash(${c}:*)`);
   const tools = ["Read", "Edit", "Write", "MultiEdit", "NotebookEdit", "Glob", "Grep", "LS", "TodoWrite", "WebSearch", "WebFetch", ...commands];
   return ["--permission-mode", "acceptEdits", "--allowedTools", tools.join(",")];
@@ -143,7 +242,7 @@ function claudeTurn({ agent, known, state, briefFile, prompt, cwd, on, access, a
   const argv = [
     ...argvOf(agent, known),
     "-p", "--output-format", "stream-json", "--verbose",
-    ...claudeAccess(access, allow),
+    ...claudeAccess(access, allow, { root: asRoot(cwd) }),
     ...(first ? ["--session-id", id, "--append-system-prompt-file", briefFile] : ["--resume", id]),
   ];
   return oneShot(argv, prompt, cwd, (event, turn) => {

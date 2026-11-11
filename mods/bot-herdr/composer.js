@@ -1,6 +1,6 @@
 // The composer: one text box for every agent herdr runs. It sits at the foot of the chat page
 // (chat.js). One raised bubble with the text on top and a tools row under it (attach, the space
-// chip, key hints, stop, a round send key). The `/` commands, the `@` agents, the attach menu and
+// chip, the Orchestrator's model chip, stop, a round send key). The `/` commands, the `@` agents, the attach menu and
 // the spaces list grow out of its top edge as a smaller bubble joined to it by curved fillets.
 //
 // A message goes to the space's Orchestrator: the roster's lead agent (Settings), running in the
@@ -24,17 +24,19 @@
 import { div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextareaState, Textarea, InputState, Input } from "gpui-base";
 import {
-  agents as reported, panes, terminals, spaces, focused, settings, run, hc, knownAgents, pickFolder,
-  shared, appHome,
+  agents as reported, panes, terminals, spaces, focused, settings, run, hc, knownAgents, pickFolder, exec, window as herdrWindow,
+  shared, setShared, appHome,
 } from "herdr";
 import { showPage, hold } from "./pages.js";
-import { SIZE, MOTION, ICON, TYPE, LINE, SPACE, ROW, CHIP, CONTROL, TARGET, MARK, DOT, PIP, HAIR, GLYPH, tint, readable, textWidth, rowsFor, baseName, upFrom, filterEntries, togglePick, sizeText, clickable, pressable, focusable } from "./look.js";
+import { SIZE, MOTION, ICON, TYPE, LINE, SPACE, ROW, CHIP, CONTROL, TARGET, MARK, DOT, PIP, HAIR, GLYPH, tint, readable, textWidth, rowsFor, baseName, upFrom, filterEntries, togglePick, sizeText, clickable, accentFill, pressable, focusable } from "./look.js";
 import { stateView } from "./switch.js";
 import { colors } from "./theme.js";
 import {
   triggerAt, caretAfterEdit, slashRows, mentionRows, tokenFor, plan, orchestratorOf, withoutEnter, messageText, commandColor,
 } from "./route.js";
-import { ROSTER_KEY, HEADLESS_KEY, roster, argvOf, runnable, runningAs, slug, headless, withPrompt } from "./roster.js";
+import { ROSTER_KEY, HEADLESS_KEY, roster, argvOf, runnable, runningAs, slug, headless, withPrompt, modelsOf, effortsOf } from "./roster.js";
+import { harnessMark } from "./pick.js";
+import { mentionTone } from "./indicators.js";
 import { withQuiet, isQuiet } from "./live.js";
 import { BRIEFED, teamBrief, orchestratorBrief, briefed } from "./brief.js";
 import { bh, bhJson, bhPath, enc, projectDir, ROUTING_KEY } from "./bh.js";
@@ -62,6 +64,76 @@ const CLEAR = "#00000000";
 /** Where agents write their replies for the chat (see brief.js and chat.js). */
 export const outboxDir = () => `${appHome().replace(/\\/g, "/")}/data/bot-herdr/replies`;
 
+/** The toast's springs: the rise out of the composer's edge and the shape it swells into. */
+const TOAST_SPRINGS = {
+  rise: { response: 420, damping: 0.82 },
+  height: { response: 360, damping: 0.66 },
+  width: { response: 440, damping: 0.7 },
+};
+
+/**
+ * Going is coming in reverse. The words fade first (they came last), then the shape, still
+ * solid, springs back down on the same springs it rose on: it narrows, drops and slips under
+ * the composer's top edge, where the box covers it. It never fades in mid-air.
+ */
+const TOAST_EXIT_TEXT = { duration: 140, easing: "ease-out" };
+/** How long the shape holds while its words go, before it sinks. */
+const TOAST_SINK_DELAY = 100;
+/** How far under the edge the shape comes to rest, so its shadow is covered too. */
+const TOAST_SINK_DEPTH = 6;
+
+/**
+ * How long a spring takes to come to rest, from its own numbers: the envelope
+ * `exp(-damping·ω·t)`, with `ω = 2π/response`, has fallen to 1% of the travel.
+ */
+const settleFor = ({ response, damping }) => Math.ceil((response * Math.log(100)) / (2 * Math.PI * damping));
+
+/** From the start of the sink to out of the tree: once the drop has settled, under the edge. */
+const TOAST_GONE = settleFor(TOAST_SPRINGS.rise) + 16;
+
+/** The send key: its accent swells in with a little give and goes back without; a send launches its arrow. */
+const SEND_GROW = { response: 320, damping: 0.62 };
+const SEND_SHRINK = { response: 220, damping: 1 };
+/** How far the arrow flies up when sent (a new one rises from a little below). */
+const SEND_TRAVEL = 18;
+const SEND_LAUNCH = { duration: 200, easing: "ease-in" };
+const SEND_LAUNCH_FADE = { duration: 160, easing: "ease-in" };
+const SEND_RISE = { duration: 220, easing: "ease-out" };
+const SEND_SPIN_IN = { duration: 160, delay: 160, easing: "ease-out" };
+
+/** One folder's listing, at most this many entries. */
+const LIST_LIMIT = 500;
+
+/**
+ * Lists a folder as herdr's built-in file explorer does: a small sh script run through herdr's
+ * `exec`, so it needs neither node nor the engine. Returns { path, entries, truncated }, or
+ * { fallback: true } where there is no sh (Windows), or { error } when the folder can't be read.
+ */
+async function listWithHerdr(path, hidden = false) {
+  if (herdrWindow()?.platform === "windows" || /^[a-z]:[\\/]?/i.test(String(path))) return { fallback: true };
+  const dir = String(path || "/").replace(/\/+$/, "") || "/";
+  const script = 'n=0; for p in "$1"/* "$1"/.[!.]* "$1"/..?*; do [ -e "$p" ] || [ -L "$p" ] || continue; name=${p##*/}; [ "$name" = .git ] && continue; if [ -d "$p" ]; then kind=d; else kind=f; fi; printf "%s\\0%s\\0" "$kind" "$name"; n=$((n+1)); [ "$n" -gt ' + LIST_LIMIT + ' ] && break; done; test -d "$1"';
+  let r;
+  try {
+    r = await exec("sh", ["-c", script, "files", dir], { timeout: 15000 });
+  } catch (e) {
+    return String(e).includes("not found") ? { fallback: true } : { error: `Couldn't list ${dir}: ${String(e?.message ?? e)}` };
+  }
+  if (r.code !== 0) return { error: (r.stderr || "").trim() || `No such folder: ${dir}` };
+  const fields = String(r.stdout ?? "").split("\0");
+  const entries = [];
+  for (let i = 0; i + 1 < fields.length; i += 2) {
+    const name = fields[i + 1];
+    if (!name || (!hidden && name.startsWith("."))) continue;
+    entries.push({ name, path: dir === "/" ? `/${name}` : `${dir}/${name}`, dir: fields[i] === "d" });
+  }
+  entries.sort((a, b) => (a.dir === b.dir ? a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) : a.dir ? -1 : 1));
+  return { path: dir, entries: entries.slice(0, LIST_LIMIT), truncated: entries.length > LIST_LIMIT };
+}
+
+/** Each harness's models as `bh models` reported them, for the Orchestrator's chip. */
+const COMPOSER_MODELS = new Map();
+
 export class Composer {
   /** `hooks.sent({ text, to, files })` is called for each message that went out. */
   constructor(hooks = {}) {
@@ -81,7 +153,7 @@ export class Composer {
     this.files = [];
     this.known = [];
     this.toasts = queue(); // toasts waiting their turn (toasts.js)
-    this.toast = null; // the one on screen: { item, phase: "start" | "up" | "out", at, n }
+    this.toast = null; // the one on screen: { item, phase: "start" | "up" | "out" | "sink", rose, at, n }
     this.toastN = 0;
     this.noteAt = shared(TOAST_KEY)?.at ?? 0; // the last herdr notification taken in
     this.questions = []; // agents' open questions, oldest first (the chat reads them)
@@ -89,6 +161,13 @@ export class Composer {
     this.browse = null; // { path, parent, entries, truncated, error, loading, selected:Set, hidden, foreign }
     this.browseAt = 0; // the row the keyboard is on
     this.browseLast = null; // { path, at }: a second click on the same folder opens it
+    // The Orchestrator's model pane: a search over every harness's models, and its effort.
+    this.modelSearch = InputState.new({ placeholder: "Search models" });
+    this.modelSearch.on("change", (_e, cx) => cx.notify());
+    this.modelSearch.on("submit", (_e, cx) => {
+      const first = this.modelRows().find((o) => !o.heading);
+      if (first) this.pickLeadModel(first.value, cx);
+    });
     this.browseSearch = InputState.new({ placeholder: "Search this folder" });
     this.browseSearch.on("change", (_e, cx) => cx.notify());
     this.browseTyped = InputState.new({ placeholder: "A path on this machine" });
@@ -101,6 +180,7 @@ export class Composer {
     this.shownPane = null; // the pane drawn last, so a new one opens with its animation
     this.pageHeight = 700;
     this.sending = false;
+    this.sendFx = { n: 0, phase: "rest" }; // the send key's arrow: "rest" | "launch" | "land" | "rise"
     this.width = SIZE.maxWidth;
     this.justBriefed = new Set(); // briefed this session; the label can take a moment to show
     this.expanded = true;
@@ -179,6 +259,153 @@ export class Composer {
     return this.roster().find((a) => a.lead);
   }
 
+  // ── The Orchestrator's model, picked from the bar (the others are set in Settings) ────────
+
+  /** The Orchestrator's model as the chip shows it: its name, or its harness's default. */
+  leadModelName() {
+    const a = this.leadEntry();
+    if (!a?.model) return "Default model";
+    const got = COMPOSER_MODELS.get(a.harness);
+    return (got?.models ?? []).find((m) => m.id === a.model)?.name ?? modelsOf(a.harness).find((m) => m.id === a.model)?.name ?? a.model;
+  }
+
+  /** Asks every installed harness here for its models (`bh models`), once; the pane redraws as they come. */
+  askLeadModels(cx) {
+    if (this.askingModels || this.space()?.machine) return;
+    const pending = this.known.filter((k) => k.installed && !COMPOSER_MODELS.has(k.key));
+    if (!pending.length) return;
+    this.askingModels = true;
+    cx.spawn(async (cx) => {
+      await Promise.all(pending.map(async (k) => {
+        const r = await bhJson(["models", k.key, "--command", (k.run ?? [k.key])[0]], { timeout: 60000 });
+        COMPOSER_MODELS.set(k.key, r ?? { models: [] });
+        cx.notify();
+      }));
+      this.askingModels = false;
+      cx.notify();
+    });
+  }
+
+  /** Opens or closes the model pane, which grows out of the composer like the others. */
+  toggleModels(cx) {
+    if (this.pane === "model") return this.toggle("model", cx);
+    this.modelSearch.set_value("");
+    this.askLeadModels(cx);
+    this.open("model", cx);
+    cx.timer.after(16, (cx) => {
+      this.modelSearch.focus();
+      cx.notify();
+    });
+  }
+
+  /**
+   * Every installed harness's models, each section headed by the harness, the Orchestrator's own
+   * first: what the harness reports, else the built-in list meanwhile. Filtered by the search.
+   */
+  modelRows() {
+    const a = this.leadEntry();
+    if (!a) return [];
+    const local = !this.space()?.machine;
+    const installed = this.known.filter((k) => k.installed);
+    const order = [...installed].sort((x, y) => (y.key === a.harness) - (x.key === a.harness));
+    const words = this.modelSearch.value().toLowerCase().split(/\s+/).filter(Boolean);
+    const rows = [];
+    for (const full of order) {
+      const k = { key: full.key, name: full.name, icon: full.icon ?? null, tint: full.tint, tile: full.tile ?? null, color: full.color ?? null };
+      const got = local ? COMPOSER_MODELS.get(k.key) : null;
+      const found = got?.models?.length ? got.models : modelsOf(k.key).filter((m) => m.current !== false);
+      const list = [{ value: `${k.key}|`, label: "Default model", harness: k }];
+      if (k.key === a.harness && a.model && !found.some((m) => m.id === a.model)) list.push({ value: `${k.key}|${a.model}`, label: a.model, note: "set in Settings", harness: k });
+      const seen = new Set();
+      for (const m of found) {
+        if (!m?.id || seen.has(m.id)) continue;
+        seen.add(m.id);
+        const name = m.name ?? m.id;
+        list.push({ value: `${k.key}|${m.id}`, label: name, note: name !== m.id ? m.id : "", harness: k });
+      }
+      const kept = words.length ? list.filter((o) => words.every((w) => `${o.label} ${o.note ?? ""} ${k.name} ${k.key}`.toLowerCase().includes(w))) : list;
+      if (kept.length) rows.push({ heading: k.name }, ...kept);
+    }
+    return rows;
+  }
+
+  /** A model picked in the pane: the Orchestrator moves to it (and its harness); the pane closes. */
+  pickLeadModel(value, cx) {
+    const lead = this.leadEntry();
+    this.pane = null;
+    this.input.focus();
+    cx.notify();
+    if (!lead) return;
+    const [harness, ...rest] = String(value ?? "").split("|");
+    const model = rest.join("|");
+    if (!harness || (harness === lead.harness && model === (lead.model ?? ""))) return;
+    const effort = effortsOf(harness, model).includes(lead.effort) ? lead.effort : "";
+    this.saveLead({ harness, model, effort }, cx);
+  }
+
+  /** The model pane: search on top, the Orchestrator's effort, then the models, scrolling. */
+  modelBody(c) {
+    const a = this.leadEntry();
+    const rows = this.modelRows();
+    const levels = a ? effortsOf(a.harness, a.model ?? "") : [];
+    const listH = Math.min(7 * ROW, Math.max(ROW, rows.reduce((n, o) => n + (o.heading ? CONTROL : ROW), 0)));
+    const head = CONTROL + SPACE[3] + (levels.length ? CHIP + SPACE[3] : 0) + (this.askingModels ? ROW + SPACE[3] : 0);
+    const selected = a ? `${a.harness}|${a.model ?? ""}` : "";
+    const body = v_flex()
+      .w_full()
+      .gap(SPACE[3])
+      .child(h_flex().flex_none().h(CONTROL).px(SPACE[3]).gap(SPACE[2]).items_center().rounded(SIZE.nested).bg(c.ground).border_1().border_color(c.edge)
+        .child(svg(ICON("search")).flex_none().size(GLYPH.sm).text_color(c.faint))
+        .child(div().flex_1().min_w(0).h_full().child(Input.new(this.modelSearch).w_full().h_full().text_size(TYPE.md).text_color(c.ink))))
+      .when(levels.length > 0, (el) => el.child(h_flex().flex_none().h(CHIP).gap(SPACE[2]).items_center()
+        .child(div().flex_none().w(52).text_size(TYPE.xs).font_medium().text_color(c.muted).child("Effort"))
+        .children(["", ...levels].map((l) => {
+          const on = (a.effort ?? "") === l;
+          return clickable(
+            div().h(CHIP).px(SPACE[3]).flex().items_center().rounded(SIZE.nested).border_1()
+              .border_color(on ? c.accent : c.edge).when(on, (x) => x.bg(c.well))
+              .text_size(TYPE.sm).text_color(on ? c.ink : c.muted)
+              .on_click((_e, cx) => {
+                if ((a.effort ?? "") !== l) this.saveLead({ effort: l }, cx);
+                cx.notify();
+              })
+              .child(l ? l.charAt(0).toUpperCase() + l.slice(1) : "Default"),
+            c,
+            `bc-effort-${l || "default"}`,
+          );
+        }))))
+      .when(Boolean(this.askingModels), (el) => el.child(div().flex_none().h(ROW).flex().items_center().text_size(TYPE.xs).text_color(c.faint).child("Asking the harnesses for their models…")))
+      .child(v_flex().id("bc-models").flex_none().h(listH).overflow_y_scroll()
+        .when(!rows.length, (el) => el.child(div().h(ROW).px(SPACE[3]).flex().items_center().text_size(TYPE.md).text_color(c.muted).child("No model matches.")))
+        .children(rows.map((o, i) => (o.heading
+          ? div().flex_none().h(CONTROL).px(SPACE[3]).flex().items_end().pb(SPACE[1]).text_size(TYPE.xs).text_color(c.faint).child(o.heading)
+          : clickable(
+            h_flex().flex_none().h(ROW).px(SPACE[3]).gap(SPACE[3]).items_center().rounded(SIZE.nested)
+              .when(o.value === selected, (el) => el.bg(c.hover))
+              .on_click((_e, cx) => this.pickLeadModel(o.value, cx))
+              .child(harnessMark(c, o.harness, GLYPH.md))
+              .child(div().flex_1().min_w(0).truncate().text_size(TYPE.md).child(o.label))
+              .when(Boolean(o.note), (el) => el.child(div().flex_none().max_w(160).truncate().text_size(TYPE.xs).text_color(c.faint).child(o.note)))
+              .when(o.value === selected, (el) => el.child(svg(ICON("check")).size(GLYPH.md).text_color(c.accent))),
+            c,
+            `bc-model-${i}`,
+          )))));
+    return { body, h: head + listH + SPACE[3] * 2 };
+  }
+
+  /** Changes the Orchestrator's entry in the team, as Settings would, and saves it for bh. */
+  saveLead(patch, cx) {
+    const list = this.roster().map((a) => (a.lead ? { ...a, ...patch } : a));
+    setShared(ROSTER_KEY, list);
+    const known = this.known.map((k) => ({ key: k.key, name: k.name, run: k.run, installed: k.installed }));
+    cx.timer.after(1, (cx) => cx.spawn(async (cx) => {
+      const r = await bh(["team", "save", "--data", enc({ agents: list, known })]);
+      if (r.code !== 0) this.say(`Couldn't save the Orchestrator's settings: ${(r.stderr || r.stdout || "node didn't run").trim().split("\n")[0]}`, cx);
+      cx.notify();
+    }));
+  }
+
+
   /** The Orchestrator a plain message goes to, or null when this space has none yet. */
   target() {
     return orchestratorOf(agents(), this.space()?.id ?? null, this.leadEntry().name);
@@ -203,7 +430,8 @@ export class Composer {
           hint: `Start ${a.name} · ${[k?.name ?? a.harness, a.model, a.effort].filter(Boolean).join(" · ")}`,
         };
       });
-    return [...mine, ...this.known];
+    // Only the team's agents start from here: no bare harness, no agent of one's own.
+    return mine;
   }
 
   /** Running agents that are roster entries, by address: the name they go by. */
@@ -332,15 +560,44 @@ export class Composer {
   rows() {
     if (this.pane !== "suggest" || !this.trigger) return [];
     if (this.trigger.kind === "slash") return slashRows(this.trigger.query);
-    return mentionRows(this.trigger.query, {
+    return mentionRows(this.trigger.query, this.mentionContext());
+  }
+
+  mentionContext(mode = this.mode) {
+    return {
       agents: agents(),
       children: this.children(),
       known: this.startables(),
       space: this.space()?.id ?? null,
-      mode: this.mode,
+      mode,
       leadName: this.leadEntry().name,
       names: this.names(),
-    });
+    };
+  }
+
+  /** The agent a typed @word names exactly (a running agent, or one of the team to start), or null. */
+  mentionMatch(word) {
+    const w = String(word ?? "").toLowerCase();
+    return mentionRows(w, this.mentionContext(null)).find((r) => (r.kind === "agent" || r.kind === "start") && String(r.name).toLowerCase() === w) ?? null;
+  }
+
+  /**
+   * An @name typed out in full and ended (a space or punctuation after it) becomes the agent's
+   * token, as if picked from the list: drawn bold in the agent's colour. The caret stays put.
+   */
+  tokenizeTyped(before, caret) {
+    if (this.text.length <= before.length) return false;
+    const m = /(^|\s)@([a-z0-9_.+-]*[a-z0-9_+-])([\s,.;:!?)])$/i.exec(this.text.slice(0, caret));
+    if (!m) return false;
+    const end = caret - m[3].length;
+    const start = end - m[2].length - 1;
+    if ((this.input.tokens?.() ?? []).some((t) => t.range.start <= start && t.range.end > start)) return false;
+    const row = this.mentionMatch(m[2]);
+    if (!row) return false;
+    this.input.replace_range_with_token({ start, end }, tokenFor(row));
+    this.input.set_selected_range({ start: caret, end: caret });
+    this.text = this.input.value();
+    return true;
   }
 
   // ── Typing ─────────────────────────────────────────────────────────────────────────────────
@@ -351,6 +608,7 @@ export class Composer {
     if (this.text === before) return; // our own edit (pick, send), already accounted for
     this.expanded = true;
     const caret = caretAfterEdit(before, this.text);
+    this.tokenizeTyped(before, caret);
     const trigger = this.text === this.dismissed ? null : triggerAt(this.text, caret);
     if (trigger?.kind !== "mention") this.mode = null;
     const was = this.pane;
@@ -448,13 +706,14 @@ export class Composer {
     }
     const item = this.toasts.current;
     if (!item) return;
-    const t = { item, phase: "start", at: Date.now(), n: ++this.toastN };
+    const t = { item, phase: "start", rose: false, at: Date.now(), n: ++this.toastN };
     this.toast = t;
     cx.notify();
     // Its first frame is a low swell in the composer's top edge; then it springs up.
     cx.timer.after(16, (cx) => {
-      if (this.toast !== t) return;
+      if (this.toast !== t || t.phase !== "start") return;
       t.phase = "up";
+      t.rose = true;
       t.at = Date.now();
       cx.notify();
       cx.timer.after(stayFor(this.toasts), (cx) => this.dropToast(item.id, cx));
@@ -464,15 +723,22 @@ export class Composer {
   /** The toast sinks back into the composer, then the next comes up. */
   dropToast(id, cx) {
     const t = this.toast;
-    if (!t || t.item.id !== id || t.phase === "out") return;
+    if (!t || t.item.id !== id || t.phase === "out" || t.phase === "sink") return;
+    // Its words go first, the shape holding; then the shape sinks back under the edge.
     t.phase = "out";
     cx.notify();
-    cx.timer.after(MOTION.toastOut.duration + 16, (cx) => {
+    cx.timer.after(t.rose ? TOAST_SINK_DELAY : 1, (cx) => {
       if (this.toast !== t) return;
-      this.toast = null;
-      dismissToast(this.toasts, id);
-      this.pumpToast(cx);
+      t.phase = "sink";
       cx.notify();
+      // Removed a frame after the shape is at rest under the edge, so nothing pops.
+      cx.timer.after(TOAST_GONE, (cx) => {
+        if (this.toast !== t) return;
+        this.toast = null;
+        dismissToast(this.toasts, id);
+        this.pumpToast(cx);
+        cx.notify();
+      });
     });
   }
 
@@ -532,13 +798,16 @@ export class Composer {
    * "Attach document…": the browser inside the attach pane. It lists this machine's folders
    * through `bh files`; a space on another machine says so and takes a typed path instead.
    */
-  openBrowser(cx, { folders = false } = {}) {
+  openBrowser(cx, { folders = false, purpose = "attach" } = {}) {
     const space = this.space();
+    // Opening a folder starts one level up, beside the project, where the next one usually is.
+    const start = purpose === "open" ? (upFrom(projectDir(space)) ?? projectDir(space)) : projectDir(space);
     this.pane = "attach";
     this.browse = {
       folders,
-      path: projectDir(space),
-      parent: upFrom(projectDir(space)),
+      purpose,
+      path: start,
+      parent: upFrom(start),
       entries: [],
       truncated: false,
       error: null,
@@ -563,7 +832,8 @@ export class Composer {
   loadBrowse(cx, path = this.browse?.path) {
     const b = this.browse;
     if (!b || b.foreign) return;
-    // "" is the drive list: the one place above a drive's own foot.
+    // "" is the drive list: the one place above a drive's own foot. Elsewhere it is the root.
+    if (path === "" && herdrWindow()?.platform !== "windows") path = "/";
     const drives = path === "";
     // Every ask takes the next number: a listing that is not the latest is dropped, so a folder
     // opened quickly after another can't be overwritten by the slower answer.
@@ -572,14 +842,19 @@ export class Composer {
     b.error = null;
     cx.notify();
     cx.spawn(async (cx) => {
-      const r = await bh(["files", path, ...(b.hidden ? ["--all"] : []), "--json"], { cwd: projectDir() });
-      if (this.browse !== b || b.seq !== seq) return;
-      let data = null;
-      try {
-        data = JSON.parse(r.stdout);
-      } catch {
-        data = null;
+      // Listed the way herdr's own file explorer lists a folder (its shell, through herdr), and
+      // through `bh files` only where that can't run (Windows, the drive list).
+      let data = drives ? null : await listWithHerdr(path, b.hidden);
+      let r = { code: 0, stderr: "" };
+      if (!data || data.fallback) {
+        r = await bh(["files", path, ...(b.hidden ? ["--all"] : []), "--json"], { cwd: projectDir() });
+        try {
+          data = JSON.parse(r.stdout);
+        } catch {
+          data = data?.error ? { error: data.error } : null;
+        }
       }
+      if (this.browse !== b || b.seq !== seq) return;
       b.loading = false;
       if (r.code !== 0 || !data || !Array.isArray(data.entries)) {
         b.error = String(data?.error ?? ((r.stderr || "").trim() || "Couldn't list that folder."));
@@ -627,7 +902,19 @@ export class Composer {
     if (!paths.length && b?.folders && b.path) paths.push(b.path);
     if (!paths.length) return;
     this.browse = null;
+    if (b.purpose === "open") return this.openSpace(paths[0], cx);
     this.addFiles(paths, cx);
+  }
+
+  /** "Open folder…": the folder picked in the browser becomes a new space. */
+  openSpace(folder, cx) {
+    this.browse = null;
+    this.pane = null;
+    this.browseSearch.set_value("");
+    hold();
+    run("space.new", { folder });
+    this.input.focus();
+    cx.notify();
   }
 
   /** A typed path (another machine, or this one): attached as it is. */
@@ -710,11 +997,10 @@ export class Composer {
     const primary = (id, label, onClick) => clickable(
       div().flex_none().h(CONTROL).px(SPACE[4]).flex().items_center().rounded(SIZE.control)
         .bg(c.accent).border_b(1).border_color(c.accentLip).text_size(TYPE.sm).font_medium().text_color(c.accentInk)
-        .hover((s) => s.opacity(0.92))
         .on_click(onClick)
         .child(label),
       c,
-      id,
+      id, { fill: accentFill(c) },
     );
     const list = v_flex()
       .id("bc-browse-list")
@@ -794,7 +1080,9 @@ export class Composer {
             b.hidden = !b.hidden;
             this.loadBrowse(cx);
           }))
-          .when(Boolean(b.path), (el) => el.child(primary("bc-browse-attach", b.folders && !b.selected.size ? "Attach this folder" : "Attach", (_e, cx) => this.attachBrowse(cx)))),
+          .when(Boolean(b.path), (el) => el.child(primary("bc-browse-attach",
+            b.purpose === "open" ? (b.selected.size ? "Open" : "Open this folder") : b.folders && !b.selected.size ? "Attach this folder" : "Attach",
+            (_e, cx) => this.attachBrowse(cx)))),
       );
     return { h, body: body.id("bc-browse").on_scroll_wheel((_e, cx) => cx.stop_propagation()) };
   }
@@ -857,6 +1145,8 @@ export class Composer {
     this.mode = null;
     this.dismissed = null;
     this.sending = true;
+    // The arrow shoots up out of the key as the message goes.
+    this.sendFx = { n: this.sendFx.n, phase: "launch" };
     cx.notify();
     // A plain message (no @, no /command) to the Orchestrator may go to one agent instead.
     const first = result.steps[0];
@@ -884,6 +1174,7 @@ export class Composer {
       }
       if (to.length) this.hooks.sent?.({ text: sentText ?? "", files: keptFiles.map((f) => f.name), paths: keptFiles.map((f) => f.path), to }, cx);
       this.sending = false;
+      this.landSend(cx);
       if (failed.length) {
         // Put the message back so nothing typed is lost.
         if (!this.input.value()) {
@@ -1078,9 +1369,14 @@ export class Composer {
   }
 
   // The box's height at a width: the text's rows and the tools row. Attachments sit above the box.
+  /** The text box's rows: what the text needs, at least `minRows` (a page can ask for a taller box). */
+  textRows(width) {
+    return Math.max(this.minRows ?? 0, rowsFor(this.text, width - SIZE.textX * 2 - 2));
+  }
+
   height(width) {
     if (this.isFolded()) return 40;
-    return SIZE.textTop + rowsFor(this.text, width - SIZE.textX * 2 - 2) * SIZE.line + SIZE.tools + 2;
+    return SIZE.textTop + this.textRows(width) * SIZE.line + SIZE.tools + 2;
   }
 
   /** The attachments row: taller when it shows images. */
@@ -1147,10 +1443,10 @@ export class Composer {
     const target = this.target();
     const busy = target?.status === "working";
     const empty = !this.text.trim() && !this.files.length;
-    const placeholder = !this.pane && this.paneNow() === "ask" ? "Or type your own reply…" : busy ? `${this.leadEntry().name} is working. Enter steers it…` : PLACEHOLDER;
+    const placeholder = !this.pane && this.paneNow() === "ask" ? "Or type your own reply…" : busy ? `${this.leadEntry().name} is working. Enter steers it…` : this.placeholder ?? PLACEHOLDER;
     // Every height here is stated. The text box stretches to fill its parent, and a floating
     // surface may be offered the whole window, so nothing is left to size itself.
-    const textH = rowsFor(this.text, width - SIZE.textX * 2 - 2) * SIZE.line;
+    const textH = this.textRows(width) * SIZE.line;
     return v_flex()
       .id("bc-box")
       .relative()
@@ -1232,7 +1528,19 @@ export class Composer {
   chip(c, token) {
     const agent = token.id.startsWith("agent:") ? agents().find((a) => a.address === token.id.slice(6)) : null;
     const command = token.id.startsWith("cmd:") ? commandColor(token.id.slice(4)) : null;
-    const color = command ? readable(command, c.hover, 4.5, c.ink) : agent?.program?.tile ? readable(agent.program.tile, c.hover, 4.5, c.ink) : token.id.startsWith("start:") ? c.muted : c.accent;
+    // An agent's mention wears its type's colour, as it does everywhere; a command its own.
+    const named = agent?.name ?? String(token.text ?? "").replace(/^@/, "");
+    const color = command ? readable(command, c.hover, 4.5, c.ink)
+      : token.id === "all" ? c.accent
+        : readable(mentionTone(c, named, this.roster()), c.hover, 4.5, c.ink);
+    // An agent is its @name, bold in its colour, set in the text like a word; a command keeps a chip.
+    if (!command) {
+      return div()
+        .text_size(TYPE.md)
+        .font_semibold()
+        .text_color(readable(mentionTone(c, named, this.roster()), c.fill, 4.5, c.ink))
+        .child(token.text ?? `@${named}`);
+    }
     return h_flex()
       .px(SPACE[3])
       .h(CHIP)
@@ -1314,8 +1622,9 @@ export class Composer {
 
   /**
    * The toast: one more bubble of the composer's surface. It swells out of the top edge, springs
-   * up to sit a little above it, and when it goes it sinks back in. The box and any pane are
-   * painted over it, so while it is low it is still inside them.
+   * up to sit a little above it, and when it goes it does the same in reverse: its words fade,
+   * then it springs back down and slips under the edge. The box and any pane are painted over
+   * it, so while it is low it is inside them.
    */
   toastView(c, width) {
     const t = this.toast;
@@ -1324,47 +1633,52 @@ export class Composer {
     const { w: W, h: H } = toastSize(item, Math.min(512, width - 32), textWidth);
     const slot = GAP + H;
     const up = t.phase === "up";
-    const out = t.phase === "out";
-    // Up it springs (rising a beat ahead of filling out); out it shrinks to a pill in the
-    // composer's edge and fades, one continuous motion, and is removed only once invisible.
-    const w = out ? 24 : up ? W : Math.round(W * 0.4);
-    const h = out ? 12 : up ? H : Math.round(H * 0.45);
-    const top = out ? Math.round(GAP + H) : up ? 0 : Math.round(GAP + H * 0.85);
+    const leaving = t.phase === "out" || t.phase === "sink";
+    // Its first frame is a low swell in the edge; then it springs up (rising a beat ahead of
+    // filling out) and holds while its words fade on the way out. Sinking, it shrinks back to
+    // that swell's size and on down, just under the edge, so nothing is left showing when it
+    // is removed.
+    const full = t.rose && t.phase !== "sink";
+    const sunk = t.phase === "sink";
+    const w = full ? W : Math.round(W * 0.4);
+    const h = full ? H : sunk ? Math.min(Math.round(H * 0.45), 24) : Math.round(H * 0.45);
+    const top = full ? 0 : sunk ? slot + TOAST_SINK_DEPTH : Math.round(GAP + H * 0.85);
     const left = Math.round((width - w) / 2);
-    const rise = { response: 420, damping: 0.82 };
-    const shapeMotion = (el, prop, spring) => (out ? el.transition(prop, MOTION.toastOut) : el.spring(prop, spring));
-    let shape = div()
+    // Leaving, the words keep their place and size (nothing rewraps) and only fade.
+    const textW = leaving ? W : w;
+    const textH = leaving ? H : h;
+    const textTop = leaving ? 0 : top;
+    const textLeft = Math.round((width - textW) / 2);
+    const shape = div()
       .id(`bc-toast-shape-${t.n}`)
       .absolute()
       .top(top)
       .left(left)
       .w(w)
       .h(h)
-      .opacity(out ? 0 : 1)
-      .transition("opacity", MOTION.toastOut)
       .bg(c.fill)
       .border_1()
       .border_color(c.edge)
       .rounded(SIZE.radius)
       .shadow_md()
-      .child(div().absolute().top(0).left(SIZE.radius).right(SIZE.radius).h(HAIR).bg(c.rim));
-    shape = shapeMotion(shape, "top", rise);
-    shape = shapeMotion(shape, "height", { response: 360, damping: 0.66 });
-    shape = shapeMotion(shape, "width", { response: 440, damping: 0.7 });
-    shape = shapeMotion(shape, "left", { response: 440, damping: 0.7 });
+      .child(div().absolute().top(0).left(SIZE.radius).right(SIZE.radius).h(HAIR).bg(c.rim))
+      .spring("top", TOAST_SPRINGS.rise)
+      .spring("height", TOAST_SPRINGS.height)
+      .spring("width", TOAST_SPRINGS.width)
+      .spring("left", TOAST_SPRINGS.width);
     const tone = toneOf(c, item.kind);
     let body = h_flex()
       .id(`bc-toast-body-${t.n}`)
       .absolute()
-      .top(top)
-      .left(left)
-      .w(w)
-      .h(h)
+      .top(textTop)
+      .left(textLeft)
+      .w(textW)
+      .h(textH)
       .px(SPACE[4])
       .gap(SPACE[3])
       .items_center()
-      .opacity(out ? 0 : up ? 1 : 0)
-      .transition("opacity", out ? { ...MOTION.hover, easing: "ease-in" } : up ? { ...MOTION.row, delay: 240 } : MOTION.row)
+      .opacity(up ? 1 : 0)
+      .transition("opacity", leaving ? TOAST_EXIT_TEXT : up ? { ...MOTION.row, delay: 240 } : MOTION.row)
       .text_size(TYPE.md)
       .line_height(`${LINE.md}px`)
       .text_color(c.ink)
@@ -1390,19 +1704,12 @@ export class Composer {
         c,
         `bc-toast-act-${t.n}`,
       )));
-    body = shapeMotion(body, "top", rise);
+    // Leaving, the words stay where they are (no spring to a new place) and only fade.
+    if (!leaving) body = body.spring("top", TOAST_SPRINGS.rise);
     return div().id("bc-toast").absolute().left(0).right(0).top(-slot).h(slot).child(shape).child(body);
   }
 
   tools(c, target, busy, empty) {
-    const kbd = (text) => div().px(SPACE[2]).py(SPACE[1]).rounded(SIZE.nested).bg(c.kbd).text_size(TYPE.xs).text_color(c.muted).child(text);
-    const hints = this.menuOpen()
-      ? [kbd("↑"), kbd("↓"), "choose", kbd("↵"), "insert"]
-      : this.pane
-        ? [kbd("Esc"), "close"]
-        : this.paneNow() === "ask"
-          ? [kbd("↵"), "answer", kbd("Esc"), "put away"]
-          : [kbd("Shift"), kbd("↵"), "new line"];
     const space = this.space();
     const canSend = !empty && !this.sending;
     return h_flex()
@@ -1431,12 +1738,27 @@ export class Composer {
         c,
         "bc-space",
       ))
+      // The Orchestrator's model: picked here; every other agent's is set in Settings.
+      .when(Boolean(this.leadEntry()), (el) => el.child(clickable(
+        h_flex()
+          .h(CHIP)
+          .px(SPACE[3])
+          .gap(SPACE[3])
+          .items_center()
+          .rounded(SIZE.nested)
+          .text_size(TYPE.sm)
+          .text_color(c.muted)
+          .hover((x) => x.bg(c.well).text_color(c.ink))
+          .when(this.pane === "model", (x) => x.bg(c.well).text_color(c.ink))
+          .on_click((_e, cx) => this.toggleModels(cx))
+          .child(harnessMark(c, this.known.find((k) => k.key === this.leadEntry().harness) ?? { key: this.leadEntry().harness, name: this.leadEntry().harness }, GLYPH.md))
+          .child(div().max_w(this.width >= 560 ? 180 : 110).truncate().child(this.leadModelName()))
+          .when(Boolean(this.leadEntry().effort), (x) => x.child(div().flex_none().text_color(c.faint).child(this.leadEntry().effort)))
+          .child(svg(ICON("chevron-down")).size(GLYPH.sm).text_color(c.faint)),
+        c,
+        "bc-lead-model",
+      )))
       .child(div().flex_1())
-      .when(Boolean(target), (el) =>
-        el.child(div().max_w(220).truncate().text_size(TYPE.sm).text_color(c.faint).child(`to ${this.leadEntry().name}`)))
-      .when(!target && Boolean(this.lead()), (el) =>
-        el.child(div().max_w(220).truncate().text_size(TYPE.sm).text_color(c.faint).child(`starts ${this.leadEntry().name} · ${this.lead().name}`)))
-      .when(this.width >= 560, (el) => el.child(h_flex().flex_none().gap(SPACE[2]).items_center().text_size(TYPE.xs).text_color(c.muted).children(hints)))
       .when(busy, (el) =>
         el.child(focusable(
           pressable(
@@ -1454,25 +1776,80 @@ export class Composer {
           "bc-stop",
           c,
         )))
-      .child(focusable(
-        pressable(
-          div()
-            .size(TARGET)
-            .rounded_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .when(canSend, (el) =>
-              el.bg(c.accent).border_b(1).border_color(c.accentLip).text_color(c.accentInk).hover((s) => s.opacity(0.92)))
-            .when(!canSend, (el) => el.bg(c.well).text_color(c.faint))
-            .on_click((_e, cx) => this.send(cx))
-            .child(this.sending
-              ? svg(ICON("spinner")).size(GLYPH.lg).spin(900)
-              : svg(ICON("send")).size(GLYPH.lg)),
-        ),
-        "bc-send",
-        c,
-      ));
+      .child(focusable(pressable(this.sendKey(c, canSend)), "bc-send", c));
+  }
+
+  /**
+   * The round send key. gpui animates no colours, so it is drawn in layers: the well, then the
+   * accent swelling out of its middle when there is something to send (and going back in when
+   * there isn't), then the arrow, whose two colours cross-fade. Sent, the arrow shoots up and
+   * fades, a spinner comes up if sending takes a moment, and once the message is out a new
+   * arrow rises into place from below.
+   */
+  sendKey(c, canSend) {
+    const fx = this.sendFx;
+    const mid = (TARGET - GLYPH.lg) / 2;
+    const fill = canSend ? TARGET : 0;
+    const launching = fx.phase === "launch";
+    const arrowTop = launching ? mid - SEND_TRAVEL : fx.phase === "land" ? mid + SEND_TRAVEL * 0.75 : mid;
+    const arrowOn = fx.phase === "rise" || fx.phase === "rest";
+    const layer = (id, size) => div().id(id).absolute().size(size);
+    const glyph = (id, color, on) => layer(id, GLYPH.lg)
+      .opacity(on ? 1 : 0)
+      .transition("opacity", MOTION.tool)
+      .child(svg(ICON("send")).size(GLYPH.lg).text_color(color));
+    return div()
+      .size(TARGET)
+      .rounded_full()
+      .bg(c.well)
+      .when(canSend, (el) => el.hover((s) => s.opacity(0.92)))
+      .on_click((_e, cx) => this.send(cx))
+      .child(layer("bc-send-fill", fill)
+        .left((TARGET - fill) / 2)
+        .top((TARGET - fill) / 2)
+        .rounded_full()
+        .bg(c.accent)
+        .border_b(1)
+        .border_color(c.accentLip)
+        .opacity(canSend ? 1 : 0)
+        .transition("opacity", MOTION.hover)
+        .spring("width", canSend ? SEND_GROW : SEND_SHRINK)
+        .spring("height", canSend ? SEND_GROW : SEND_SHRINK)
+        .spring("left", canSend ? SEND_GROW : SEND_SHRINK)
+        .spring("top", canSend ? SEND_GROW : SEND_SHRINK))
+      .child(layer(`bc-send-arrow-${fx.n}`, GLYPH.lg)
+        .left(mid)
+        .top(arrowTop)
+        .opacity(arrowOn ? 1 : 0)
+        .transition("top", launching ? SEND_LAUNCH : SEND_RISE)
+        .transition("opacity", launching ? SEND_LAUNCH_FADE : SEND_RISE)
+        .child(glyph(`bc-send-dim-${fx.n}`, c.faint, !canSend))
+        .child(glyph(`bc-send-ink-${fx.n}`, c.accentInk, canSend)))
+      // Shown only if sending takes a moment, so a quick send doesn't flash it.
+      .child(layer("bc-send-spin", GLYPH.lg)
+        .left(mid)
+        .top(mid)
+        .opacity(launching ? 1 : 0)
+        .transition("opacity", launching ? SEND_SPIN_IN : MOTION.hover)
+        .when(fx.phase !== "rest", (el) => el.child(svg(ICON("spinner")).size(GLYPH.lg).text_color(c.faint).spin(900))));
+  }
+
+  /** The message is out: a new arrow, drawn low and clear first, rises into the send key. */
+  landSend(cx) {
+    const fx = { n: this.sendFx.n + 1, phase: "land" };
+    this.sendFx = fx;
+    cx.notify();
+    cx.timer.after(16, (cx) => {
+      if (this.sendFx !== fx) return;
+      fx.phase = "rise";
+      cx.notify();
+      // The spinner, fading out meanwhile, goes once the arrow is in place.
+      cx.timer.after(SEND_RISE.duration + 40, (cx) => {
+        if (this.sendFx !== fx) return;
+        fx.phase = "rest";
+        cx.notify();
+      });
+    });
   }
 
   iconButton(c, id, icon, on, onClick) {
@@ -1529,6 +1906,11 @@ export class Composer {
       size = { w: 420, h: got.h };
       body = got.body;
       pad = { x: SPACE[3], top: SPACE[3], bottom: SPACE[3] };
+    } else if (kind === "model") {
+      const got = this.modelBody(c);
+      size = { w: Math.min(440, width - 80), h: got.h };
+      body = got.body;
+      pad = { x: SPACE[3], top: SPACE[3], bottom: SPACE[3] };
     } else if (kind === "attach") {
       size = { w: 260, h: 12 + 3 * ROW };
       body = v_flex()
@@ -1569,18 +1951,9 @@ export class Composer {
             c,
             `bc-sp-${s.id}`,
           )))
-        .child(this.menuItem(c, "bc-open-folder", "folder-plus", "Open folder…", 0, (_e, cx) => {
-          this.pane = null;
-          cx.notify();
-          cx.spawn(async (cx) => {
-            const folder = await pickFolder({ prompt: "Open" });
-            if (folder) {
-              hold();
-              run("space.new", { folder });
-            }
-            cx.notify();
-          });
-        }));
+        // The same browser as attaching, listing folders: the system's folder dialog isn't
+        // there everywhere (a phone, a bare Linux), and failing it just closed the pane.
+        .child(this.menuItem(c, "bc-open-folder", "folder-plus", "Open folder…", 0, (_e, cx) => this.openBrowser(cx, { folders: true, purpose: "open" })));
     }
     // The joins must sit on the box's straight top edge, clear of its rounded corners.
     size.w = Math.min(size.w, width - SIZE.fillet * 2 - PANE_INSET * 2);
@@ -1803,12 +2176,10 @@ export class Composer {
                           openInBrowser(o.mockupFile, cx);
                         }))),
                     ))
-                    .when(d?.state === "ready", (el) => el.child(clickable(
+                    // Placed by its own absolute box; the clickable inside (clickable makes its element relative).
+                    .when(d?.state === "ready", (el) => el.child(div().absolute().top(SPACE[3]).right(SPACE[3]).size(CHIP).child(clickable(
                       div()
-                        .absolute()
-                        .top(SPACE[3])
-                        .right(SPACE[3])
-                        .size(CHIP)
+                        .size_full()
                         .flex()
                         .items_center()
                         .justify_center()
@@ -1824,7 +2195,7 @@ export class Composer {
                         .child(svg(ICON("expand")).size(GLYPH.xs)),
                       c,
                       `bc-ask-zoom-${i}`,
-                    ))),
+                    )))),
                 )
                 .child(h_flex().h(CHIP).gap(SPACE[3]).items_center().child(glyph(i + 1, CHIP)).child(div().flex_1().min_w(0).truncate().text_size(TYPE.md).font_medium().child(o.label)))
                 .when(Boolean(o.meaning), (el) => el.child(div().max_h(LINE.sm * 3).overflow_hidden().text_size(TYPE.sm).line_height(`${LINE.sm}px`).text_color(c.muted).child(o.meaning))),
@@ -1981,7 +2352,9 @@ export class Composer {
 
   row(c, r, index, fromBottom) {
     const active = index === this.at;
-    const color = tint(c, r);
+    const agentRow = r.kind === "agent" || r.kind === "start";
+    // An agent's name wears its colour (the same as everywhere); a command keeps its own.
+    const color = agentRow ? readable(mentionTone(c, r.name ?? r.label, this.roster()), c.hover, 4.5, c.ink) : tint(c, r);
     const showName = r.kind === "command" ? r.name : r.label;
     return clickable(
       h_flex()
@@ -2018,9 +2391,12 @@ export class Composer {
               .text_color(r.color ? color : c.muted)
               .child(r.name.charAt(0).toUpperCase()),
           ))
-        .child(div().flex_none().text_size(TYPE.md).font_medium().text_color(r.kind === "all" ? c.ink : color).child(r.kind === "command" ? `/${showName}` : showName))
+        .child(div().flex_none().text_size(TYPE.md)
+          .when(agentRow, (el) => el.font_semibold().text_color(color))
+          .when(!agentRow, (el) => el.font_medium().text_color(r.kind === "all" ? c.ink : color))
+          .child(r.kind === "command" ? `/${showName}` : showName))
         .child(div().flex_1().min_w(0).truncate().text_size(TYPE.sm).text_color(c.muted).child(r.hint))
-        .child(div().flex_none().px(SPACE[2]).rounded(SIZE.nested).text_size(TYPE.xs).font_medium().text_color(color).child(r.tag)),
+        .child(div().flex_none().px(SPACE[2]).rounded(SIZE.nested).text_size(TYPE.xs).font_medium().text_color(agentRow ? c.faint : color).child(r.tag)),
       c,
       `bc-row-${r.id}`,
     );

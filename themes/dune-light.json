@@ -14,11 +14,11 @@
     "#ede7db",
     "#6b5f4c",
     "#dc2626",
-    "#059669",
-    "#d97706",
+    "#05875f",
+    "#b26205",
     "#2563eb",
     "#9333ea",
-    "#0891b2",
+    "#07809d",
     "#fdfaf4"
   ],
   "colors": {
@@ -32,7 +32,7 @@
     "border": "#e6dac3",
     "input": "#dccfb4",
     "muted": "#6b5f4c",
-    "dim": "#9c9080",
+    "dim": "#8f8475",
     "accent": "#92400e",
     "accent_foreground": "#ffffff"
   }

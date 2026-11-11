@@ -6,12 +6,12 @@ import { layout, run, setShared } from "herdr";
 
 export const STACK = "pages";
 export const PAGES = [
-  { id: "chat", label: "Chat" },
-  { id: "terminals", label: "Terminals" },
-  { id: "tasks", label: "Tasks" },
-  { id: "plans", label: "Plans" },
-  { id: "knowledge", label: "Knowledge" },
-  { id: "settings", label: "Settings" },
+  { id: "chat", icon: "page-chat", label: "Chat" },
+  { id: "terminals", icon: "page-terminals", label: "Terminals" },
+  { id: "tasks", icon: "page-tasks", label: "Tasks" },
+  { id: "plans", icon: "page-plans", label: "Plans" },
+  { id: "knowledge", icon: "page-knowledge", label: "Knowledge" },
+  { id: "settings", icon: "page-settings", label: "Settings" },
 ];
 /** Set (to the time) when a view wants the composer to take the keyboard. */
 export const FOCUS = "bot-herdr.focus";

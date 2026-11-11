@@ -18,6 +18,9 @@ export const toneOf = (c, kind) => (kind === "error" ? c.danger : c[kind] ?? c.i
 /** Whether a layout copy's props are a notification (herdr gives the toast mod no view). */
 export const isNotification = (p) => Boolean(p && !p.view && p.overlay && ("title" in p || "body" in p));
 
+/** The card holds a beat while its words leave, then fades itself. */
+const TOAST_OUT_DELAY = 80;
+
 export class Toast {
   init(given, cx) {
     this.p = given ?? props() ?? {};
@@ -42,7 +45,9 @@ export class Toast {
     this.out = true;
     this.up = false;
     this.cx?.notify();
-    this.cx?.timer.after(320, () => closeOverlay(this.p.overlay));
+    // The words sink and fade, then the card fades after them; the overlay goes a frame after
+    // the card is fully transparent, so nothing pops.
+    this.cx?.timer.after(TOAST_OUT_DELAY + MOTION.toastOut.duration + 16, () => closeOverlay(this.p.overlay));
   }
 
   render() {
@@ -56,6 +61,8 @@ export class Toast {
         .size_full()
         .bg(c.fill)
         .overflow_hidden()
+        .opacity(this.out ? 0 : 1)
+        .transition("opacity", { ...MOTION.toastOut, delay: TOAST_OUT_DELAY })
         .on_click(() => {
           if (action) run(action.name, action.args ?? {});
           this.close();
@@ -66,13 +73,14 @@ export class Toast {
             .left(0)
             .right(0)
             .top(this.up ? 0 : SPACE[4])
-            .spring("top", { response: 420, damping: 0.78 })
+            // Up with a little give; going, straight down with no bounce while it fades.
+            .spring("top", this.out ? { response: 260, damping: 1 } : { response: 420, damping: 0.78 })
             .h_full()
             .px(SPACE[4])
             .gap(SPACE[3])
             .items_center()
             .opacity(this.up ? 1 : 0)
-            .transition("opacity", this.up ? { ...MOTION.tool, delay: 120 } : MOTION.menuClose)
+            .transition("opacity", this.out ? MOTION.toastTextOut : { ...MOTION.tool, delay: 120 })
             .text_color(c.ink)
             .child(svg(ICON(TOAST_ICONS[kind])).flex_none().size(GLYPH.lg).text_color(toneOf(c, kind)))
             .child(div().flex_1().min_w(0).max_h(LINE.md * 3).overflow_hidden().text_size(TYPE.md).line_height(`${LINE.md}px`).child(noteText(p)))

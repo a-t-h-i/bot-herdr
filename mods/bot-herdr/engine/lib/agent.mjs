@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { slug } from "../../roster.js";
 import { DATA, accessOf, ensureDir, now, projectRoot, readJson, writeJson, writeText } from "./core.mjs";
 import * as team from "./team.mjs";
-import { HEADLESS, headless, interactive, launch, turn } from "./runner.mjs";
+import { HEADLESS, agentUser, asRoot, headless, interactive, launch, turn } from "./runner.mjs";
 import * as Q from "./ask.mjs";
 
 export { accessOf };
@@ -199,7 +199,7 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
   function header() {
     const k = known.find((x) => x.key === agent.harness);
     const { access } = accessOf();
-    say(`${BOLD}${who}${OFF} ${DIM}· ${[k?.name ?? agent.harness, agent.model || "default model", agent.effort ? `effort ${agent.effort}` : ""].filter(Boolean).join(" · ")} · ${access === "full" ? "full access" : "standard access"}${OFF}`);
+    say(`${BOLD}${who}${OFF} ${DIM}· ${[k?.name ?? agent.harness, agent.model || "default model", agent.effort ? `effort ${agent.effort}` : ""].filter(Boolean).join(" · ")} · ${access !== "full" ? "standard access" : agent.harness === "claude" && asRoot(cwd) ? "standard access (full access isn't allowed as root)" : "full access"}${agentUser(cwd) ? ` · as ${agentUser(cwd).name}` : ""}${OFF}`);
     say(`${DIM}Headless: each message runs ${k?.name ?? agent.harness} and its answer comes back here${mode === "lead" ? " and in the chat" : ""}. Enter sends, Esc stops, /cli opens the full CLI, /new starts over, /exit quits.${OFF}`);
     say();
   }

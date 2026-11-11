@@ -14,19 +14,45 @@
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, TextareaState, Textarea } from "gpui-base";
 import { agents, panes, spaces, settings, shared, setShared, knownAgents, notify } from "herdr";
-import { SIZE, ICON, TYPE, SPACE, CONTROL, CHIP, MARK, PIP, HAIR, GLYPH, clickable, pressable, focusable } from "./look.js";
-import { stateView } from "./switch.js";
+import { SIZE, ICON, TYPE, LINE, SPACE, CONTROL, CHIP, MARK, PIP, HAIR, GLYPH, clickable, accentFill, pressable, focusable, textWidth } from "./look.js";
+import { stateView, pill, avatar, segmented } from "./switch.js";
+import { mentionTone, alpha } from "./indicators.js";
 import { colors } from "./theme.js";
-import { ROSTER_KEY, HEADLESS_KEY, HEADLESS, ROLES, roster, roleOf, argvOf, runnable, runningAs, effortsOf, modelsOf, blank, slug } from "./roster.js";
+import { ROSTER_KEY, HEADLESS_KEY, HEADLESS, ROLES, roster, roleOf, argvOf, runnable, runningAs, effortsOf, modelsOf, slug } from "./roster.js";
 import { bh, bhJson, enc, currentSpace, ROUTING_KEY } from "./bh.js";
-import { PICKED, REFRESH, openPick } from "./pick.js";
+import { PICKED, REFRESH, openPick, harnessMark } from "./pick.js";
 import { withQuiet } from "./live.js";
 
 const GAP = 14; // between cards
 const MAX = 1140; // the page's widest
 const MIN_CARD = 280; // a card's narrowest before the grid drops a column
 const PAD = 14; // inside a card
-const KNOB = 16;
+const KNOB = 18;
+/** An agent card's height with its essentials (header, harness, model, effort, More): every card is at least this. */
+const CARD_H = 320;
+
+/** The page's tabs, one section each. */
+const SECTIONS = [
+  { id: "agents", label: "Agents", icon: "users" },
+  { id: "general", label: "General", icon: "page-settings" },
+  { id: "harnesses", label: "Harnesses", icon: "page-terminals" },
+];
+const SECTION_KEY = "bot-herdr.settings-section";
+/** The tab last open, kept for next time (a convenience: it may not be kept). */
+const remembered = () => {
+  try {
+    return localStorage.getItem(SECTION_KEY) || "agents";
+  } catch {
+    return "agents";
+  }
+};
+const remember = (id) => {
+  try {
+    localStorage.setItem(SECTION_KEY, id);
+  } catch {
+    // only a convenience
+  }
+};
 
 /** What `bh models` said, per harness, for this session: the picker asks a harness once. */
 const MODEL_CACHE = new Map();
@@ -53,15 +79,8 @@ const THRESHOLDS = [
   { key: "trivialAt", label: "Lowest effort for a trivial step at" },
 ];
 
-const HOST_ORDER = ["auto", "opencode", "typesafe", "openrouter", "vercel"];
-/** The classifier's choices without a harness: the engine's `kind`. */
-const KINDS = [
-  { kind: "jev", value: "kind|jev", label: "Jev", note: "TypeSafe System One" },
-  { kind: "laya", value: "kind|laya", label: "Laya", note: "TypeSafe System One, or your own base URL" },
-  { kind: "clef", value: "kind|clef", label: "Clef", note: "Cloudflare Workers AI: needs an account id" },
-  { kind: "rules", value: "kind|rules", label: "Rules only", note: "no model: the built-in rules decide" },
-];
-const kindOf = (kind) => KINDS.find((k) => k.kind === kind) ?? null;
+/** OpenRouter's classifier models (System One): the only provider the classifier uses. */
+const OPENROUTER_MODELS = [{ id: "~typesafe/jev-latest", label: "Jev" }];
 
 export class Settings {
   init(_props, cx) {
@@ -69,6 +88,9 @@ export class Settings {
     this.knownSaved = "";
     this.inputs = {}; // agent id → { name, model, args, instructions }
     this.open = null; // "<id>:harness" or "<id>:model": the field whose list is open
+    const was = remembered();
+    this.section = was === "access" || was === "classifier" ? "general" : was; // the tab open
+    this.more = new Set(); // the parts opened past their essentials: an agent's id, "access", "harness", "classifier"
     this.pickedAt = shared(PICKED)?.at ?? 0;
     this.refreshedAt = shared(REFRESH)?.at ?? 0;
     this.asking = {}; // harness → true while `bh models` runs for it
@@ -93,7 +115,7 @@ export class Settings {
       name: InputState.new({ placeholder: "Oh My Pi" }),
       run: InputState.new({ placeholder: "omp --some-flag" }),
     };
-    this.keyInput = InputState.new({ placeholder: "Paste a key" });
+    this.keyInput = InputState.new({ placeholder: "sk-or-…" });
     this.keyInput.on("submit", (_e, cx) => this.saveKey(cx));
     this.keyInput.on("blur", (_e, cx) => this.saveKey(cx));
     this.modelInput = InputState.new({ placeholder: "The host's default" });
@@ -221,7 +243,9 @@ export class Settings {
     const key = this.keyInput.value().trim();
     if (!key) return;
     this.keyInput.set_value("");
-    this.config({ key }, cx);
+    // The key is OpenRouter's: the classifier runs there, on its model (Jev unless one was picked).
+    const k = this.classifier ?? {};
+    this.config({ key, kind: "", harness: "", harnessModel: "", host: "openrouter", model: k.host === "openrouter" && k.model ? k.model : OPENROUTER_MODELS[0].id }, cx);
   }
 
   list() {
@@ -254,6 +278,11 @@ export class Settings {
   /** Text boxes are made here (never while drawing), one set per agent. */
   sync() {
     const list = this.list();
+    // A model changed elsewhere (the composer sets the Orchestrator's): its field follows.
+    for (const a of list) {
+      const field = this.inputs[a.id]?.model;
+      if (field && field.value().trim() !== (a.model ?? "")) field.set_value(a.model ?? "");
+    }
     for (const a of list) {
       if (this.inputs[a.id]) continue;
       const set = {};
@@ -272,19 +301,6 @@ export class Settings {
       this.inputs[a.id] = set;
     }
     for (const id of Object.keys(this.inputs)) if (!list.some((a) => a.id === id)) delete this.inputs[id];
-  }
-
-  add(cx) {
-    const list = this.list();
-    this.save([...list, blank(list, this.known)], cx);
-    this.sync();
-    cx.notify();
-  }
-
-  remove(id, cx) {
-    this.save(this.list().filter((a) => a.id !== id), cx);
-    this.sync();
-    cx.notify();
   }
 
   /** Opens a field's list as a popup under it; the pick comes back through shared state. */
@@ -330,21 +346,20 @@ export class Settings {
     return options;
   }
 
-  /** The classifier's model: one of an installed harness's models, or a kind that needs none. */
+  /**
+   * The classifier's model: OpenRouter's classifier models, and only once an OpenRouter key is set
+   * (saved here or in OPENROUTER_API_KEY). A model id typed in the search can be used too.
+   */
   openClassifierModels(bounds) {
     const k = this.classifier;
-    const can = k?.harnesses ?? [];
-    const options = [];
-    for (const h of this.known.filter((x) => x.installed && can.includes(x.key))) {
-      options.push({ heading: h.name });
-      options.push({ value: `${h.key}|`, label: `${h.name} · its default model` });
-      for (const m of modelsOf(h.key).filter((m) => m.current)) options.push({ value: `${h.key}|${m.id}`, label: m.name, note: m.id !== m.name ? m.id : "" });
-    }
-    if (!options.length) options.push({ heading: "No installed harness can run it (Claude Code, Codex, Gemini or Qwen Code)" });
-    options.push({ heading: "Without a harness" }, ...KINDS.map((x) => ({ value: x.value, label: x.label, note: x.note })));
-    const selected = kindOf(k?.kind) ? `kind|${k.kind}` : k?.harness ? `${k.harness}|${k.harnessModel ?? ""}` : "";
+    const keyed = Boolean(k?.openrouterKey);
+    const options = keyed
+      ? [{ heading: "OpenRouter" }, ...OPENROUTER_MODELS.map((m) => ({ value: `openrouter|${m.id}`, label: m.label, note: m.id }))]
+      : [{ heading: "Add an OpenRouter key to pick a model" }];
+    const selected = k?.host === "openrouter" && !k?.harness && !k?.kind ? `openrouter|${k.model || OPENROUTER_MODELS[0].id}` : "";
+    if (keyed && k?.model && !options.some((o) => o.value === `openrouter|${k.model}`)) options.push({ value: `openrouter|${k.model}`, label: k.model, note: "picked before" });
     this.open = "classifier:model";
-    openPick({ key: "classifier:model", bounds, selected, options, minWidth: 300 });
+    openPick({ key: "classifier:model", bounds, selected, options, minWidth: 320, searchable: keyed, typed: keyed ? [{ prefix: "openrouter|", label: "OpenRouter" }] : [] });
   }
 
   /** A pick from a list (pick.js), applied once. */
@@ -355,8 +370,8 @@ export class Settings {
     if (picked.key === "classifier:model") {
       const [harness, ...model] = String(picked.value ?? "").split("|");
       this.open = null;
-      if (harness === "kind") return this.config({ kind: model.join("|"), harness: "" }, cx);
-      return this.config({ kind: "", harness, harnessModel: model.join("|") }, cx);
+      if (harness === "openrouter") return this.config({ kind: "", harness: "", harnessModel: "", host: "openrouter", model: model.join("|") }, cx);
+      return;
     }
     const [id, field] = String(picked.key ?? "").split(":");
     const a = this.list().find((x) => x.id === id);
@@ -448,12 +463,16 @@ export class Settings {
     });
   }
 
+  /** The stop under the pointer: measured inside the track, in the same (zoomed) pixels as its bounds. */
   slide(a, stops, e, cx) {
-    const b = this.drag?.bounds ?? e.bounds;
+    const b = e.bounds;
     if (!b?.width) return;
-    const ratio = Math.max(0, Math.min(1, (e.position.x - b.x - KNOB / 2) / Math.max(1, b.width - KNOB)));
+    const zoom = Number(settings().zoom) || 1;
+    const knob = KNOB * zoom;
+    const local = e.local_position?.x ?? e.position.x - b.x;
+    const ratio = Math.max(0, Math.min(1, (local - knob / 2) / Math.max(1, b.width - knob)));
     const value = stops[Math.round(ratio * (stops.length - 1))];
-    if (value !== a.effort) this.change(a.id, { effort: value }, cx);
+    if (value !== (a.effort ?? "")) this.change(a.id, { effort: value }, cx);
   }
 
   // ── Drawing ────────────────────────────────────────────────────────────────────────────────
@@ -461,7 +480,17 @@ export class Settings {
   render(cx) {
     if ((shared(PICKED)?.at ?? 0) > this.pickedAt) cx.timer.after(1, (cx) => this.applyPick(cx));
     if ((shared(REFRESH)?.at ?? 0) > this.refreshedAt) cx.timer.after(1, (cx) => this.applyRefresh(cx));
+    // The roster changed from outside (the composer's model chip): bring the fields in line.
+    const rosterNow = shared(ROSTER_KEY);
+    if (rosterNow !== this.rosterSeen) {
+      this.rosterSeen = rosterNow;
+      cx.timer.after(1, (cx) => {
+        this.sync();
+        cx.notify();
+      });
+    }
     const c = colors();
+    const section = SECTIONS.some((x) => x.id === this.section) ? this.section : "agents";
     const list = this.list().filter((a) => this.inputs[a.id]);
     const content = Math.max(MIN_CARD, Math.min(MAX, this.width - SIZE.gutter * 2));
     const cols = content >= MIN_CARD * 3 + GAP * 2 ? 3 : content >= MIN_CARD * 2 + GAP ? 2 : 1;
@@ -495,32 +524,97 @@ export class Settings {
               .w(content)
               .py(SPACE[5])
               .gap(GAP)
-              .child(this.heading(c, "Agents", "Each agent runs on a harness with a model and an effort level. The Orchestrator gets every message that names no one and hands work to the others; reach any of them with @name. A change applies to an agent's next message when it runs headless, or the next time it starts."))
+              // One section at a time, picked from the tabs.
+              .child(h_flex().items_center().child(segmented(c, {
+                id: "bh-settings-tabs",
+                items: SECTIONS.map((x) => ({ id: x.id, icon: x.icon, label: x.label, on: x.id === section })),
+                onPick: (id, cx) => {
+                  this.section = id;
+                  remember(id);
+                  cx.notify();
+                },
+              }))
+)
               .when(Boolean(this.problem), (el) => el.child(div().text_size(TYPE.sm).text_color(c.danger).child(this.problem)))
-              .children(rows.map((row, r) =>
-                h_flex().id(`bh-row-${r}`).flex_none().gap(GAP).items_start().children(row.map((a) => this.card(c, a, cardW, running, space)))))
-              .child(
-                h_flex()
-                  .gap(SPACE[4])
-                  .items_center()
-                  .child(this.button(c, "bh-add", "plus", "Add agent", (_e, cx) => this.add(cx)))
-                  .child(div().text_size(TYPE.sm).text_color(c.faint).child("Your own agents sit beside the six: give one a name, a harness and a model.")),
-              )
-              .child(div().h(MARK))
-              .child(this.accessCard(c))
-              .child(div().h(MARK))
-              .child(this.harnesses(c))
-              .child(div().h(MARK))
-              .child(this.classifierCard(c)),
+              .when(section === "agents", (el) => el
+                .children(rows.map((row, r) =>
+                  // Cards in a row share its height; every card is at least the height of a full one.
+                  h_flex().id(`bh-row-${r}`).flex_none().gap(GAP).items_stretch().children(row.map((a) => this.card(c, a, cardW, running, space))))))
+              // Access and the classifier together: side by side when there's room, else stacked.
+              .when(section === "general", (el) => el.child(v_flex().w(Math.min(640, content)).gap(GAP)
+                .child(this.accessCard(c))
+                .child(this.classifierCard(c))))
+              .when(section === "harnesses", (el) => el.child(this.harnesses(c))),
           ),
       );
   }
 
-  heading(c, title, about) {
+  /** A section's heading: a small icon and the title. */
+  heading(c, title) {
+    const icon = { Agents: "users", Harnesses: "page-terminals", Access: "shield-check", Classifier: "zap" }[title] ?? "page-settings";
+    return h_flex().gap(SPACE[3]).items_center().text_color(c.ink)
+      .child(svg(ICON(icon)).size(GLYPH.lg).text_color(c.muted))
+      .child(div().text_size(TYPE.lg).font_semibold().child(title));
+  }
+
+  /** "More" / "Less": opens a part past its essentials. */
+  disclosure(c, key, label = "More") {
+    const open = this.more.has(key);
+    return clickable(
+      h_flex().flex_none().h(CHIP).px(SPACE[2]).gap(SPACE[2]).items_center().rounded(SIZE.nested)
+        .text_size(TYPE.xs).font_medium().text_color(c.muted)
+        .on_click((_e, cx) => {
+          if (open) this.more.delete(key);
+          else this.more.add(key);
+          cx.notify();
+        })
+        .child(open ? "Less" : label)
+        .child(svg(ICON(open ? "chevron-down" : "chevron-right")).size(GLYPH.xs)),
+      c,
+      `bh-more-${key}`,
+    );
+  }
+
+  /** One setting on one line: its name (and a short hint under it) on the left, its control on the right. */
+  settingRow(c, label, control, hint = null) {
+    return h_flex().min_h(CONTROL + SPACE[3]).px(PAD).py(SPACE[3]).gap(SPACE[4]).items_center()
+      .child(v_flex().flex_1().min_w(0).gap(SPACE[1])
+        .child(div().text_size(TYPE.md).font_medium().text_color(c.ink).child(label))
+        .when(Boolean(hint), (el) => el.child(div().text_size(TYPE.xs).text_color(c.faint).child(hint))))
+      .child(div().flex_none().child(control));
+  }
+
+  /**
+   * A settings group: a compact card with a header (icon, title, and a control on the right, the
+   * classifier's switch say), then its rows.
+   */
+  group(c, { id, icon, title, right = null, rows = [] }) {
+    const shown = rows.filter(Boolean);
     return v_flex()
-      .gap(SPACE[2])
-      .child(div().text_size(TYPE.xl).font_semibold().child(title))
-      .when(Boolean(about), (el) => el.child(div().text_size(TYPE.md).text_color(c.muted).child(about)));
+      .id(id)
+      .w_full()
+      .rounded(SIZE.radius)
+      .bg(c.fill)
+      .border_1()
+      .border_color(c.edge)
+      .overflow_hidden()
+      .child(h_flex().h(CONTROL + SPACE[4]).px(PAD).gap(SPACE[3]).items_center()
+        .child(div().flex_none().size(26).rounded(SIZE.nested).flex().items_center().justify_center().bg(c.well).text_color(c.muted)
+          .child(svg(ICON(icon)).size(GLYPH.md)))
+        .child(div().flex_1().min_w(0).text_size(TYPE.md).font_semibold().child(title))
+        .when(Boolean(right), (el) => el.child(right)))
+      .children(shown)
+      .child(div().h(SPACE[2]));
+  }
+
+  /** A compact segmented choice for a setting row. */
+  choice(c, id, options, value, onPick) {
+    return segmented(c, { id, items: options.map(([v, label]) => ({ id: v, label, on: v === value })), onPick });
+  }
+
+  /** A quiet card: the frame every section sits in. */
+  panel(c) {
+    return v_flex().p(PAD).gap(SPACE[4]).rounded(SIZE.radius).bg(c.fill).border_1().border_color(c.edge);
   }
 
   label(c, text, right = null) {
@@ -544,13 +638,16 @@ export class Settings {
     const harnessName = this.known.find((k) => k.key === a.harness)?.name ?? a.harness;
     const efforts = this.effortsFor(a.harness, a.model);
     const stops = ["", ...efforts];
-    const state = ok ? (live ? "running" : "") : "not installed";
+    // The essentials: who, harness, model, effort. The rest opens under More.
+    const tone = mentionTone(c, a.role !== "custom" ? a.role : a.name);
+    const more = this.more.has(a.id);
+    // Plain: the card, the agent's avatar and name, then its fields. Colour only in the avatar
+    // and the effort slider.
     return v_flex()
       .id(`bh-agent-${a.id}`)
       .flex_none()
       .w(width)
-      .p(PAD)
-      .gap(SPACE[3])
+      .min_h(CARD_H)
       .rounded(SIZE.radius)
       .bg(c.fill)
       .border_1()
@@ -558,33 +655,33 @@ export class Settings {
       .child(
         h_flex()
           .h(CONTROL)
+          .mx(PAD)
+          .mt(PAD)
           .gap(SPACE[3])
           .items_center()
-          .child(a.role === "custom"
-            ? this.field(c, inputs.name)
-            : div().flex_1().min_w(0).truncate().text_size(TYPE.lg).font_semibold().child(a.name))
-          .when(Boolean(state), (el) => el.child(div().flex_none().text_size(TYPE.xs).text_color(ok ? c.accent : c.danger).child(state)))
-          .when(a.role === "custom", (el) => el.child(this.iconButton(c, `bh-del-${a.id}`, "x", (_e, cx) => this.remove(a.id, cx), true))),
+          .child(avatar(c, a.name, tone, 28))
+          .child(h_flex().flex_1().min_w(0).gap(SPACE[2]).items_center()
+              .child(div().min_w(0).truncate().text_size(TYPE.lg).font_semibold().child(a.name))
+              .when(Boolean(a.lead), (el) => el.child(div().text_size(TYPE.xs).text_color(c.faint).child("Lead"))))
+          .when(!ok, (el) => el.child(pill(c, "Not installed", c.danger)))
+
       )
-      .child(div().min_h(34).text_size(TYPE.sm).text_color(c.muted).child(role?.does ?? "An agent you added. It works on what you send it with @name."))
+      .child(v_flex().flex_1().p(PAD).pt(SPACE[4]).gap(SPACE[4])
       .child(v_flex().gap(SPACE[2]).child(this.label(c, "Harness")).child(this.select(c, a, "harness", harnessName, inner)))
       .child(v_flex().gap(SPACE[2]).child(this.label(c, "Model")).child(this.modelField(c, a, inputs.model, inner))
-        .when(Boolean(currentSpace()?.machine), (el) => el.child(div().text_size(TYPE.xs).text_color(c.faint).child("Model lists come from this machine; type a model id for this space."))))
+        .when(Boolean(currentSpace()?.machine), (el) => el.child(div().text_size(TYPE.xs).text_color(c.faint).child("Type a model id for this space."))))
       .child(v_flex().gap(SPACE[2])
-        .child(this.label(c, "Effort", efforts.length ? (a.effort || "Default") : null))
+        .child(this.label(c, "Effort"))
         .child(efforts.length
-          ? this.slider(c, a, stops, inner)
-          : div().text_size(TYPE.sm).text_color(c.faint).child("No effort flag we know for this harness; use extra arguments.")))
-      .child(v_flex().gap(SPACE[2]).child(this.label(c, "Extra arguments")).child(this.field(c, inputs.args)))
-      .child(v_flex().gap(SPACE[2]).child(this.label(c, "Instructions")).child(this.textarea(c, inputs.instructions)))
-      .child(
-        div()
-          .pt(SPACE[1])
-          .truncate()
-          .text_size(TYPE.xs)
-          .text_color(c.faint)
-          .child(`${a.lead ? "Plain messages" : `@${slug(a.name)}`} · ${argvOf(a, this.known).join(" ")}`),
-      );
+          ? this.slider(c, a, stops, inner, tone)
+          : div().text_size(TYPE.sm).text_color(c.faint).child("No effort setting for this harness.")))
+      .when(more, (el) => el
+        .child(v_flex().gap(SPACE[2]).child(this.label(c, "Arguments")).child(this.field(c, inputs.args)))
+        .child(v_flex().gap(SPACE[2]).child(this.label(c, "Instructions")).child(this.textarea(c, inputs.instructions)))
+        .child(div().truncate().text_size(TYPE.xs).text_color(c.faint).child(argvOf(a, this.known).join(" "))))
+      // Pinned to the foot, so every card's More sits on the same line.
+      .child(div().flex_1())
+      .child(h_flex().child(this.disclosure(c, a.id))));
   }
 
   /** A multi-line field, framed like field(). */
@@ -634,6 +731,7 @@ export class Settings {
             this.openList(a, field, e.bounds, cx);
             cx.notify();
           })
+          .when(field === "harness", (el) => el.child(harnessMark(c, this.known.find((k) => k.key === a.harness) ?? { key: a.harness, name: a.harness }, GLYPH.lg)))
           .child(div().flex_1().min_w(0).truncate().text_size(TYPE.md).child(value))
           .child(svg(ICON("chevron-down")).size(MARK).text_color(c.muted)),
       ),
@@ -681,20 +779,49 @@ export class Settings {
       )));
   }
 
-  slider(c, a, stops, width) {
+  /**
+   * The effort slider: a track with a stop per level, the level's name under each, and a knob on
+   * the one set. A press or drag picks the nearest stop, a name picks its own, and with the
+   * slider focused the arrow keys step along it.
+   */
+  slider(c, a, stops, width, tone = c.accent) {
     const n = stops.length;
-    const at = Math.max(0, stops.indexOf(a.effort));
+    const at = Math.max(0, stops.indexOf(a.effort ?? ""));
     const span = width - KNOB;
     const x = (i) => KNOB / 2 + (n > 1 ? (span * i) / (n - 1) : 0);
+    const name = (v) => (v ? v.charAt(0).toUpperCase() + v.slice(1) : "Default");
+    const pick = (i, cx) => {
+      const value = stops[Math.max(0, Math.min(n - 1, i))];
+      if (value !== (a.effort ?? "")) this.change(a.id, { effort: value }, cx);
+    };
+    // Every level is named under its stop: in full when the names fit their slots, shortened
+    // when the card is tight, and only the one set when even that won't fit. Names never wrap.
+    const SHORT = { "": "Def", low: "Low", medium: "Med", high: "High", xhigh: "XHi", max: "Max", minimal: "Min" };
+    const slot = n > 1 ? span / (n - 1) : span;
+    const fits = (f) => Math.max(...stops.map((v) => textWidth(f(v), TYPE.xs) * 1.1)) + SPACE[2] <= slot;
+    const short = (v) => SHORT[v] ?? name(v).slice(0, 4);
+    const label = fits(name) ? name : fits(short) ? short : null;
+    const labelW = Math.ceil(label ? slot : Math.max(...stops.map((v) => textWidth(name(v), TYPE.xs) * 1.15)) + SPACE[3]);
+    const place = (i) => Math.round(Math.max(0, Math.min(width - labelW, x(i) - labelW / 2)));
+    const mid = Math.round((KNOB + SPACE[3]) / 2);
     return focusable(
-      pressable(
-        div()
+      v_flex()
+        .w(width)
+        .gap(SPACE[1])
+        .on_key_down((e, cx) => {
+          if (["left", "arrow-left", "down", "arrow-down"].includes(e.key)) pick(at - 1, cx);
+          else if (["right", "arrow-right", "up", "arrow-up"].includes(e.key)) pick(at + 1, cx);
+          else return;
+          cx.stop_propagation();
+        })
+        .child(div()
           .relative()
           .w(width)
-          .h(CONTROL)
+          .h(KNOB + SPACE[3])
+          .cursor_pointer()
           .on_mouse_down("left", (e, cx) => {
             cx.stop_propagation();
-            this.drag = { id: a.id, bounds: e.bounds };
+            this.drag = { id: a.id };
             this.slide(a, stops, e, cx);
           })
           .on_mouse_move((e, cx) => {
@@ -710,200 +837,156 @@ export class Settings {
               cx.notify();
             }
           })
-          .child(div().absolute().left(KNOB / 2).w(span).top(SPACE[4]).h(SPACE[2]).rounded(PIP).bg(c.well))
-          .child(div().absolute().left(KNOB / 2).w(x(at) - KNOB / 2).top(SPACE[4]).h(SPACE[2]).rounded(PIP).bg(c.accent))
-          .children(stops.map((_s, i) => div().absolute().left(x(i) - SPACE[1]).top(SPACE[4]).size(SPACE[2]).rounded(PIP).bg(i <= at ? c.accentInk : c.faint).opacity(i === at ? 0 : 0.7)))
-          .child(
-            div()
-              .absolute()
-              .left(x(at) - KNOB / 2)
-              .top(SPACE[2])
-              .size(KNOB)
-              .rounded_full()
-              .bg(c.fill)
-              .border(2)
-              .border_color(c.accent),
-          ),
-      ),
+          // The track, filled in the agent's colour up to the level set, a stop per level.
+          .child(div().absolute().left(KNOB / 2).w(span).top(mid - 3).h(6).rounded_full().bg(c.well))
+          .child(div().absolute().left(KNOB / 2).w(Math.max(0, x(at) - KNOB / 2)).top(mid - 3).h(6).rounded_full().bg(tone))
+          .children(stops.map((_s, i) => div().absolute().left(x(i) - 2).top(mid - 2).size(4).rounded_full()
+            .bg(i < at ? c.fill : c.faint).opacity(i === at ? 0 : i < at ? 0.85 : 0.6)))
+          // The knob: ringed in the colour, a dot of it at the centre.
+          .child(div().absolute().left(x(at) - KNOB / 2).top(mid - KNOB / 2).size(KNOB).rounded_full().bg(c.fill).border(2).border_color(tone).shadow_sm()
+            .flex().items_center().justify_center()
+            .child(div().size(6).rounded_full().bg(tone))))
+        // Each level's name under its stop; a click on one picks it.
+        // Each name sits in an absolutely placed slot; the clickable is inside it (clickable makes
+        // its element relative, which would pull it out of place).
+        .child(div().relative().w(width).h(LINE.sm).children(stops.map((v, i) => [v, i]).filter(([, i]) => label || i === at).map(([v, i]) =>
+          div().absolute().top(0).left(place(i)).w(labelW).h(LINE.sm).child(clickable(
+            div().size_full().flex().justify_center().items_center().rounded(SIZE.nested)
+              .whitespace_nowrap().overflow_hidden()
+              .text_size(TYPE.xs).font_medium().text_color(i === at ? tone : c.faint).when(i === at, (el) => el.font_semibold())
+              .on_click((_e, cx) => pick(i, cx))
+              .child(label ? label(v) : name(v)),
+            c,
+            `bh-eff-${a.id}-${i}`,
+          ))))),
       `bh-eff-${a.id}`,
       c,
     );
   }
 
   harnesses(c) {
-    const installed = this.known.filter((k) => k.installed).map((k) => k.name);
     const f = this.harnessForm;
+    const open = this.more.has("harness");
     const col = (label, state, w) => v_flex().gap(SPACE[2]).w(w).child(this.label(c, label)).child(this.field(c, state));
+    const found = this.known.filter((k) => k.installed);
     return v_flex()
-      .gap(GAP)
-      .child(this.heading(c, "Harnesses", installed.length ? `herdr found ${installed.join(", ")} on your PATH. Add one it doesn't know by the command that starts it; models and effort for it then go in each agent's card.` : "herdr found no agent harness on your PATH yet. Add one by the command that starts it."))
-      .child(
-        h_flex()
-          .p(PAD)
-          .gap(SPACE[3])
-          .items_end()
-          .rounded(SIZE.radius)
-          .bg(c.fill)
-          .border_1()
-          .border_color(c.edge)
-          .child(col("Key", f.key, 130))
-          .child(col("Name", f.name, 180))
+      .gap(SPACE[4])
+      .child(this.panel(c)
+        .child(h_flex().flex_wrap().gap(SPACE[3]).items_center()
+          .children(found.map((k) => h_flex().h(CHIP).pl(SPACE[2]).pr(SPACE[3]).gap(SPACE[2]).items_center().rounded_full().bg(c.ground).border_1().border_color(c.edge)
+            .child(harnessMark(c, k, GLYPH.md))
+            .child(div().text_size(TYPE.sm).text_color(c.ink).child(k.name))))
+          .when(!found.length, (el) => el.child(div().text_size(TYPE.sm).text_color(c.muted).child("None found")))
+          .child(div().flex_1())
+          .child(this.disclosure(c, "harness", "Add")))
+        .when(open, (el) => el.child(h_flex().gap(SPACE[3]).items_end()
+          .child(col("Key", f.key, 120))
+          .child(col("Name", f.name, 160))
           .child(v_flex().flex_1().min_w(0).gap(SPACE[2]).child(this.label(c, "Command")).child(this.field(c, f.run)))
-          .child(this.button(c, "bh-add-harness", "plus", "Add harness", (_e, cx) => this.addHarness(cx))),
-      );
+          .child(this.button(c, "bh-add-harness", "plus", "Add", (_e, cx) => this.addHarness(cx))))));
   }
 
   accessCard(c) {
     const k = this.access;
-    if (!k) return stateView(c, { id: "bh-access-loading", title: "Loading…", line: "It needs node on your PATH.", loading: true });
+    if (!k) return stateView(c, { id: "bh-access-loading", title: "Loading…", loading: true });
     const on = k.headless !== false;
     const full = k.access === "full";
-    const quiet = this.known.filter((h) => h.installed && HEADLESS[h.key]).map((h) => h.name);
-    const row = (label, chips, about, danger = false) => v_flex()
-      .gap(SPACE[3])
-      .child(this.label(c, label))
-      .child(h_flex().flex_wrap().gap(SPACE[3]).children(chips))
-      .child(div().text_size(TYPE.sm).text_color(danger ? c.danger : c.muted).child(about));
-    return v_flex()
-      .gap(GAP)
-      .child(this.heading(c, "How agents run", "Headless, each message runs the harness on its own and the answer comes straight back to the chat. The agent's terminal still shows what it does, and /cli there opens the full CLI on the same conversation."))
-      .child(
-        v_flex()
-          .p(PAD)
-          .gap(SPACE[4])
-          .rounded(SIZE.radius)
-          .bg(c.fill)
-          .border_1()
-          .border_color(c.edge)
-          .child(row("Run agents", [
-            this.chip(c, "bh-run-headless", "Headless", on, (_e, cx) => this.setAccess({ headless: true }, cx)),
-            this.chip(c, "bh-run-cli", "As their CLI", !on, (_e, cx) => this.setAccess({ headless: false }, cx)),
-          ], on
-            ? `Headless works for ${quiet.length ? quiet.join(", ") : "Claude Code, Codex, pi, Oh My Pi, Gemini, opencode and Qwen Code"}. Any other harness runs as its CLI.`
-            : "Each agent is its harness's own CLI in a terminal. A reply reaches the chat only when the agent writes one with bh reply."))
-          .child(row("Access", [
-            this.chip(c, "bh-access-standard", "Standard", !full, (_e, cx) => this.setAccess({ access: "standard" }, cx)),
-            this.chip(c, "bh-access-full", "Full access", full, (_e, cx) => this.setAccess({ access: "full" }, cx)),
-          ], full
-            ? "Agents run any command and change any file without asking. Use it only in a folder or on a machine you're happy to let them loose in."
-            : "Agents edit files in the project, read and search, run bh (which runs the project's lint, typecheck and tests) and hc, and read git. Anything else is refused and the agent tells you what it needed.", full))
-          .when(!full, (el) => el.child(
-            v_flex()
-              .gap(SPACE[2])
-              .child(this.label(c, "Also allow these commands"))
-              .child(this.field(c, this.allowInput))
-              .child(div().text_size(TYPE.xs).text_color(c.faint).child("Comma separated; each allows that command and anything after it. Claude Code, Gemini, opencode and Qwen Code follow this list. Codex runs commands in its workspace sandbox; pi and Oh My Pi have no permission system and run as they would in a terminal.")),
-          ))
-          .child(row("Git isolation", ["off", "branch", "worktree"].map((m) =>
-            this.chip(c, `bh-git-${m}`, { off: "Off", branch: "Branch", worktree: "Worktree" }[m], (k.git ?? "off") === m, (_e, cx) => this.setAccess({ git: m }, cx))),
-          { off: "Tasks work in the project folder as it is.", branch: "Each new task gets a git branch named after it, checked out in the project folder.", worktree: "Each new task gets its own worktree and branch, named after it: every agent of the task runs there, apart from your checkout." }[k.git ?? "off"])),
-      );
+    return this.group(c, {
+      id: "bh-access",
+      icon: "shield-check",
+      title: "Access",
+      rows: [
+        this.settingRow(c, "Run agents", this.choice(c, "bh-run", [["headless", "Headless"], ["cli", "CLI"]], on ? "headless" : "cli",
+          (v, cx) => this.setAccess({ headless: v === "headless" }, cx))),
+        this.settingRow(c, "Permissions", this.choice(c, "bh-perm", [["standard", "Standard"], ["full", "Full"]], full ? "full" : "standard",
+          (v, cx) => this.setAccess({ access: v }, cx)), full ? "Agents run any command without asking" : null),
+        !full && this.settingRow(c, "Also allow", div().w(240).child(this.field(c, this.allowInput)), "Commands, comma separated"),
+        this.settingRow(c, "Git per task", this.choice(c, "bh-git", [["off", "Off"], ["branch", "Branch"], ["worktree", "Worktree"]], k.git ?? "off",
+          (v, cx) => this.setAccess({ git: v }, cx))),
+      ],
+    });
   }
 
   classifierCard(c) {
     const k = this.classifier;
-    if (!k) return stateView(c, { id: "bh-cls-loading", title: "Loading…", line: "It needs node on your PATH.", loading: true });
-    const hosts = k.hosts ?? {};
-    const using = hosts[k.using]?.label ?? k.using;
-    const kind = k.harness ? null : kindOf(k.kind);
-    const harness = k.harness ? this.known.find((x) => x.key === k.harness) : null;
-    const harnessName = harness?.name ?? k.harness;
-    const modelName = k.harness ? (modelsOf(k.harness).find((m) => m.id === k.harnessModel)?.name ?? (k.harnessModel || "its default model")) : "";
-    const rules = kind?.kind === "rules";
-    const ready = k.harness ? k.harnessReady : rules || k.keyFound;
-    const status = !k.enabled
-      ? "Off: plain rules make these calls."
-      : k.harness
-        ? (ready ? `On, using ${harnessName} · ${modelName}.` : `On, but ${harnessName} isn't installed here: pick another model.`)
-        : rules ? "On: the built-in rules decide."
-        : k.keyFound ? `On, using ${kind?.label ?? using}.` : `On, but no key found: paste one${kind ? "" : ` or set ${hosts[k.using]?.env ?? "a key"}`}.`;
-    const picked = k.harness ? `${harnessName} · ${modelName}` : kind?.label ?? using;
-    return v_flex()
-      .gap(GAP)
-      .child(this.heading(c, "Classifier", "A fast model makes the small calls so the agents don't spend tokens on them: who answers a message, a task's size and track, each step's effort, how deep QA goes and which shared scripts help."))
-      .child(
-        v_flex()
-          .p(PAD)
-          .gap(SPACE[4])
-          .rounded(SIZE.radius)
-          .bg(c.fill)
+    if (!k) return stateView(c, { id: "bh-cls-loading", title: "Loading…", loading: true });
+    // OpenRouter only: the model is OpenRouter's, and nothing works until its key is set.
+    const onOpenRouter = !k.harness && !k.kind && k.host === "openrouter";
+    const model = onOpenRouter ? k.model || OPENROUTER_MODELS[0].id : "";
+    const picked = !k.openrouterKey ? "Needs an OpenRouter key" : onOpenRouter ? OPENROUTER_MODELS.find((m) => m.id === model)?.label ?? model : "Pick a model";
+    const problem = !k.enabled ? null : !k.openrouterKey ? "Add your OpenRouter key below" : !onOpenRouter ? "Pick an OpenRouter model" : null;
+    const more = this.more.has("classifier");
+    const modelSelect = focusable(
+      pressable(
+        h_flex()
+          .w(240)
+          .h(CONTROL)
+          .px(SPACE[3])
+          .gap(SPACE[2])
+          .items_center()
+          .rounded(SIZE.control)
+          .bg(c.ground)
           .border_1()
-          .border_color(c.edge)
-          .child(
-            h_flex()
-              .gap(SPACE[3])
-              .items_center()
-              .child(this.toggle(c, "bh-cls-on", k.enabled, (_e, cx) => this.config({ enabled: !k.enabled }, cx)))
-              .child(div().text_size(TYPE.md).text_color(k.enabled && !ready ? c.danger : c.ink).child(status)),
-          )
-          .child(v_flex().gap(SPACE[2]).child(this.label(c, "Model", "from the harnesses installed here")).child(focusable(
-            pressable(
-              h_flex()
-                .w(360)
-                .h(CONTROL)
-                .px(SPACE[3])
-                .gap(SPACE[3])
-                .items_center()
-                .rounded(SIZE.control)
-                .bg(c.ground)
-                .border_1()
-                .border_color(this.open === "classifier:model" ? c.accent : c.edge)
-                .hover((s) => s.border_color(c.accent))
-                .on_mouse_down("left", (e, cx) => {
-                  cx.stop_propagation();
-                  this.openClassifierModels(e.bounds);
-                  cx.notify();
-                })
-                .child(div().flex_1().min_w(0).truncate().text_size(TYPE.md).child(picked))
-                .child(svg(ICON("chevron-down")).size(MARK).text_color(c.muted)),
-            ),
-            "bh-cls-model",
-            c,
-          )))
-          .when(!k.harness && !kind, (el) => el
-            .child(v_flex().gap(SPACE[2]).child(this.label(c, "Host")).child(
-              h_flex().flex_wrap().gap(SPACE[3]).children(HOST_ORDER.filter((h) => h === "auto" || hosts[h]).map((h) =>
-                this.chip(c, `bh-host-${h}`, h === "auto" ? "Auto" : hosts[h].label, k.host === h, (_e, cx) => this.config({ host: h }, cx)))),
-            )))
-          .when(!k.harness && !rules, (el) => el
-            .child(
-              h_flex()
-                .gap(SPACE[3])
-                .items_end()
-                .child(v_flex().flex_1().min_w(0).gap(SPACE[2]).child(this.label(c, "Key", k.key ? "set" : "not set")).child(this.field(c, this.keyInput)))
-                .child(v_flex().flex_1().min_w(0).gap(SPACE[2]).child(this.label(c, "API model")).child(this.field(c, this.modelInput))),
-            ))
-          .when(kind?.kind === "clef", (el) => el.child(v_flex().gap(SPACE[2]).child(this.label(c, "Account id")).child(this.field(c, this.accountIdInput))))
-          .when(kind?.kind === "laya", (el) => el.child(v_flex().gap(SPACE[2]).child(this.label(c, "Base URL")).child(this.field(c, this.baseUrlInput))))
-          .when(Boolean(k.harness), (el) => el.child(div().text_size(TYPE.xs).text_color(c.faint).child("Each call starts the harness once, so a routed message waits a few seconds longer than with the API. It uses the harness's own sign-in.")))
-          .child(v_flex().gap(SPACE[2]).child(this.label(c, "Use it for")).child(
-            h_flex().flex_wrap().gap(SPACE[3]).children(FEATURES.map((f) =>
-              this.chip(c, `bh-feat-${f.key}`, f.label, k.features?.[f.key] !== false, (_e, cx) => this.config({ features: { [f.key]: k.features?.[f.key] === false } }, cx)))),
-          ))
-          .child(
-            h_flex().gap(SPACE[3]).children(THRESHOLDS.map((t) =>
-              v_flex().flex_1().min_w(0).gap(SPACE[2]).child(this.label(c, t.label)).child(div().w(84).child(this.field(c, this.thresholdInputs[t.key]))))),
-          )
-          .child(div().text_size(TYPE.xs).text_color(c.faint).child("Thresholds are the classifier's confidence, 0 to 1. The effort set on each agent is the ceiling: routing only lowers it.")),
-      );
+          .border_color(this.open === "classifier:model" ? c.accent : c.edge)
+          .hover((st) => st.border_color(c.accent))
+          .on_mouse_down("left", (e, cx) => {
+            cx.stop_propagation();
+            this.openClassifierModels(e.bounds);
+            cx.notify();
+          })
+          .child(div().flex_1().min_w(0).truncate().text_size(TYPE.sm).text_color(k.openrouterKey ? c.ink : c.faint).child(picked))
+          .child(svg(ICON("chevron-down")).size(MARK).text_color(c.muted)),
+      ),
+      "bh-cls-model",
+      c,
+    );
+    const field = (state, w = 240) => div().w(w).child(this.field(c, state));
+    return this.group(c, {
+      id: "bh-classifier",
+      icon: "zap",
+      title: "Classifier",
+      right: this.toggle(c, "bh-cls-on", k.enabled, (_e, cx) => this.config({ enabled: !k.enabled }, cx)),
+      rows: [
+        this.settingRow(c, "Model", modelSelect, problem),
+        this.settingRow(c, "OpenRouter key", field(this.keyInput), k.key ? "Saved" : k.openrouterKey ? "From OPENROUTER_API_KEY" : "Not set"),
+        more && v_flex().px(PAD).py(SPACE[3]).gap(SPACE[2])
+          .child(div().text_size(TYPE.md).font_medium().child("Use it for"))
+          .child(h_flex().flex_wrap().gap(SPACE[2]).children(FEATURES.map((f) =>
+            this.chip(c, `bh-feat-${f.key}`, f.label, k.features?.[f.key] !== false, (_e, cx) => this.config({ features: { [f.key]: k.features?.[f.key] === false } }, cx))))),
+        more && h_flex().px(PAD).py(SPACE[3]).gap(SPACE[3]).children(THRESHOLDS.map((t) =>
+          v_flex().flex_1().min_w(0).gap(SPACE[2]).child(div().text_size(TYPE.xs).text_color(c.muted).child(t.label)).child(div().w(84).child(this.field(c, this.thresholdInputs[t.key]))))),
+        h_flex().px(PAD).py(SPACE[2]).child(this.disclosure(c, "classifier", "Advanced")),
+      ],
+    });
   }
 
+  /** A switch: a pill track, the knob centred in it, sliding to the side that's set. */
   toggle(c, id, on, onClick) {
+    const W = 36;
+    const H = 20;
+    const KNOB_D = 14;
+    const inset = (H - 2 - KNOB_D) / 2; // inside the 1px border
     return focusable(
-      pressable(
-        div()
-          .relative()
-          .flex_none()
-          .w(CONTROL + SPACE[3])
-          .h(CHIP)
-          .rounded(SIZE.control)
-          .bg(on ? c.accent : c.well)
-          .border_1()
-          .border_color(on ? c.accentLip : c.edge)
-          .hover((s) => s.opacity(0.9))
-          .on_click(onClick)
-          .child(div().absolute().top(HAIR).left(on ? CONTROL - SPACE[3] + HAIR : HAIR).size(GLYPH.lg).rounded(SIZE.nested).bg(c.fill)),
-      ),
+      div()
+        .relative()
+        .flex_none()
+        .w(W)
+        .h(H)
+        .rounded_full()
+        .cursor_pointer()
+        .bg(on ? c.accent : c.well)
+        .border_1()
+        .border_color(on ? c.accent : c.edge)
+        .on_click(onClick)
+        .child(div()
+          .absolute()
+          .top(inset)
+          .left(on ? W - 2 - KNOB_D - inset : inset)
+          .spring("left", { response: 220, damping: 0.9 })
+          .size(KNOB_D)
+          .rounded_full()
+          .bg(on ? c.accentInk : c.fill)
+          .shadow_sm()),
       id,
       c,
     );
@@ -964,12 +1047,11 @@ export class Settings {
         .text_size(TYPE.md)
         .font_medium()
         .text_color(c.accentInk)
-        .hover((s) => s.opacity(0.92))
         .on_click(onClick)
         .when(Boolean(icon), (el) => el.child(svg(ICON(icon)).size(MARK).text_color(c.accentInk)))
         .child(label),
       c,
-      id,
+      id, { fill: accentFill(c) },
     );
   }
 }

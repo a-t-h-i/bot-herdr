@@ -16,10 +16,10 @@ import { colors } from "./theme.js";
 import { Composer, outboxDir, liveAgents } from "./composer.js";
 import { isQuiet, quietStatus } from "./live.js";
 import { FOCUS, OUTGOING, OPEN_TASK, activePage, openTerminal, showPage, sendFromChat } from "./pages.js";
-import { replyFile, replyBody, push, shown, scrollBy, isNew, outcome, clock, segments, fold, linkFiles, fileTarget, FILE_LINK, addComment, editComment, resolveComment, deleteComment } from "./feed.js";
+import { replyFile, replyBody, push, shown, scrollBy, clampScroll, isNew, outcome, clock, segments, fold, linkFiles, fileTarget, FILE_LINK, addComment, editComment, resolveComment, deleteComment } from "./feed.js";
 import { openFile } from "./viewer.js";
 import { bh, bhJson, enc, projectDir } from "./bh.js";
-import { roleWord, alpha } from "./indicators.js";
+import { roleWord, roleTone, mentionTone, alpha } from "./indicators.js";
 import { indicatorFor, roleOf, onTurn, TURN_MS } from "./working.js";
 import { findAgent, roster, ROSTER_KEY } from "./roster.js";
 import { summary } from "./drawer.js";
@@ -50,6 +50,19 @@ const save = (key, value) => {
     // the feed still works for this session
   }
 };
+
+/** Plain text as Markdown that shows it verbatim: every mark escaped, every line break kept. */
+export function plainMarkdown(text) {
+  return String(text ?? "")
+    .split(/\n{2,}/)
+    .map((para) => para.split("\n").map((line) => line.replace(/([\\`*_{}\[\]()#+\-.!|<>~&])/g, "\\$1")).join("\\\n"))
+    .join("\n\n");
+}
+
+/** Selectable text: a press on it selects (and Ctrl/Cmd+C copies) instead of reaching the feed. */
+const selectable = (id, text) => TextView.markdown(id, plainMarkdown(text)).selectable(true);
+/** Keeps a press on text from the feed's handler, which would take focus and end the selection. */
+const keepPress = (el) => el.on_mouse_down("left", (_e, cx) => cx.stop_propagation());
 
 export class Chat {
   init(props, cx) {
@@ -595,6 +608,16 @@ export class Chat {
     const c = colors();
     const width = Math.max(320, Math.min(SIZE.maxWidth, this.size.width - SIZE.gutter * 2));
     const space = this.space();
+    const foot = SIZE.foot + this.composer.height(width) + SPACE[4];
+    // The feed's height. Heights measured since the last wheel, or the composer folding to its
+    // slim bar, can change how far up the feed goes: never leave empty space above the oldest.
+    this.room = Math.max(0, this.size.height - foot);
+    if (this.back > 0 || this.px > 0) {
+      const heights = this.feedHeights(space);
+      const next = clampScroll({ back: this.back, px: this.px }, heights, heights.length, this.room);
+      this.back = next.back;
+      this.px = next.px;
+    }
     const view = shown(this.entries, space, this.back);
     this.back = view.back;
     if (view.total === 0) this.px = 0;
@@ -609,7 +632,6 @@ export class Chat {
     });
     const up = this.back > 0 || this.px > 0;
     const working = this.workers();
-    const foot = SIZE.foot + this.composer.height(width) + SPACE[4];
     this.composer.questions = this.questions;
     // A pane with nothing to draw (a suggestion list that matches nothing) dims nothing either.
     const pane = this.composer.paneShown() ? this.composer.paneNow() : null;
@@ -704,10 +726,8 @@ export class Chat {
 
   /** The wheel moves the feed by pixels: positive towards older entries, as before. */
   scroll(e, total, cx) {
-    const space = this.space();
-    const mine = this.entries.filter((x) => (x.space ?? null) === (space ?? null));
-    const heights = mine.map((_, i) => this.heights.get(mine[mine.length - 1 - i].id));
-    const next = scrollBy({ back: this.back, px: this.px }, e.delta.y, heights, total);
+    const heights = this.feedHeights(this.space());
+    const next = scrollBy({ back: this.back, px: this.px }, e.delta.y, heights, total, undefined, this.room ?? null);
     if (next.back === this.back && next.px === this.px) return;
     const was = this.back > 0 || this.px > 0;
     this.back = next.back;
@@ -720,6 +740,12 @@ export class Chat {
     cx.notify();
   }
 
+  /** This space's entries' drawn heights (gap included), newest first; undefined until measured. */
+  feedHeights(space) {
+    const mine = this.entries.filter((x) => (x.space ?? null) === (space ?? null));
+    return mine.map((_, i) => this.heights.get(mine[mine.length - 1 - i].id));
+  }
+
   empty(c, width) {
     const lead = this.composer.leadEntry().name;
     return v_flex()
@@ -730,7 +756,7 @@ export class Chat {
       .child(stateView(c, {
         id: "bh-chat-empty",
         title: `Talk to ${lead}`,
-        line: "It plans, hands work to other agents and reports back here. Type @ to reach one agent, / for commands.",
+        line: "Type @ for an agent, / for commands.",
       }));
   }
 
@@ -744,9 +770,13 @@ export class Chat {
       .opacity(arriving ? 0 : 1)
       .transition("top", MOTION.arrive)
       .transition("opacity", MOTION.arrive)
-      .on_size_change((size) => {
+      .on_size_change((size, cx) => {
         const zoom = Number(settings().zoom) || 1;
-        this.heights.set(e.id, size.height / zoom + SPACE[4]);
+        const h = size.height / zoom + SPACE[4];
+        if (this.heights.get(e.id) === h) return;
+        this.heights.set(e.id, h);
+        // Scrolled up, a new height can move the top limit (render clamps to it).
+        if (this.back > 0 || this.px > 0) cx?.notify();
       });
   }
 
@@ -757,7 +787,6 @@ export class Chat {
     const folded = fold(e.text, inner, (line) => textWidth(line, TYPE.md));
     const open = this.unfolded.has(e.id);
     const text = folded.folded && !open ? folded.text : String(e.text ?? "");
-    const lines = text.split("\n");
     const chips = (e.files ?? []).map((name, i) => {
       const chip = h_flex().h(CHIP).px(SPACE[3]).gap(SPACE[2]).items_center().rounded(SIZE.nested).bg(c.hover).text_size(TYPE.xs).text_color(c.muted)
         .child(svg(ICON("file")).size(GLYPH.sm)).child(name);
@@ -781,7 +810,7 @@ export class Chat {
           .border_color(c.bubbleEdge)
           .text_size(TYPE.md)
           .line_height(`${LINE.md}px`)
-          .children(lines.map((line) => div().min_h(LINE.md).child(line)))
+          .child(keepPress(div().child(selectable(`bh-mine-md-${e.id}-${open ? "o" : "c"}`, text))))
           .when(folded.folded, (el) => el.child(
             clickable(
               div()
@@ -803,7 +832,7 @@ export class Chat {
             el.child(h_flex().pt(SPACE[2]).gap(SPACE[3]).flex_wrap().children(chips))),
       )
       .child(h_flex().gap(SPACE[1]).items_center().text_size(TYPE.xs)
-        .children((e.to ?? []).map((n, i) => div().id(`bh-e-to-${e.id}-${i}`).font_medium().text_color(agentInk(c, n)).child(String(n))))
+        .children((e.to ?? []).map((n, i) => div().id(`bh-e-to-${e.id}-${i}`).font_medium().text_color(mentionTone(c, n, this.composer.roster())).child(String(n))))
         .child(div().text_color(c.faint).child(`· ${clock(e.at)}`)));
   }
 
@@ -837,13 +866,13 @@ export class Chat {
           .gap(SPACE[3])
           .items_center()
           // Agents are named in their own colour, no icon and no dot.
-          .child(div().text_size(TYPE.sm).font_semibold().text_color(e.from?.tile ? readable(e.from.tile, c.ground, 4.5, c.ink) : agentInk(c, e.from?.name ?? "Agent")).child(e.from?.name ?? "Agent"))
+          .child(div().text_size(TYPE.sm).font_semibold().text_color(mentionTone(c, e.from?.name ?? "Agent", this.composer.roster())).child(e.from?.name ?? "Agent"))
           .child(div().text_size(TYPE.xs).text_color(c.faint).child(clock(e.at)))
           .child(div().flex_1())
           .child(this.link(c, `bh-open-${e.id}`, "Open terminal", () => openTerminal(e.from.address), show)),
       )
       .child(
-        v_flex()
+        keepPress(v_flex())
           .id(`bh-body-${e.id}`)
           .max_w(600)
           .gap(SPACE[3])
@@ -937,7 +966,7 @@ export class Chat {
       .items_center()
       .text_size(TYPE.sm)
       .text_color(c.muted)
-      .child(div().child(e.text))
+      .child(keepPress(div().min_w(0)).child(selectable(`bh-note-md-${e.id}`, e.text)))
       .when(Boolean(e.address), (el) => el.child(this.link(c, `bh-open-${e.id}`, "Open terminal", () => openTerminal(e.address))));
   }
 
@@ -970,7 +999,8 @@ export class Chat {
     const now = onTurn(list, this.turn, 0);
     this.turn = now.agent.address;
     const a = now.agent;
-    const tone = a.tile ? readable(a.tile, c.ground, 4.5, c.ink) : c.accent;
+    // Coloured by the agent's type, so a glance says who is at work.
+    const tone = roleTone(c, a.role);
     const fx = indicatorFor(roleOf(a.role)).fx;
     if (fx !== this.drawnFx) {
       // A new verb: drawn clear for one frame, then faded in.
@@ -995,7 +1025,10 @@ export class Chat {
       .text_size(TYPE.sm)
       .child(div()
         .id("bh-working-verb")
-        .flex_none()
+        // Shrinks before the line overflows a narrow window; the word clips rather than collides.
+        .flex_shrink(1)
+        .min_w(0)
+        .overflow_hidden()
         .opacity(this.verbShown === false ? 0 : 1)
         .transition("opacity", MOTION.verb)
         .child(roleWord(c, { role: a.role, tone, id: `bh-rw-${a.address}` })))
