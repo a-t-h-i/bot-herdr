@@ -1084,8 +1084,7 @@ export class Work {
         .opacity(this.rowsIn === false ? 0 : 1)
         .transition("opacity", { ...MOTION.row, delay: Math.min(index, 8) * MOTION.stagger })
         .on_click((_e, cx) => { this.agent = agent; this.startInline("knowledge", agent, e.line, cx); })
-        // The hue stays a mark in light mode: a 2px bar, the dot and the name.
-        .child(div().absolute().left(0).top(SPACE[4]).bottom(SPACE[4]).w(SPACE[1]).rounded(PIP).bg(hue))
+        // The agent is marked by its dot and name only; no stripe.
         .child(h_flex().gap(SPACE[3]).items_center()
           .child(div().size(SPACE[3]).rounded_full().bg(hue))
           .child(div().text_size(TYPE.xs).font_medium().text_color(light ? agentInk(c, agent) : agentInkOn(c, agent, mix(c.ground, hue, 0.12))).child(agent.charAt(0).toUpperCase() + agent.slice(1)))
