@@ -395,7 +395,7 @@ export class Composer {
     if (!n) return;
     this.at = (this.at + by + n) % n;
     if (this.at < this.offset) this.offset = this.at;
-    if (this.at >= this.offset + ROWsShown) this.offset = this.at - ROWsShown + 1;
+    if (this.at >= this.offset + SIZE.rowsShown) this.offset = this.at - SIZE.rowsShown + 1;
     cx.notify();
   }
 
@@ -1490,7 +1490,7 @@ export class Composer {
     } else if (kind === "suggest") {
       const rows = this.rows();
       if (!rows.length) return null;
-      const shown = rows.slice(this.offset, this.offset + ROWsShown);
+      const shown = rows.slice(this.offset, this.offset + SIZE.rowsShown);
       let w = 0;
       for (const r of rows) w = Math.max(w, textWidth(r.label && r.kind !== "command" ? r.label : r.name, 13) + textWidth(r.hint, 12.5) + textWidth(r.tag, 10.5));
       size = { w: Math.min(Math.max(Math.ceil(w) + 120, 220), width - 80), h: 12 + shown.length * ROW };
@@ -1498,7 +1498,7 @@ export class Composer {
         .id("bc-rows")
         .w_full()
         .on_scroll_wheel((e, cx) => {
-          const max = Math.max(0, rows.length - ROWsShown);
+          const max = Math.max(0, rows.length - SIZE.rowsShown);
           const step = e.delta.y < 0 ? 1 : e.delta.y > 0 ? -1 : 0;
           this.offset = Math.max(0, Math.min(max, this.offset + step));
           cx.notify();

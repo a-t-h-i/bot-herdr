@@ -1101,12 +1101,12 @@ export class Work {
           ))
           .child(this.confirmDelete === `${agent}:${e.line}`
             ? h_flex().gap(SPACE[2]).items_center()
-              .child(this.chip(c, `bh-know-del-yes-${e.line}`, "Delete", false, (_ev, cx) => { cx.stopPropagation?.(); this.deleteEntry(agent, e, cx); }))
-              .child(this.chip(c, `bh-know-del-no-${e.line}`, "Keep", false, (_ev, cx) => { cx.stopPropagation?.(); this.confirmDelete = null; cx.notify(); }))
+              .child(this.chip(c, `bh-know-del-yes-${e.line}`, "Delete", false, (_ev, cx) => { cx.stop_propagation(); this.deleteEntry(agent, e, cx); }))
+              .child(this.chip(c, `bh-know-del-no-${e.line}`, "Keep", false, (_ev, cx) => { cx.stop_propagation(); this.confirmDelete = null; cx.notify(); }))
             : focusable(
               pressable(
                 div().size(CHIP).flex().items_center().justify_center().rounded(SIZE.nested).text_color(c.faint).hover((s) => s.bg(c.well).text_color(c.danger))
-                  .on_click((_ev, cx) => { cx.stopPropagation?.(); this.confirmDelete = `${agent}:${e.line}`; this.agent = agent; cx.notify(); })
+                  .on_click((_ev, cx) => { cx.stop_propagation(); this.confirmDelete = `${agent}:${e.line}`; this.agent = agent; cx.notify(); })
                   .child(svg(ICON("trash")).size(GLYPH.sm)),
               ),
               `bh-know-del-${agent}-${e.line}`,

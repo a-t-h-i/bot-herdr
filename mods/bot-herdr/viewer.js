@@ -134,7 +134,7 @@ export class FileView {
     cx.notify();
   }
 
-  render() {
+  render(cx) {
     const c = colors();
     const shown = this.p.shown ?? this.p.path ?? "";
     const name = String(shown).split(/[\\/]/).pop();
@@ -262,7 +262,7 @@ export class FileView {
         c,
         "bh-find-case",
       ))
-      .child(button(c, "bh-find-close", "x", null, () => this.closeFind(cx)));
+      .child(button(c, "bh-find-close", "x", null, (_e, cx) => this.closeFind(cx)));
   }
 
   /** The matching lines, each with the hit drawn in the accent; a press makes one current. */

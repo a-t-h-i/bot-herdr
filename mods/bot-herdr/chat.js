@@ -10,7 +10,7 @@ import { div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextView, InputState, Input } from "gpui-base";
 import { terminals, spaces, focused, settings, shared, setShared, readTextFile } from "herdr";
 import * as fs from "fs/promises";
-import { SIZE, ICON, TYPE, LINE, SPACE, ROW, CHIP, TARGET, MARK, DOT, PIP, GLYPH, MOTION, readable, textWidth, agentInk, clickable } from "./look.js";
+import { SIZE, ICON, TYPE, LINE, SPACE, ROW, CHIP, CONTROL, TARGET, HAIR, MARK, DOT, PIP, GLYPH, MOTION, readable, textWidth, agentInk, clickable } from "./look.js";
 import { stateView } from "./switch.js";
 import { colors } from "./theme.js";
 import { Composer, outboxDir, liveAgents } from "./composer.js";
