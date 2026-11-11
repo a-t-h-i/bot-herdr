@@ -22,7 +22,7 @@ git clone https://github.com/a-t-h-i/bot-herdr && cd bot-herdr
 node install.mjs --switch
 ```
 
-This copies `mods/bot-herdr` into herdr's app home (`~/.config/herdr-app`, or `$HERDR_APP_HOME`). It also adds the `bot-herdr` layout, its Claude light and dark themes, a few harnesses herdr's own table doesn't start from its menus (Oh My Pi, Droid, Qwen Code, Aider, Goose, Auggie, Cline: see `programs.json`), and **ctrl+shift+m** for the chat. Then it runs `herdr-app check` on the mod and switches the window to the layout. `ctrl+shift+l` cycles layouts.
+This copies `mods/bot-herdr` into herdr's app home (`~/.config/herdr-app`, or `$HERDR_APP_HOME`). It also adds the `bot-herdr` layout, its Claude light and dark themes plus Harbor, Fern, Plum and Dune (each light and dark), a few harnesses herdr's own table doesn't start from its menus (Oh My Pi, Droid, Qwen Code, Aider, Goose, Auggie, Cline: see `programs.json`), and **ctrl+shift+m** for the chat. Then it runs `herdr-app check` on the mod and switches the window to the layout. `ctrl+shift+l` cycles layouts.
 
 Pick any other herdr theme (Graphite, Ink, Moss, Paper, Atom One Dark, Herdr 98 or a theme file of your own) in herdr's settings and every bot-herdr page follows it.
 

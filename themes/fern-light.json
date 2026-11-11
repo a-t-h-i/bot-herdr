@@ -1,0 +1,39 @@
+{
+  "background": "#ffffff",
+  "foreground": "#0f1a12",
+  "selection": "#cfe8d6",
+  "cursor": "#166534",
+  "ansi": [
+    "#0f1a12",
+    "#b91c1c",
+    "#166534",
+    "#a16207",
+    "#1d4ed8",
+    "#7c3aed",
+    "#0e7490",
+    "#e4ece6",
+    "#56675b",
+    "#dc2626",
+    "#16a34a",
+    "#ca8a04",
+    "#2563eb",
+    "#9333ea",
+    "#0891b2",
+    "#f6f9f6"
+  ],
+  "colors": {
+    "canvas": "#f6f9f6",
+    "chrome": "#eef4ef",
+    "surface": "#ffffff",
+    "popover": "#ffffff",
+    "raised": "#e9f1ea",
+    "hover": "#e3eee4",
+    "selected": "#dbe9dd",
+    "border": "#d2e0d5",
+    "input": "#c7d8cb",
+    "muted": "#56675b",
+    "dim": "#87968b",
+    "accent": "#166534",
+    "accent_foreground": "#ffffff"
+  }
+}

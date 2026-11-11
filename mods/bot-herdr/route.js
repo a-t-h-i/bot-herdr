@@ -13,7 +13,7 @@ export const COMMANDS = [
   { name: "stop", hint: "Stop the agent where it is", color: "#cc6460" },
   { name: "peek", hint: "Peek at the agent's terminal", color: "#3ea3b5" },
   { name: "team", hint: "Brief the agent again: its role, the team, the tools", color: "#d6825a" },
-  { name: "bh-knowledge", hint: "Ask about this project: its knowledge and code", color: "#3fa796" },
+  { name: "bh-info", hint: "Ask about this project: its knowledge and code", color: "#3fa796" },
 ];
 
 /** A command's colour, for its row and its chip in the text. */
@@ -175,9 +175,9 @@ export function plan(content, ctx) {
   }
   if (command === "all") ids.push("all");
   if (command === "settings") return { steps: [{ do: "settings" }] };
-  // /bh-knowledge asks Scout about the project; its answer comes back to the chat.
-  if (command === "bh-knowledge") {
-    if (!text) return { error: "Type a question after /bh-knowledge" };
+  // /bh-info asks Scout about the project; its answer comes back to the chat.
+  if (command === "bh-info") {
+    if (!text) return { error: "Type a question after /bh-info" };
     return { steps: [{ do: "knowledge", question: text }] };
   }
   // /task and /plan go to the Orchestrator (or whoever is named) marked, so it takes that track.

@@ -124,11 +124,11 @@ test("a picked /command is a chip: it still acts, and the words after it go as t
   assert.deepEqual(tokenFor({ kind: "command", name: "plan" }), { id: "cmd:plan", text: "/plan", label: "/plan" });
 });
 
-test("/bh-knowledge asks Scout the words after it; bare, it gives the hint", () => {
+test("/bh-info asks Scout the words after it; bare, it gives the hint", () => {
   const ctx = { agents: [claude], space: "s1", target: "t1" };
-  assert.deepEqual(plan({ text: "/bh-knowledge what is X", tokens: [] }, ctx), { steps: [{ do: "knowledge", question: "what is X" }] });
-  const chip = { text: "/bh-knowledge what is X", tokens: [{ range: { start: 0, end: 13 }, token: { id: "cmd:bh-knowledge", text: "/bh-knowledge" } }] };
+  assert.deepEqual(plan({ text: "/bh-info what is X", tokens: [] }, ctx), { steps: [{ do: "knowledge", question: "what is X" }] });
+  const chip = { text: "/bh-info what is X", tokens: [{ range: { start: 0, end: 8 }, token: { id: "cmd:bh-info", text: "/bh-info" } }] };
   assert.deepEqual(plan(chip, ctx), { steps: [{ do: "knowledge", question: "what is X" }] });
-  assert.deepEqual(plan({ text: "/bh-knowledge", tokens: [] }, ctx), { error: "Type a question after /bh-knowledge" });
-  assert.equal(slashRows("bh-k")[0].name, "bh-knowledge");
+  assert.deepEqual(plan({ text: "/bh-info", tokens: [] }, ctx), { error: "Type a question after /bh-info" });
+  assert.equal(slashRows("bh-i")[0].name, "bh-info");
 });

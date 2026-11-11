@@ -1,0 +1,77 @@
+{
+  "id": "t-20261111-bmde",
+  "title": "Rename bh-info, add four themes",
+  "request": "rename the slash command from /bh-knowledge to /bh-info, add 4 more themes with a dark and light mode for and renstall plugin and push to git",
+  "status": "done",
+  "track": "fast",
+  "plan": null,
+  "by": "t3k",
+  "created": "2026-11-11T13:00:40.340Z",
+  "updated": "2026-11-11T13:07:51.575Z",
+  "archived": false,
+  "steps": [
+    {
+      "n": 1,
+      "title": "Rename the /bh-knowledge slash command to /bh-info",
+      "agent": "design-themes",
+      "status": "done",
+      "started": "2026-11-11T13:01:36.538Z",
+      "finished": "2026-11-11T13:07:51.290Z",
+      "workedMs": 374752,
+      "note": ""
+    },
+    {
+      "n": 2,
+      "title": "Add four new themes, each with a light and a dark file, installed with the others",
+      "agent": null,
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-11T13:07:51.385Z",
+      "workedMs": 0,
+      "note": ""
+    },
+    {
+      "n": 3,
+      "title": "Reinstall the plugin, commit and push",
+      "agent": null,
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-11T13:07:51.480Z",
+      "workedMs": 0,
+      "note": ""
+    }
+  ],
+  "triage": {
+    "size": "small",
+    "kind": "feature",
+    "domains": {
+      "design": 0,
+      "dev": 0,
+      "qa": 0
+    },
+    "research": 0,
+    "ambiguous": 0,
+    "by": "rules"
+  },
+  "qa": {
+    "risk": "high",
+    "qaRequired": true,
+    "testBudget": {
+      "min": 0,
+      "max": 6
+    },
+    "focusAreas": [
+      "the changed behaviour, as its callers and users see it"
+    ],
+    "riskFactors": [
+      "a wide change: 4 files, 20 changed lines across 4 modules ((top), mods/bot-herdr, .bot-herdr/tasks/t-20261111-bmde and 1 more)",
+      "tests changed with it: test/route.test.mjs"
+    ],
+    "existingTestsLikelySufficient": true,
+    "reasoning": "HIGH: a wide change: 4 files, 20 changed lines across 4 modules ((top), mods/bot-herdr, .bot-herdr/tasks/t-20261111-bmde and 1 more); tests changed with it: test/route.test.mjs. the engine's rules (Jev is off or had nothing to read).",
+    "source": "rules",
+    "at": "2026-11-11T13:07:42.275Z"
+  },
+  "summary": "",
+  "base": "2279edbd03a41b66df87c59711f6736cdb1d8c48"
+}

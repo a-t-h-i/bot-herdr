@@ -898,7 +898,7 @@ export class Composer {
     });
   }
 
-  /** /bh-knowledge: the question goes in the feed as yours; Scout's answer arrives as a reply. */
+  /** /bh-info: the question goes in the feed as yours; Scout's answer arrives as a reply. */
   askKnowledge(question, cx) {
     this.input.set_value("");
     this.text = "";

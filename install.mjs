@@ -6,7 +6,7 @@
 //   node install.mjs            install (keeps your layout and your own keys)
 //   node install.mjs --force    also replace the layout file
 //   node install.mjs --switch   then switch the open window to the layout
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,11 +37,11 @@ mkdirSync(dirname(mod), { recursive: true });
 cpSync(join(here, "mods", "bot-herdr"), mod, { recursive: true });
 console.log(`mod      ${mod}`);
 
-for (const name of ["bot-herdr-light.json", "bot-herdr-dark.json"]) {
-  mkdirSync(join(appHome, "themes"), { recursive: true });
-  cpSync(join(here, "themes", name), join(appHome, "themes", name));
-}
-console.log(`themes   ${join(appHome, "themes")}/bot-herdr-{light,dark}.json`);
+const themeDir = join(appHome, "themes");
+mkdirSync(themeDir, { recursive: true });
+const themes = readdirSync(join(here, "themes")).filter((name) => name.endsWith(".json")).sort();
+for (const name of themes) cpSync(join(here, "themes", name), join(themeDir, name));
+console.log(`themes   ${themeDir} ${themes.join(", ")}`);
 
 const layout = join(appHome, "layouts", "bot-herdr.json");
 // A layout from before the pages (chat, terminals, tasks, plans, knowledge, settings) can't show
