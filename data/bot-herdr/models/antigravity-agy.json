@@ -1,0 +1,33 @@
+{
+  "harness": "antigravity",
+  "source": "harness",
+  "method": "cli",
+  "models": [
+    {
+      "id": "gemini-3.8-flash-high",
+      "name": "Gemini 3.8 Flash (High)"
+    },
+    {
+      "id": "gemini-3.8-flash-medium",
+      "name": "Gemini 3.8 Flash (Medium)"
+    },
+    {
+      "id": "gemini-3.8-flash-low",
+      "name": "Gemini 3.8 Flash (Low)"
+    },
+    {
+      "id": "claude-sonnet-4-6",
+      "name": "Claude Sonnet 4.6 (Thinking)"
+    },
+    {
+      "id": "claude-opus-4-6-thinking",
+      "name": "Claude Opus 4.6 (Thinking)"
+    },
+    {
+      "id": "gpt-oss-120b-medium",
+      "name": "GPT-OSS 120B (Medium)"
+    }
+  ],
+  "at": 1794394234624,
+  "cached": false
+}

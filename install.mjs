@@ -14,7 +14,14 @@ import { spawnSync } from "node:child_process";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const args = new Set(process.argv.slice(2));
+const candidateHomes = [
+  join(homedir(), ".config", "herdr-app"),
+  process.env.XDG_CONFIG_HOME ? join(process.env.XDG_CONFIG_HOME, "herdr-app") : null,
+  process.platform === "win32" && process.env.APPDATA ? join(process.env.APPDATA, "herdr-app") : null,
+].filter(Boolean);
+
 const appHome = process.env.HERDR_APP_HOME
+  || candidateHomes.find(p => existsSync(p))
   || (process.platform === "win32" && process.env.APPDATA ? join(process.env.APPDATA, "herdr-app") : null)
   || join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "herdr-app");
 

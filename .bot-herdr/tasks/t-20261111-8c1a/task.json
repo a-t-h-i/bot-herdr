@@ -1,0 +1,97 @@
+{
+  "id": "t-20261111-8c1a",
+  "title": "Fix per-agent model selection",
+  "request": "Settings per-agent model selection is broken: Claude Code lets you pick a model but the pick isn't enforced (the harness default runs) and its model list is stale (new models missing); every other harness offers no model choice at all and forces the default. Make the chosen model reach the harness in headless runs, and let every harness with known models be picked in Settings (fresh lists).",
+  "status": "done",
+  "track": "full",
+  "plan": null,
+  "by": "t1t",
+  "created": "2026-11-10T22:17:12.355Z",
+  "updated": "2026-11-10T22:47:14.946Z",
+  "archived": true,
+  "steps": [
+    {
+      "n": 1,
+      "title": "Find how each harness receives the chosen model, and why Settings offers no model choice for non-Claude harnesses",
+      "agent": null,
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-10T22:28:54.496Z",
+      "workedMs": 0,
+      "note": ""
+    },
+    {
+      "n": 2,
+      "title": "Enforce the selected model on every harness (Claude --model, Codex -m, pi, ACP set_model) and refresh the model lists in Settings",
+      "agent": null,
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-10T22:28:54.614Z",
+      "workedMs": 0,
+      "note": ""
+    },
+    {
+      "n": 3,
+      "title": "Verify with tests, bh check, reinstall the mod",
+      "agent": null,
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-10T22:28:54.742Z",
+      "workedMs": 0,
+      "note": ""
+    }
+  ],
+  "triage": {
+    "size": "medium",
+    "kind": "bugfix",
+    "domains": {
+      "design": 0,
+      "dev": 0,
+      "qa": 0
+    },
+    "research": 0,
+    "ambiguous": 0,
+    "by": "rules"
+  },
+  "qa": null,
+  "summary": "",
+  "base": "9c19ff5e0fce494d95b786aa7644e52bea3e910f",
+  "comments": [
+    {
+      "id": "c1",
+      "step": null,
+      "quote": "",
+      "text": "Covered by task t-20261111-atq0 (Pause and resume tasks), already under way: one open question card on what pausing does to work in flight.",
+      "at": "2026-11-10T22:22:49.082Z",
+      "open": false,
+      "edited": "2026-11-10T22:30:34.109Z"
+    },
+    {
+      "id": "c2",
+      "step": null,
+      "quote": "",
+      "text": "Done in t-20261111-sgjy: a message's footer now shows each @mentioned agent in that agent's own colour (shared agentHue in look.js, the same hue the Knowledge page uses), with the time kept faint.",
+      "at": "2026-11-10T22:23:24.744Z",
+      "open": false,
+      "edited": "2026-11-10T22:32:23.949Z"
+    },
+    {
+      "id": "c3",
+      "step": null,
+      "quote": "",
+      "text": "Done at completion: commit 189a7ce pushed to origin/main and the mod rebuilt and installed (herdr-app check passed).",
+      "at": "2026-11-10T22:25:03.952Z",
+      "open": false,
+      "edited": "2026-11-10T22:30:34.397Z"
+    },
+    {
+      "id": "c4",
+      "step": null,
+      "quote": "",
+      "text": "Covered: model setting now reaches OpenCode, Gemini, Qwen, Antigravity (ACP), Claude and Codex (flags), and omp/pi via --model; Settings lists OpenCode/Gemini/Qwen models and reads opencode/gemini models live. omp's removed --list-models flag is dropped; pi keeps its working one.",
+      "at": "2026-11-10T22:29:17.258Z",
+      "open": false,
+      "edited": "2026-11-10T22:30:34.669Z"
+    }
+  ]
+}

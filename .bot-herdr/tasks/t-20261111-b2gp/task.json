@@ -1,0 +1,235 @@
+{
+  "id": "t-20261111-b2gp",
+  "title": "Theme contrast, in-app file browser, visual refresh and measured engine wins",
+  "request": "Three parts. (1) Fix the contrast issue seen with herdr's built-in themes: with other themes the contrast is off (screenshots show low-contrast secondary text like timestamps, 'Comment', 'Open terminal', agent names, inline code chips and user bubbles: C:\\Users\\athenkosi.hlubi\\.config\\herdr-app\\data\\bot-herdr\\pasted\\pasted-20261111-094735.png and pasted-20261111-094742.png). (2) Attaching a document fails to open a file explorer. (3) Review the current features: what could be improved, what can be removed, what visual layout would be best, performance improvements, token efficiency, cache hit rates, etc.\n\nThe agreed plan: bh plan show p-20261111-9dkc",
+  "status": "done",
+  "track": "planned",
+  "plan": "p-20261111-9dkc",
+  "by": "t2z",
+  "created": "2026-11-11T10:30:19.822Z",
+  "updated": "2026-11-11T11:28:30.629Z",
+  "archived": false,
+  "steps": [
+    {
+      "n": 1,
+      "title": "Make every text colour reach WCAG AA (4.5:1 text, 3:1 controls) under every herdr theme and our own pair, keeping each theme's character: quiet text, accent text, status colours, agent name colours and the send button (Design).",
+      "agent": "design",
+      "status": "done",
+      "started": "2026-11-11T10:31:50.849Z",
+      "finished": "2026-11-11T10:38:04.934Z",
+      "workedMs": 374085,
+      "note": ""
+    },
+    {
+      "n": 2,
+      "title": "Fill missing surfaces for theme files with no `colors` block (atom-one-dark) from the theme itself, use the theme's `solid`/`solid_foreground` for the send button, and soften the bubble border to match bot-herdr's own theme (Design).",
+      "agent": null,
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-11T10:38:05.109Z",
+      "workedMs": 0,
+      "note": ""
+    },
+    {
+      "n": 3,
+      "title": "Draw inline code chips in replies ourselves, in the theme's colours, at AA (Design).",
+      "agent": null,
+      "status": "skipped",
+      "started": null,
+      "finished": "2026-11-11T10:38:05.259Z",
+      "workedMs": 0,
+      "note": ""
+    },
+    {
+      "n": 4,
+      "title": "Add a committed snapshot of every herdr theme and one contrast test over it plus our light/dark pair (QA).",
+      "agent": "qa",
+      "status": "done",
+      "started": "2026-11-11T10:38:46.401Z",
+      "finished": "2026-11-11T10:44:53.202Z",
+      "workedMs": 366801,
+      "note": ""
+    },
+    {
+      "n": 5,
+      "title": "Add a `bh` command that lists a folder's entries for a space, including spaces on other machines (Dev).",
+      "agent": "dev",
+      "status": "done",
+      "started": "2026-11-11T10:31:51.167Z",
+      "finished": "2026-11-11T10:48:19.610Z",
+      "workedMs": 988443,
+      "note": ""
+    },
+    {
+      "n": 6,
+      "title": "Replace the system dialog behind \"Attach document…\" with a file browser in the attach pane: folders, files, search, multi-select, and a visible message when listing fails (Design).",
+      "agent": null,
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-11T11:07:38.555Z",
+      "workedMs": 0,
+      "note": ""
+    },
+    {
+      "n": 7,
+      "title": "Trim the agent briefs, the QA risk prompt and the script question, and merge the duplicated engine helpers (Dev).",
+      "agent": null,
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-11T10:53:14.794Z",
+      "workedMs": 0,
+      "note": ""
+    },
+    {
+      "n": 8,
+      "title": "Tidy the layout details: \"Open terminal\" and \"Comment\" on hover and focus, the page switch on `palette()`, no \"to\" prefix (Design).",
+      "agent": null,
+      "status": "done",
+      "started": "2026-11-11T10:58:11.503Z",
+      "finished": "2026-11-11T11:07:38.735Z",
+      "workedMs": 567232,
+      "note": ""
+    },
+    {
+      "n": 9,
+      "title": "Refresh the visual design of every page on one compact type scale, spacing set, radii, elevation and motion system, with focus and press states everywhere (Design).",
+      "agent": null,
+      "status": "done",
+      "started": "2026-11-11T10:38:55.710Z",
+      "finished": "2026-11-11T10:58:10.800Z",
+      "workedMs": 1155090,
+      "note": ""
+    },
+    {
+      "n": 10,
+      "title": "Lighten the Knowledge cards and agent filter chips in light mode: white cards on the paper ground with the agent's colour as a dot and a thin accent, not a grey tinted fill (Design).",
+      "agent": null,
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-11T11:07:38.885Z",
+      "workedMs": 0,
+      "note": ""
+    },
+    {
+      "n": 11,
+      "title": "Replace the plain markdown editor (knowledge notes and `.md` files opened in the viewer) with a live-preview editor: every block shows rendered, and the block you click or move into turns into its source for editing (Design).",
+      "agent": null,
+      "status": "done",
+      "started": "2026-11-11T10:58:11.730Z",
+      "finished": "2026-11-11T11:11:01.112Z",
+      "workedMs": 769382,
+      "note": ""
+    },
+    {
+      "n": 12,
+      "title": "Add text search to the code viewer and editor: Ctrl+F opens a search field over the file, shows \"3 of 12\" with next and previous, and lists the matching lines with the match highlighted (Design).",
+      "agent": "design-2",
+      "status": "done",
+      "started": "2026-11-11T10:58:11.293Z",
+      "finished": "2026-11-11T11:11:01.267Z",
+      "workedMs": 769974,
+      "note": ""
+    },
+    {
+      "n": 13,
+      "title": "Make the toast close as smoothly as it opens: the bubble shrinks back into the composer's top edge and fades out in one continuous motion, and is removed only once it is invisible (Design).",
+      "agent": null,
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-11T11:07:39.033Z",
+      "workedMs": 0,
+      "note": ""
+    },
+    {
+      "n": 14,
+      "title": "Confirm, with sources, how each harness reports the models it offers: Claude Code, Codex, pi, Oh My Pi, OpenCode, Gemini, Qwen Code and Antigravity (Research).",
+      "agent": "research",
+      "status": "done",
+      "started": "2026-11-11T10:31:51.607Z",
+      "finished": "2026-11-11T10:40:49.880Z",
+      "workedMs": 538273,
+      "note": ""
+    },
+    {
+      "n": 15,
+      "title": "Add `bh models <harness>` that asks the installed harness on the space's machine for its real models and caches the answer (Dev).",
+      "agent": null,
+      "status": "done",
+      "started": "2026-11-11T10:48:19.908Z",
+      "finished": "2026-11-11T10:53:14.962Z",
+      "workedMs": 295054,
+      "note": ""
+    },
+    {
+      "n": 16,
+      "title": "Make each agent card's model picker show the harness's real models, with a refresh button and a clear note when the harness could not be asked (Design).",
+      "agent": null,
+      "status": "done",
+      "started": "2026-11-11T10:58:11.960Z",
+      "finished": "2026-11-11T11:11:01.408Z",
+      "workedMs": 769448,
+      "note": ""
+    },
+    {
+      "n": 17,
+      "title": "Take the plan document out of the Plans page's conversation: a \"View plan\" tab rises from the composer's top edge (document icon, label, chevron, as in the person's screenshot) and opens the plan in a pop-up window that can be expanded to fill the app, with line comments and Start task working there (Design).",
+      "agent": null,
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-11T11:07:39.213Z",
+      "workedMs": 0,
+      "note": ""
+    },
+    {
+      "n": 18,
+      "title": "Rerun the contrast test, `bh check`, QA gate, commit, push, `node install.mjs`, `herdr-app check`.",
+      "agent": null,
+      "status": "done",
+      "started": "2026-11-11T11:11:02.017Z",
+      "finished": "2026-11-11T11:28:30.481Z",
+      "workedMs": 1048464,
+      "note": ""
+    }
+  ],
+  "triage": null,
+  "qa": {
+    "risk": "high",
+    "qaRequired": true,
+    "testBudget": {
+      "min": 0,
+      "max": 6
+    },
+    "focusAreas": [
+      "security boundaries: the wrong user, no user and an expired session are refused, and no secret leaks",
+      "destructive operations: they touch only what they should, and a failure halfway leaves things recoverable",
+      "concurrency: races, ordering, double runs, and a lock or claim that is never released",
+      "state transitions and recovery: no illegal or stuck state, and a crash or failed step recovers",
+      "isolation: work stays inside its branch, worktree and permission boundaries"
+    ],
+    "riskFactors": [
+      "security: mods/bot-herdr/settings.js (\"permission\")",
+      "destructive operations: mods/bot-herdr/chat.js (\"truncate\")",
+      "concurrency: mods/bot-herdr/mdblocks.js (by its path)",
+      "orchestration and state: mods/bot-herdr/chat.js (\"transition(\")",
+      "isolation: mods/bot-herdr/engine/lib/team.mjs (\"worktree\")",
+      "a wide change: 31 files, 4446 changed lines across 7 modules ((top), mods/bot-herdr, mods/bot-herdr/engine and 4 more)",
+      "tests changed with it: test/knowledge-classifier.test.mjs, test/palette.test.mjs, test/themes.test.mjs and 15 more"
+    ],
+    "existingTestsLikelySufficient": true,
+    "reasoning": "HIGH: security: mods/bot-herdr/settings.js (\"permission\"); destructive operations: mods/bot-herdr/chat.js (\"truncate\"); concurrency: mods/bot-herdr/mdblocks.js (by its path). the engine's rules (Jev is off or had nothing to read).",
+    "source": "rules",
+    "at": "2026-11-11T11:11:36.916Z"
+  },
+  "summary": "",
+  "base": "861a7ac7689467e60f071d01e6a655b15d9a79a2",
+  "comments": [
+    {
+      "id": "c1",
+      "step": null,
+      "quote": "",
+      "text": "When done with all the steps, commit and push to git. Then rebuild plugin and install it.",
+      "at": "2026-11-11T10:31:52.051Z",
+      "open": true
+    }
+  ]
+}

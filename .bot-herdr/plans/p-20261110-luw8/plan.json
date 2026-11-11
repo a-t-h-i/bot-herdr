@@ -1,0 +1,11 @@
+{
+  "id": "p-20261110-luw8",
+  "title": "Polish bot-herdr's pages and fix agent replies, questions and the classifier",
+  "idea": "Improvements to the bot-herdr herdr plugin (from the person, who uses it daily). Also find gaps in their knowledge, questions and findings.\n\n1. Knowledge tab is too bland. Improve layout for quick, easy reading and searching. Show knowledge as cards / sticky notes, filterable, with a search input over the notes.\n2. The user should be able to ask about the current repo with `/bh-knowledge <question>` in the chat.\n3. Plans page: the \"comment on plan\" input should be the bot-herdr composer at the bottom of the plan page. Panel seats colour coded, shown as the agent's icon instead of its name (name on hover).\n4. With herdr's built-in themes the UI looks ugly: borders become too dark or too light. They seem to use standard colours instead of the muted ones the bot-herdr themes use.\n5. Tasks screen looks ugly: replace the checkboxes with proper gpui checkboxes; find gpui components.\n6. Task description gets cut off on the Tasks page when a task is long. Working-agent animations should show work flowing from the agent to the task name.\n7. Allow inline comments. Find gaps or ways to improve the overall UI and UX, building on what exists.\n8. The questionnaire (bh ask question cards) seems broken: agents can't invoke it to ask the user questions. Same for in-chat expandable interactive mockups: the person can't see them.\n9. Research the internet for good gpui components to improve look and feel.\n10. The classifier should support other classifier models (e.g. \"cleff\", \"lyla\"), not only Jev.\n11. Working verbs and their animations need improving and polishing.\n12. Toast disappear animation is broken (the show animation is smooth).\n13. Antigravity (agy) and some other harnesses aren't showing their reply in the chat.",
+  "status": "task",
+  "round": 3,
+  "task": "t-20261110-p63g",
+  "created": "2026-11-10T20:33:31.550Z",
+  "updated": "2026-11-10T22:25:49.438Z",
+  "off": []
+}

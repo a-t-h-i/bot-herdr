@@ -1,0 +1,46 @@
+{
+  "id": "t-20261110-dsd1",
+  "title": "Scratch comments",
+  "request": "scratch",
+  "status": "done",
+  "track": "fast",
+  "plan": null,
+  "by": "t2j",
+  "created": "2026-11-10T21:36:57.809Z",
+  "updated": "2026-11-10T21:36:58.950Z",
+  "archived": true,
+  "steps": [],
+  "triage": {
+    "size": "small",
+    "kind": "feature",
+    "domains": {
+      "design": 0,
+      "dev": 0,
+      "qa": 0
+    },
+    "research": 0,
+    "ambiguous": 0,
+    "by": "rules"
+  },
+  "qa": null,
+  "summary": "",
+  "base": "c84411adc6e9f072ffde0a6a48b1f6a04798eac4",
+  "comments": [
+    {
+      "id": "c2",
+      "step": null,
+      "quote": "",
+      "text": "two",
+      "at": "2026-11-10T21:36:58.203Z",
+      "open": true
+    },
+    {
+      "id": "c3",
+      "step": null,
+      "quote": "",
+      "text": "three",
+      "at": "2026-11-10T21:36:58.570Z",
+      "open": true
+    }
+  ]
+}

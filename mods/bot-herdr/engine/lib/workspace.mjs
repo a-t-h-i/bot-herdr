@@ -8,7 +8,7 @@
 // Worktrees: <project>/.bot-herdr/worktrees/<branch>, kept out of `git add -A` by a local exclude.
 
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 export const ISOLATIONS = ["off", "branch", "worktree"];
@@ -60,9 +60,17 @@ function freeBranch(git, top, name) {
   throw new Error(`every branch name like ${base} is taken`);
 }
 
+function canon(p) {
+  try {
+    return (realpathSync.native || realpathSync)(resolve(p));
+  } catch {
+    return resolve(p);
+  }
+}
+
 function excludeWorktrees(git, top, root) {
   try {
-    const inside = relative(top, worktreesRoot(root));
+    const inside = relative(canon(top), canon(worktreesRoot(root)));
     if (!inside || inside.startsWith("..") || isAbsolute(inside)) return;
     const file = resolve(top, git(top, ["rev-parse", "--git-path", "info/exclude"]));
     const line = `/${inside.split(sep).join("/")}/`;

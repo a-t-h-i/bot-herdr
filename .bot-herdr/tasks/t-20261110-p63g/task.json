@@ -1,0 +1,229 @@
+{
+  "id": "t-20261110-p63g",
+  "title": "Polish bot-herdr's pages and fix agent replies, questions and the classifier",
+  "request": "Improvements to the bot-herdr herdr plugin (from the person, who uses it daily). Also find gaps in their knowledge, questions and findings.\n\n1. Knowledge tab is too bland. Improve layout for quick, easy reading and searching. Show knowledge as cards / sticky notes, filterable, with a search input over the notes.\n2. The user should be able to ask about the current repo with `/bh-knowledge <question>` in the chat.\n3. Plans page: the \"comment on plan\" input should be the bot-herdr composer at the bottom of the plan page. Panel seats colour coded, shown as the agent's icon instead of its name (name on hover).\n4. With herdr's built-in themes the UI looks ugly: borders become too dark or too light. They seem to use standard colours instead of the muted ones the bot-herdr themes use.\n5. Tasks screen looks ugly: replace the checkboxes with proper gpui checkboxes; find gpui components.\n6. Task description gets cut off on the Tasks page when a task is long. Working-agent animations should show work flowing from the agent to the task name.\n7. Allow inline comments. Find gaps or ways to improve the overall UI and UX, building on what exists.\n8. The questionnaire (bh ask question cards) seems broken: agents can't invoke it to ask the user questions. Same for in-chat expandable interactive mockups: the person can't see them.\n9. Research the internet for good gpui components to improve look and feel.\n10. The classifier should support other classifier models (e.g. \"cleff\", \"lyla\"), not only Jev.\n11. Working verbs and their animations need improving and polishing.\n12. Toast disappear animation is broken (the show animation is smooth).\n13. Antigravity (agy) and some other harnesses aren't showing their reply in the chat.\n\nThe agreed plan: bh plan show p-20261110-luw8",
+  "status": "done",
+  "track": "planned",
+  "plan": "p-20261110-luw8",
+  "by": "t1t",
+  "created": "2026-11-10T20:43:03.006Z",
+  "updated": "2026-11-10T22:47:17.601Z",
+  "archived": true,
+  "steps": [
+    {
+      "n": 1,
+      "title": "Fix how agents start: per-agent instructions go into the brief, not into command-line args; spawn works on Windows without `sh`",
+      "agent": "dev",
+      "status": "done",
+      "started": "2026-11-10T20:44:19.134Z",
+      "finished": "2026-11-10T21:00:03.433Z",
+      "workedMs": 944299,
+      "note": ""
+    },
+    {
+      "n": 2,
+      "title": "Run Antigravity headless over ACP so its replies reach the chat; always leave a chat entry when a turn ends without a reply",
+      "agent": "dev-acp",
+      "status": "done",
+      "started": "2026-11-10T21:00:46.064Z",
+      "finished": "2026-11-10T21:12:39.810Z",
+      "workedMs": 713746,
+      "note": ""
+    },
+    {
+      "n": 3,
+      "title": "Make question cards reliable from every harness: the asking agent stops until answered; briefs use literal addresses and `bh ask --file`",
+      "agent": null,
+      "status": "done",
+      "started": "2026-11-10T21:00:03.571Z",
+      "finished": "2026-11-10T21:12:39.956Z",
+      "workedMs": 756385,
+      "note": ""
+    },
+    {
+      "n": 4,
+      "title": "Mute borders and other strong colours on herdr's built-in themes, matching the bot-herdr themes' look",
+      "agent": "design",
+      "status": "done",
+      "started": "2026-11-10T20:44:19.470Z",
+      "finished": "2026-11-10T20:48:05.688Z",
+      "workedMs": 226218,
+      "note": ""
+    },
+    {
+      "n": 5,
+      "title": "Tasks page: real checkbox controls for steps and tasks, full task description (collapsed with Show more, as Markdown), agent-to-task flow animation",
+      "agent": "design-pages",
+      "status": "done",
+      "started": "2026-11-10T21:00:46.163Z",
+      "finished": "2026-11-10T21:10:06.371Z",
+      "workedMs": 560208,
+      "note": ""
+    },
+    {
+      "n": 6,
+      "title": "Plans page: comment on the plan through the bot-herdr composer at the bottom; seats as coloured agent icons with the name on hover",
+      "agent": null,
+      "status": "done",
+      "started": "2026-11-10T21:00:03.857Z",
+      "finished": "2026-11-10T21:10:06.509Z",
+      "workedMs": 602652,
+      "note": ""
+    },
+    {
+      "n": 7,
+      "title": "Knowledge page as sticky notes (tinted by agent, varying height in columns, slight tilt that straightens on hover) with search and agent chips; keep edit, delete and notes",
+      "agent": null,
+      "status": "done",
+      "started": "2026-11-10T21:00:04.001Z",
+      "finished": "2026-11-10T21:10:06.656Z",
+      "workedMs": 602655,
+      "note": ""
+    },
+    {
+      "n": 8,
+      "title": "`/bh-knowledge <question>` in the chat goes to the Scout agent (started if needed), which reads the knowledge and the repo and answers in the chat; follow-ups work",
+      "agent": "dev-engine2",
+      "status": "done",
+      "started": "2026-11-10T21:13:11.772Z",
+      "finished": "2026-11-10T21:33:29.672Z",
+      "workedMs": 1217900,
+      "note": ""
+    },
+    {
+      "n": 9,
+      "title": "Classifier: add Laya (TypeSafe, same System One API as Jev) and Clef (Cloudflare Workers AI) as choices beside Jev and the installed harnesses",
+      "agent": null,
+      "status": "done",
+      "started": "2026-11-10T21:12:40.255Z",
+      "finished": "2026-11-10T21:33:29.872Z",
+      "workedMs": 1249617,
+      "note": ""
+    },
+    {
+      "n": 10,
+      "title": "Toast: a proper exit animation on both toasts",
+      "agent": "design-polish",
+      "status": "done",
+      "started": "2026-11-10T21:13:11.685Z",
+      "finished": "2026-11-10T21:33:30.063Z",
+      "workedMs": 1218378,
+      "note": ""
+    },
+    {
+      "n": 11,
+      "title": "Working verbs: better words, a crossfade instead of retyping, calmer timing",
+      "agent": null,
+      "status": "done",
+      "started": "2026-11-10T21:12:40.560Z",
+      "finished": "2026-11-10T21:33:30.252Z",
+      "workedMs": 1249692,
+      "note": ""
+    },
+    {
+      "n": 12,
+      "title": "Chat scrolls smoothly by pixels instead of jumping a whole message per wheel step",
+      "agent": "design-fix",
+      "status": "done",
+      "started": "2026-11-10T21:26:51.086Z",
+      "finished": "2026-11-10T21:33:30.488Z",
+      "workedMs": 399402,
+      "note": ""
+    },
+    {
+      "n": 13,
+      "title": "Composer shrinks to a slim bar when you scroll the feed or it loses focus, and grows back on click or typing",
+      "agent": null,
+      "status": "done",
+      "started": "2026-11-10T21:12:40.869Z",
+      "finished": "2026-11-10T21:33:30.705Z",
+      "workedMs": 1249836,
+      "note": ""
+    },
+    {
+      "n": 14,
+      "title": "Question card: a dimmed backdrop behind it, and a minimise button that folds it into a small chip you can reopen; the agent keeps waiting",
+      "agent": "design-comments",
+      "status": "done",
+      "started": "2026-11-10T21:34:45.279Z",
+      "finished": "2026-11-10T21:41:17.702Z",
+      "workedMs": 392423,
+      "note": ""
+    },
+    {
+      "n": 15,
+      "title": "Inline comments everywhere text is (agent replies, plan lines, task steps, knowledge notes), with resolve, edit and delete; a comment goes to the agent that wrote the text",
+      "agent": "dev-comments",
+      "status": "done",
+      "started": "2026-11-10T21:34:44.863Z",
+      "finished": "2026-11-10T21:41:17.857Z",
+      "workedMs": 392994,
+      "note": ""
+    },
+    {
+      "n": 16,
+      "title": "QA gate per task, plus your sign-off on a short visual checklist",
+      "agent": "design-qafix",
+      "status": "done",
+      "started": "2026-11-10T21:46:56.610Z",
+      "finished": "2026-11-10T22:14:51.751Z",
+      "workedMs": 1675141,
+      "note": ""
+    }
+  ],
+  "triage": null,
+  "qa": {
+    "risk": "high",
+    "qaRequired": true,
+    "testBudget": {
+      "min": 0,
+      "max": 6
+    },
+    "focusAreas": [
+      "security boundaries: the wrong user, no user and an expired session are refused, and no secret leaks",
+      "data integrity: what is saved reads back the same, a migration runs on real data, and a failure halfway loses or corrupts nothing",
+      "destructive operations: they touch only what they should, and a failure halfway leaves things recoverable",
+      "state transitions and recovery: no illegal or stuck state, and a crash or failed step recovers"
+    ],
+    "riskFactors": [
+      "security: mods/bot-herdr/engine/classifier/index.mjs (\"apiKey\")",
+      "persistent data: mods/bot-herdr/engine/lib/team.mjs (\"migrate\")",
+      "destructive operations: mods/bot-herdr/composer.js (\"truncate\")",
+      "orchestration and state: mods/bot-herdr/chat.js (\"transition(\")",
+      "a wide change: 22 files, 1671 changed lines across 4 modules ((top), mods/bot-herdr, mods/bot-herdr/engine and 1 more)",
+      "tests changed with it: test/agents-reply.test.mjs, test/engine.test.mjs, test/headless.test.mjs and 8 more"
+    ],
+    "existingTestsLikelySufficient": true,
+    "reasoning": "HIGH: security: mods/bot-herdr/engine/classifier/index.mjs (\"apiKey\"); persistent data: mods/bot-herdr/engine/lib/team.mjs (\"migrate\"); destructive operations: mods/bot-herdr/composer.js (\"truncate\"). the engine's rules (Jev is off or had nothing to read).",
+    "source": "rules",
+    "at": "2026-11-10T21:41:28.997Z"
+  },
+  "summary": "",
+  "base": "c84411adc6e9f072ffde0a6a48b1f6a04798eac4",
+  "comments": [
+    {
+      "id": "c1",
+      "step": null,
+      "quote": "",
+      "text": "The tasks tracker in on the left side of chat should scroll independently. Rn I noticed that when I scroll on it, it also scrolls the chat",
+      "at": "2026-11-10T20:45:04.370Z",
+      "open": true
+    },
+    {
+      "id": "c2",
+      "step": null,
+      "quote": "",
+      "text": "C:\\Users\\athenkosi.hlubi\\AppData\\Local\\Packages\\MicrosoftWindows.Client.Core_cw5n1h2txyewy\\TempState\\ScreenClip\\{247283F6-34A9-413C-9C91-06B484A96A02}.pngRemove that other blinking dot from the active task. We just need blinking on the steps, not the task name",
+      "at": "2026-11-10T20:46:53.892Z",
+      "open": true
+    },
+    {
+      "id": "c3",
+      "step": null,
+      "quote": "",
+      "text": "Also, the composer should show a thumbnail of the attached image on top of the composer.",
+      "at": "2026-11-10T20:47:30.249Z",
+      "open": true
+    }
+  ]
+}

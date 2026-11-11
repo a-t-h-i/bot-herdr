@@ -1,0 +1,85 @@
+{
+  "id": "t-20261111-atq0",
+  "title": "Pause and resume tasks",
+  "request": "Pause and resume a task: the person should be able to pause a running task and resume it later, from the UI. bh task status already knows active|paused; make it real in the Tasks page and the chat's tasks widget, and define what pausing does to work in flight.",
+  "status": "done",
+  "track": "full",
+  "plan": null,
+  "by": "t1t",
+  "created": "2026-11-10T22:29:40.109Z",
+  "updated": "2026-11-10T22:47:13.586Z",
+  "archived": true,
+  "steps": [
+    {
+      "n": 1,
+      "title": "Define pause/resume semantics for in-flight work and update task status behavior in engine",
+      "agent": "orchestrator",
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-10T22:38:23.869Z",
+      "workedMs": 0,
+      "note": "Defined pause as status=paused with in-progress steps stopped (timers recorded, moved to todo) via existing bh task status; UI can pause/resume without losing resume-from-next-unfinished behavior."
+    },
+    {
+      "n": 2,
+      "title": "Add pause/resume controls to Tasks page and chat tasks widget UI",
+      "agent": "orchestrator",
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-10T22:38:23.901Z",
+      "workedMs": 0,
+      "note": "Added Pause/Resume controls on Tasks page detail and chat tasks widget; widget shows paused tasks and can toggle status; fixed agentHue to return hex for gpui-kit."
+    },
+    {
+      "n": 3,
+      "title": "Verify changes, run bh check, commit and push, rebuild and reinstall plugin",
+      "agent": null,
+      "status": "todo",
+      "started": null,
+      "finished": null,
+      "workedMs": 0,
+      "note": ""
+    }
+  ],
+  "triage": {
+    "size": "medium",
+    "kind": "feature",
+    "domains": {
+      "design": 1,
+      "dev": 0,
+      "qa": 0
+    },
+    "research": 0,
+    "ambiguous": 0,
+    "by": "rules"
+  },
+  "qa": null,
+  "summary": "",
+  "base": "189a7ce5db9ccda28551c245a30905e23196807b",
+  "comments": [
+    {
+      "id": "c1",
+      "step": null,
+      "quote": "",
+      "text": "WHen dne, cmmit and push to git. Rebuild and reinstall plugin",
+      "at": "2026-11-10T22:33:11.243Z",
+      "open": true
+    },
+    {
+      "id": "c2",
+      "step": null,
+      "quote": "",
+      "text": "Also fix this error: This view could not be rendered`hsl(159 42% 58%)` is not a color value; pass a color from `cx.theme().colors` or a #rgb, #rrggbb, or #rrggbbaa literal    at <anonymous> (eval_script:58:25)    at <anonymous> (\\\\?\\C:\\Users\\athenkosi.hlubi\\.config\\herdr-app\\mods\\bot-herdr\\chat.js?v=31:732:113)    at map (native)    at mine (\\\\?\\C:\\Users\\athenkosi.hlubi\\.config\\herdr-app\\mods\\bot-herdr\\chat.js?v=31:732:32)    at entry (\\\\?\\C:\\Users\\athenkosi.hlubi\\.config\\herdr-app\\mods\\bot-herdr\\chat.js?v=31:677:44)    at <anonymous> (\\\\?\\C:\\Users\\athenkosi.hlubi\\.config\\herdr-app\\mods\\bot-herdr\\chat.js?v=31:616:59)    at map (native)    at <anonymous> (\\\\?\\C:\\Users\\athenkosi.hlubi\\.config\\herdr-app\\mods\\bot-herdr\\chat.js?v=31:616:37)    at <anonymous> (eval_script:599:29)    at render (\\\\?\\C:\\Users\\athenkosi.hlubi\\.config\\herdr-app\\mods\\bot-herdr\\chat.js?v=31:605:30)",
+      "at": "2026-11-10T22:33:27.896Z",
+      "open": true
+    },
+    {
+      "id": "c3",
+      "step": 3,
+      "quote": "Verify changes, run bh check, commit and push, rebuild and reinstall plugin",
+      "text": "changes look good. commit and push. Rebuild and install",
+      "at": "2026-11-10T22:46:14.827Z",
+      "open": true
+    }
+  ]
+}

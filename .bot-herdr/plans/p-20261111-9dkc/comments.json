@@ -1,0 +1,26 @@
+[
+  {
+    "id": "c1",
+    "line": null,
+    "quote": "",
+    "text": "When edit knowledge and markdown the markdown must be rendered and not plain. Replace the md editor with a rich text md editor. Also the knowledge chips / notes cards in light mode are a bit too dark / dim \n\nC:\\Users\\athenkosi.hlubi\\AppData\\Local\\Packages\\MicrosoftWindows.Client.Core_cw5n1h2txyewy\\TempState\\ScreenClip\\{B0E88F63-0519-4556-88C0-838D48238B9F}.png",
+    "at": "2026-11-11T10:18:02.286Z",
+    "open": true
+  },
+  {
+    "id": "c2",
+    "line": null,
+    "quote": "",
+    "text": "The toast notification dissapear animation isn't smooth. It locks up at the last moment and then just dissapears. It's not a smooth bubble like expand and shrink close animation.",
+    "at": "2026-11-11T10:24:20.291Z",
+    "open": true
+  },
+  {
+    "id": "c3",
+    "line": null,
+    "quote": "",
+    "text": "The plan should be expndable / openable in a pop up window. Show the view plan in this format. Don't show the plan inside the planning chat C:\\Users\\athenkosi.hlubi\\AppData\\Local\\Packages\\MicrosoftWindows.Client.Core_cw5n1h2txyewy\\TempState\\ScreenClip\\{7363E41C-AF3A-4F80-8DC3-7E6E458B3541}.png",
+    "at": "2026-11-11T10:28:17.113Z",
+    "open": true
+  }
+]

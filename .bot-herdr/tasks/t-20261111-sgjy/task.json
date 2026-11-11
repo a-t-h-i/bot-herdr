@@ -1,0 +1,28 @@
+{
+  "id": "t-20261111-sgjy",
+  "title": "Show @mentioned agents in chat",
+  "request": "Chat feed: when a message mentions an agent with @name, show the mentioned agent beside the message, in that agent's own colour (the same hue its chips/cards use elsewhere). From the person's comment on t-20261111-8c1a.",
+  "status": "done",
+  "track": "fast",
+  "plan": null,
+  "by": "t1t",
+  "created": "2026-11-10T22:30:34.799Z",
+  "updated": "2026-11-10T22:47:15.730Z",
+  "archived": true,
+  "steps": [],
+  "triage": {
+    "size": "small",
+    "kind": "feature",
+    "domains": {
+      "design": 0,
+      "dev": 0,
+      "qa": 0
+    },
+    "research": 0,
+    "ambiguous": 0,
+    "by": "rules"
+  },
+  "qa": null,
+  "summary": "",
+  "base": "189a7ce5db9ccda28551c245a30905e23196807b"
+}

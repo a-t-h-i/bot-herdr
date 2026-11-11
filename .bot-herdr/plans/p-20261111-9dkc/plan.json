@@ -1,0 +1,10 @@
+{
+  "id": "p-20261111-9dkc",
+  "title": "Theme contrast, in-app file browser, visual refresh and measured engine wins",
+  "idea": "Three parts. (1) Fix the contrast issue seen with herdr's built-in themes: with other themes the contrast is off (screenshots show low-contrast secondary text like timestamps, 'Comment', 'Open terminal', agent names, inline code chips and user bubbles: C:\\Users\\athenkosi.hlubi\\.config\\herdr-app\\data\\bot-herdr\\pasted\\pasted-20261111-094735.png and pasted-20261111-094742.png). (2) Attaching a document fails to open a file explorer. (3) Review the current features: what could be improved, what can be removed, what visual layout would be best, performance improvements, token efficiency, cache hit rates, etc.",
+  "status": "task",
+  "round": 11,
+  "task": "t-20261111-b2gp",
+  "created": "2026-11-11T09:48:03.585Z",
+  "updated": "2026-11-11T10:30:19.880Z"
+}

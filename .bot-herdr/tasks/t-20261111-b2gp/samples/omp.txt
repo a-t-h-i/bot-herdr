@@ -1,0 +1,30 @@
+﻿deepseek (4)
+┌──────────────────────────────┬─────────┬─────────┬──────────────┬────────┐
+│ model                        │ context │ max-out │ thinking     │ images │
+├──────────────────────────────┼─────────┼─────────┼──────────────┼────────┤
+│ deepseek-flash               │      1M │    384K │ low,high,max │ yes    │
+│ deepseek-v4-flash            │      1M │    393K │ low,high,max │ no     │
+│ deepseek-v4-flash-vision-exp │      1M │    393K │ low,high,max │ yes    │
+│ deepseek-v4-pro              │      1M │    393K │ low,high,max │ no     │
+└──────────────────────────────┴─────────┴─────────┴──────────────┴────────┘
+
+zai (18)
+┌────────────────┬─────────┬─────────┬───────────────────────────────┬────────┐
+│ model          │ context │ max-out │ thinking                      │ images │
+├────────────────┼─────────┼─────────┼───────────────────────────────┼────────┤
+│ glm-4.5        │    131K │     98K │ minimal,low,medium,high,xhigh │ no     │
+│ glm-4.5-air    │    131K │     98K │ minimal,low,medium,high,xhigh │ no     │
+│ glm-4.5-flash  │    131K │     98K │ minimal,low,medium,high,xhigh │ no     │
+│ glm-4.5v       │     64K │     16K │ minimal,low,medium,high,xhigh │ yes    │
+│ glm-4.6        │    205K │    131K │ minimal,low,medium,high,xhigh │ no     │
+│ glm-4.6v       │    128K │     33K │ minimal,low,medium,high,xhigh │ yes    │
+│ glm-4.6v-flash │    128K │     33K │ minimal,low,medium,high,xhigh │ yes    │
+│ glm-4.7        │    205K │    131K │ minimal,low,medium,high,xhigh │ no     │
+│ glm-4.7-flash  │    200K │    131K │ minimal,low,medium,high,xhigh │ no     │
+│ glm-4.7-flashx │    200K │    131K │ minimal,low,medium,high,xhigh │ no     │
+│ glm-5          │    205K │    131K │ minimal,low,medium,high,xhigh │ no     │
+│ glm-5-turbo    │    200K │    131K │ minimal,low,medium,high,xhigh │ no     │
+│ glm-5.1        │    200K │    131K │ minimal,low,medium,high,xhigh │ no     │
+│ glm-5.2        │      1M │    131K │ high,max                      │ no     │
+│ glm-5.3        │      1M │    131K │ low,high,max                  │ no     │
+│ glm-5.3-flash  │      1M │    131K │ low,high,max                  │ yes    │

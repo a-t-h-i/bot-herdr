@@ -1,0 +1,160 @@
+
+== LIGHT (light)
+  ok   ink on fill                  18.43  #141413 on #ffffff
+  ok   muted on fill                4.82  #73726c on #ffffff
+  ok   faint on fill                4.75  #74736f on #ffffff
+  ok   accent on fill               4.75  #b25a3c on #ffffff
+  ok   danger on fill               6.47  #b91c1c on #ffffff
+  ok   stop on fill                 6.60  #9e3d3a on #ffffff
+  ok   info on fill                 6.70  #1d4ed8 on #ffffff
+  ok   success on fill              5.48  #047857 on #ffffff
+  ok   warning on fill              5.02  #b45309 on #ffffff
+  ok   ink on ground                17.50  #141413 on #faf9f5
+  ok   muted on ground              4.58  #73726c on #faf9f5
+  ok   faint on ground              4.51  #74736f on #faf9f5
+  ok   accent on ground             4.51  #b25a3c on #faf9f5
+  ok   danger on ground             6.14  #b91c1c on #faf9f5
+  ok   stop on ground               6.26  #9e3d3a on #faf9f5
+  ok   info on ground               6.36  #1d4ed8 on #faf9f5
+  ok   success on ground            5.21  #047857 on #faf9f5
+  ok   warning on ground            4.77  #b45309 on #faf9f5
+  ok   accentInk on accent          4.75  #ffffff on #b25a3c
+  ok   agentInk orchestrator on ground 4.51  #b25a3c on #faf9f5
+  ok   agentInk dev on ground       4.53  #4b71bd on #faf9f5
+  ok   agentInk design on ground    4.50  #a16447 on #faf9f5
+  ok   agentInk qa on ground        4.55  #33805c on #faf9f5
+  ok   agentInk research on ground  4.52  #8564ab on #faf9f5
+  ok   agentInk scout on ground     4.55  #337c89 on #faf9f5
+  ok   agentInk harbor on ground    4.54  #497a82 on #faf9f5
+  ok   edge on fill                 1.32  #e3e0d7 on #ffffff
+  info our decorative edgeDark on fill 1.51
+  info bubbleEdge on bubble 1.22 (own light 1.22, dark 1.43); bubble on ground 1.11
+
+== DARK (dark)
+  ok   ink on fill                  12.55  #faf9f5 on #30302e
+  ok   muted on fill                6.74  #bbb9b2 on #30302e
+  ok   faint on fill                4.52  #989791 on #30302e
+  ok   accent on fill               4.51  #db7e5f on #30302e
+  ok   danger on fill               4.78  #f87171 on #30302e
+  ok   stop on fill                 4.52  #d0827e on #30302e
+  ok   info on fill                 5.20  #60a5fa on #30302e
+  ok   success on fill              6.88  #34d399 on #30302e
+  ok   warning on fill              7.92  #fbbf24 on #30302e
+  ok   ink on ground                14.39  #faf9f5 on #262624
+  ok   muted on ground              7.72  #bbb9b2 on #262624
+  ok   faint on ground              5.18  #989791 on #262624
+  ok   accent on ground             5.17  #db7e5f on #262624
+  ok   danger on ground             5.48  #f87171 on #262624
+  ok   stop on ground               5.18  #d0827e on #262624
+  ok   info on ground               5.96  #60a5fa on #262624
+  ok   success on ground            7.89  #34d399 on #262624
+  ok   warning on ground            9.08  #fbbf24 on #262624
+  ok   accentInk on accent          6.29  #141413 on #db7e5f
+  ok   agentInk orchestrator on ground 5.17  #db7e5f on #262624
+  ok   agentInk dev on ground       4.69  #5b8def on #262624
+  ok   agentInk design on ground    5.20  #d6825a on #262624
+  ok   agentInk qa on ground        5.11  #3fa877 on #262624
+  ok   agentInk research on ground  4.61  #a47bd6 on #262624
+  ok   agentInk scout on ground     5.13  #3ea3b5 on #262624
+  ok   agentInk harbor on ground    6.47  #67b5c1 on #262624
+  ok   edge on fill                 1.49  #4a4a47 on #30302e
+  info our decorative edgeDark on fill 1.28
+  info bubbleEdge on bubble 1.43 (own light 1.22, dark 1.43); bubble on ground 1.33
+
+== win98 (light)
+  ok   ink on fill                  15.76  #000000 on #dfdfdf
+  ok   muted on fill                7.78  #404040 on #dfdfdf
+  ok   faint on fill                6.15  #4f4f4f on #dfdfdf
+  ok   accent on fill               12.01  #000080 on #dfdfdf
+  ok   danger on fill               6.16  #a30000 on #dfdfdf
+  ok   stop on fill                 6.16  #a30000 on #dfdfdf
+  ok   info on fill                 9.17  #0000bb on #dfdfdf
+  ok   success on fill              6.23  #005c00 on #dfdfdf
+  ok   warning on fill              6.15  #7d3e00 on #dfdfdf
+  ok   ink on ground                11.54  #000000 on #c0c0c0
+  ok   muted on ground              5.70  #404040 on #c0c0c0
+  ok   faint on ground              4.50  #4f4f4f on #c0c0c0
+  ok   accent on ground             8.80  #000080 on #c0c0c0
+  ok   danger on ground             4.51  #a30000 on #c0c0c0
+  ok   stop on ground               4.51  #a30000 on #c0c0c0
+  ok   info on ground               6.72  #0000bb on #c0c0c0
+  ok   success on ground            4.56  #005c00 on #c0c0c0
+  ok   warning on ground            4.51  #7d3e00 on #c0c0c0
+  ok   accentInk on accent          16.01  #ffffff on #000080
+  ok   agentInk orchestrator on ground 8.80  #000080 on #c0c0c0
+  ok   agentInk dev on ground       4.50  #324e85 on #c0c0c0
+  ok   agentInk design on ground    4.51  #70442f on #c0c0c0
+  ok   agentInk qa on ground        4.56  #21583f on #c0c0c0
+  ok   agentInk research on ground  4.50  #5b4577 on #c0c0c0
+  ok   agentInk scout on ground     4.50  #215660 on #c0c0c0
+  ok   agentInk harbor on ground    4.54  #30545a on #c0c0c0
+  ok   edge on fill                 1.41  #bdbdbd on #dfdfdf
+  ok   edgeDark on fill (control)   3.09  #7d7d7d on #dfdfdf
+  info our decorative edgeDark on fill 3.09
+  info bubbleEdge on bubble 1.22 (own light 1.22, dark 1.43); bubble on ground 1.15
+
+== atom-one-dark (dark)
+  ok   ink on fill                  6.58  #abb2bf on #282c32
+  ok   muted on fill                4.53  #8c939e on #282c32
+  ok   faint on fill                4.53  #8c939e on #282c32
+  ok   accent on fill               5.94  #61afef on #282c32
+  ok   danger on fill               4.51  #db737c on #282c32
+  ok   stop on fill                 4.51  #db737c on #282c32
+  ok   info on fill                 5.94  #61afef on #282c32
+  ok   success on fill              6.96  #98c379 on #282c32
+  ok   warning on fill              8.12  #e5c07b on #282c32
+  ok   ink on ground                7.22  #abb2bf on #21252b
+  ok   muted on ground              4.97  #8c939e on #21252b
+  ok   faint on ground              4.97  #8c939e on #21252b
+  ok   accent on ground             6.51  #61afef on #21252b
+  ok   danger on ground             4.95  #db737c on #21252b
+  ok   stop on ground               4.95  #db737c on #21252b
+  ok   info on ground               6.51  #61afef on #21252b
+  ok   success on ground            7.64  #98c379 on #21252b
+  ok   warning on ground            8.91  #e5c07b on #21252b
+  ok   accentInk on accent          8.89  #000000 on #61afef
+  ok   agentInk orchestrator on ground 6.51  #61afef on #21252b
+  ok   agentInk dev on ground       4.77  #5b8def on #21252b
+  ok   agentInk design on ground    5.28  #d6825a on #21252b
+  ok   agentInk qa on ground        5.19  #3fa877 on #21252b
+  ok   agentInk research on ground  4.68  #a47bd6 on #21252b
+  ok   agentInk scout on ground     5.21  #3ea3b5 on #21252b
+  ok   agentInk harbor on ground    6.57  #67b5c1 on #21252b
+  ok   edge on fill                 1.43  #40444b on #282c32
+  ok   edgeDark on fill (control)   3.11  #717781 on #282c32
+  info our decorative edgeDark on fill 3.11
+  info bubbleEdge on bubble 1.44 (own light 1.22, dark 1.43); bubble on ground 1.14
+
+== graphite (dark)
+  ok   ink on fill                  11.05  #e6e6e6 on #2b2d31
+  ok   muted on fill                6.56  #b0b3b8 on #2b2d31
+  ok   faint on fill                4.53  #919499 on #2b2d31
+  ok   accent on fill               6.56  #a7b4c6 on #2b2d31
+  ok   danger on fill               4.50  #e0727a on #2b2d31
+  ok   stop on fill                 4.50  #e0727a on #2b2d31
+  ok   info on fill                 5.84  #61afef on #2b2d31
+  ok   success on fill              6.84  #98c379 on #2b2d31
+  ok   warning on fill              7.99  #e5c07b on #2b2d31
+  ok   ink on ground                13.65  #e6e6e6 on #1b1c1f
+  ok   muted on ground              8.10  #b0b3b8 on #1b1c1f
+  ok   faint on ground              5.60  #919499 on #1b1c1f
+  ok   accent on ground             8.10  #a7b4c6 on #1b1c1f
+  ok   danger on ground             5.56  #e0727a on #1b1c1f
+  ok   stop on ground               5.56  #e0727a on #1b1c1f
+  ok   info on ground               7.21  #61afef on #1b1c1f
+  ok   success on ground            8.45  #98c379 on #1b1c1f
+  ok   warning on ground            9.86  #e5c07b on #1b1c1f
+  ok   accentInk on accent          8.91  #111214 on #a7b4c6
+  ok   agentInk orchestrator on ground 8.10  #a7b4c6 on #1b1c1f
+  ok   agentInk dev on ground       5.27  #5b8def on #1b1c1f
+  ok   agentInk design on ground    5.84  #d6825a on #1b1c1f
+  ok   agentInk qa on ground        5.74  #3fa877 on #1b1c1f
+  ok   agentInk research on ground  5.18  #a47bd6 on #1b1c1f
+  ok   agentInk scout on ground     5.77  #3ea3b5 on #1b1c1f
+  ok   agentInk harbor on ground    7.27  #67b5c1 on #1b1c1f
+  ok   edge on fill                 1.48  #45474a on #2b2d31
+  ok   edgeDark on fill (control)   3.08  #767779 on #2b2d31
+  info our decorative edgeDark on fill 3.08
+  info bubbleEdge on bubble 1.43 (own light 1.22, dark 1.43); bubble on ground 1.45
+
+ALL PAIRS PASS
