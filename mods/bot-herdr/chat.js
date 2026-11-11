@@ -666,14 +666,21 @@ export class Chat {
       )
       // The tasks under way, top left, when the window has room for them beside the chat.
       .when(this.tasks.length > 0 && (this.size.width - width) / 2 >= WIDGET_W + 28, (el) => el.child(this.taskWidget(c)))
-      // An open question card dims the feed and the tasks widget behind it, and takes their clicks.
-      .when(this.composer.paneNow() === "ask", (el) => el.child(div()
+      // An open question card or file browser dims the feed and the tasks widget behind it, and
+      // takes their clicks and wheel. gpui has no blur, so the dim stands in for one. A click on
+      // it puts the browser away; question cards stay until answered or dismissed.
+      .when(this.composer.paneNow() === "ask" || (this.composer.paneNow() === "attach" && Boolean(this.composer.browse)), (el) => el.child(div()
         .id("bh-ask-dim")
         .absolute()
         .inset_0()
         .bg(c.ground)
         .opacity(0.6)
-        .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+        .on_mouse_down("left", (_e, cx) => {
+          cx.stop_propagation();
+          if (this.composer.paneNow() !== "attach") return;
+          this.composer.closeBrowse(cx);
+          this.composer.toggle("attach", cx);
+        })
         .on_scroll_wheel((_e, cx) => cx.stop_propagation())))
       // The composer, bottom centre. Its suggestions grow upward over the feed.
       .child(

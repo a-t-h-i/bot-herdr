@@ -532,10 +532,11 @@ export class Composer {
    * "Attach document…": the browser inside the attach pane. It lists this machine's folders
    * through `bh files`; a space on another machine says so and takes a typed path instead.
    */
-  openBrowser(cx) {
+  openBrowser(cx, { folders = false } = {}) {
     const space = this.space();
     this.pane = "attach";
     this.browse = {
+      folders,
       path: projectDir(space),
       parent: parentPath(projectDir(space)),
       entries: [],
@@ -582,8 +583,8 @@ export class Composer {
         b.parent = data.parent ?? null;
         b.entries = data.entries;
         b.truncated = Boolean(data.truncated);
-        const files = new Set(data.entries.filter((e) => !e.dir).map((e) => e.path));
-        b.selected = new Set([...b.selected].filter((p) => files.has(p)));
+        const kept = new Set(data.entries.filter((e) => (b.folders ? e.dir : !e.dir)).map((e) => e.path));
+        b.selected = new Set([...b.selected].filter((p) => kept.has(p)));
         b.error = null;
       }
       this.browseAt = 0;
@@ -615,7 +616,9 @@ export class Composer {
   }
 
   attachBrowse(cx) {
-    const paths = [...(this.browse?.selected ?? [])];
+    const b = this.browse;
+    const paths = [...(b?.selected ?? [])];
+    if (!paths.length && b?.folders && b.path) paths.push(b.path);
     if (!paths.length) return;
     this.browse = null;
     this.addFiles(paths, cx);
@@ -637,13 +640,14 @@ export class Composer {
     cx.notify();
   }
 
+  /** "Attach folder…": the same browser, listing folders only. */
   pickFolderToAttach(cx) {
-    this.pane = null;
-    cx.notify();
-    cx.spawn(async (cx) => {
-      const folder = await pickFolder({ prompt: "Attach" });
-      if (folder) this.addFiles([folder], cx);
-    });
+    this.openBrowser(cx, { folders: true });
+  }
+
+  /** The rows the browser shows: folders only when it is picking folders, then the search. */
+  browseRows(b) {
+    return filterEntries(b.folders ? b.entries.filter((e) => e.dir) : b.entries, this.browseSearch.value?.() ?? "");
   }
 
   /** One row of the browser: its checkbox, icon, name and (for a file) its size. */
@@ -683,8 +687,7 @@ export class Composer {
   /** The browser's body and the height the pane gives it. */
   browseBody(c) {
     const b = this.browse;
-    const typed = (this.browseSearch.value?.() ?? "").trim();
-    const visible = filterEntries(b.entries, typed);
+    const visible = this.browseRows(b);
     const shown = Math.min(8, Math.max(3, visible.length));
     const listH = shown * ROW;
     const h = Math.min(360, CONTROL + SPACE[2] + CONTROL + SPACE[2] + listH + SPACE[2] + CONTROL + SPACE[3] * 2);
@@ -709,6 +712,7 @@ export class Composer {
     );
     const list = v_flex()
       .id("bc-browse-list")
+      .on_scroll_wheel((_e, cx) => cx.stop_propagation())
       .w_full()
       .h(listH)
       .gap(SPACE[1])
@@ -717,7 +721,7 @@ export class Composer {
       .tab_index(0)
       .focus((s) => s.border_2().border_color(c.accent))
       .on_key_down((e, cx) => {
-        const rows = filterEntries(b.entries, this.browseSearch.value?.() ?? "");
+        const rows = this.browseRows(b);
         if (!rows.length) return;
         const at = Math.max(0, Math.min(rows.length - 1, this.browseAt));
         if (e.key === "up" || e.key === "arrow-up") this.browseAt = Math.max(0, at - 1);
@@ -782,9 +786,9 @@ export class Composer {
             b.hidden = !b.hidden;
             this.loadBrowse(cx);
           }))
-          .child(primary("bc-browse-attach", "Attach", (_e, cx) => this.attachBrowse(cx))),
+          .child(primary("bc-browse-attach", b.folders && !b.selected.size ? "Attach this folder" : "Attach", (_e, cx) => this.attachBrowse(cx))),
       );
-    return { h, body };
+    return { h, body: body.id("bc-browse").on_scroll_wheel((_e, cx) => cx.stop_propagation()) };
   }
 
   // ── Sending ────────────────────────────────────────────────────────────────────────────────
