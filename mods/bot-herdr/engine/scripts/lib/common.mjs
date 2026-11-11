@@ -1,22 +1,18 @@
 // Shared helpers for bot-herdr's built-in scripts. Read-only: nothing here writes, commits or pushes.
-import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, extname, join } from "node:path";
+import { parseArgs as parseOptions, projectRoot as gitTop, sh as run } from "../../lib/core.mjs";
 
-/** Run a command; never throws. */
-export function sh(cmd, args = [], options = {}) {
-  const result = spawnSync(cmd, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, ...options });
-  return { code: result.status ?? (result.error ? 127 : 1), out: result.stdout ?? "", err: result.stderr ?? (result.error ? String(result.error.message) : "") };
-}
+/** Run a command; never throws. The engine's own runner: the scripts are part of its package. */
+export const sh = run;
 
 export function lines(text) {
   return text.split("\n").map((line) => line.trimEnd()).filter(Boolean);
 }
 
-/** The project's root: the git top level, else where the script was run. */
+/** The project's root: the git top level around the script, else the folder it runs in. */
 export function projectRoot() {
-  const git = sh("git", ["rev-parse", "--show-toplevel"]);
-  return git.code === 0 ? git.out.trim() : process.cwd();
+  return gitTop(process.cwd());
 }
 
 /** `--name value` / `--flag` options and the rest as positional arguments. */
@@ -27,18 +23,7 @@ export function parseArgs(argv = process.argv.slice(2)) {
     for (const row of head) if (/^\/\/\s*(purpose|usage):/.test(row)) console.log(row.replace(/^\/\/\s*/, "").replace("{script}", process.argv[1]));
     process.exit(0);
   }
-  const flags = {};
-  const rest = [];
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg.startsWith("--")) {
-      const [key, inline] = arg.slice(2).split("=", 2);
-      if (inline !== undefined) flags[key] = inline;
-      else if (argv[i + 1] !== undefined && !argv[i + 1].startsWith("--")) flags[key] = argv[++i];
-      else flags[key] = true;
-    } else rest.push(arg);
-  }
-  return { flags, rest };
+  return parseOptions(argv, [], []);
 }
 
 /** The ref the branch is compared with: `--base`, else the merge base with the default branch, else HEAD. */

@@ -1,0 +1,8 @@
+{
+  "models": {
+    "availableModels": [
+      { "modelId": "gemini-3.8-flash-high", "name": "Gemini 3.8 Flash (High)" },
+      { "modelId": "claude-opus-4-6-thinking", "name": "Claude Opus 4.6 (Thinking)" }
+    ]
+  }
+}

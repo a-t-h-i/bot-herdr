@@ -7,7 +7,7 @@
 import { div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { props, settings, setShared, closeOverlay, run } from "herdr";
-import { ICON } from "./look.js";
+import { ICON, TYPE, LINE, SPACE, CONTROL, GLYPH, MOTION, SIZE, clickable } from "./look.js";
 import { colors } from "./theme.js";
 import { activePage } from "./pages.js";
 import { TOAST_KEY, noteText } from "./toasts.js";
@@ -51,37 +51,38 @@ export class Toast {
     const p = this.p;
     const kind = TOAST_ICONS[p.level] ? p.level : "info";
     const action = p.action?.name ? p.action : null;
-    return div()
-      .id("bh-toast")
-      .relative()
-      .size_full()
-      .bg(c.fill)
-      .overflow_hidden()
-      .cursor_pointer()
-      .on_click(() => {
-        if (action) run(action.name, action.args ?? {});
-        this.close();
-      })
-      .child(
-        h_flex()
-          .absolute()
-          .left(0)
-          .right(0)
-          .top(this.up ? 0 : 14)
-          .spring("top", { response: 420, damping: 0.78 })
-          .h_full()
-          .px(14)
-          .gap(10)
-          .items_center()
-          .opacity(this.up ? 1 : 0)
-          .transition("opacity", this.up ? { duration: 200, delay: 120, easing: "ease-out" } : { duration: 180, easing: "ease-in" })
-          .text_color(c.ink)
-          .child(svg(ICON(TOAST_ICONS[kind])).flex_none().size(16).text_color(toneOf(c, kind)))
-          .child(div().flex_1().min_w(0).max_h(57).overflow_hidden().text_size(13.5).line_height("19px").child(noteText(p)))
-          .when(Boolean(action), (el) => el.child(
-            div().flex_none().h(28).px(10).flex().items_center().rounded(8).border_1().border_color(c.edge)
-              .text_size(12).font_medium().hover((s) => s.bg(c.hover)).child("Show"),
-          )),
-      );
+    return clickable(
+      div()
+        .size_full()
+        .bg(c.fill)
+        .overflow_hidden()
+        .on_click(() => {
+          if (action) run(action.name, action.args ?? {});
+          this.close();
+        })
+        .child(
+          h_flex()
+            .absolute()
+            .left(0)
+            .right(0)
+            .top(this.up ? 0 : SPACE[4])
+            .spring("top", { response: 420, damping: 0.78 })
+            .h_full()
+            .px(SPACE[4])
+            .gap(SPACE[3])
+            .items_center()
+            .opacity(this.up ? 1 : 0)
+            .transition("opacity", this.up ? { ...MOTION.tool, delay: 120 } : MOTION.menuClose)
+            .text_color(c.ink)
+            .child(svg(ICON(TOAST_ICONS[kind])).flex_none().size(GLYPH.lg).text_color(toneOf(c, kind)))
+            .child(div().flex_1().min_w(0).max_h(LINE.md * 3).overflow_hidden().text_size(TYPE.md).line_height(`${LINE.md}px`).child(noteText(p)))
+            .when(Boolean(action), (el) => el.child(
+              div().flex_none().h(CONTROL).px(SPACE[3]).flex().items_center().rounded(SIZE.nested).border_1().border_color(c.edge)
+                .text_size(TYPE.sm).font_medium().hover((s) => s.bg(c.hover)).child("Show"),
+            )),
+        ),
+      c,
+      "bh-toast-hit",
+    );
   }
 }

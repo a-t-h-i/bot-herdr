@@ -1,0 +1,18 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "data": [
+      {
+        "id": "gpt-6.1-sol",
+        "name": "GPT-6.1 Sol",
+        "capabilities": { "reasoningEffort": ["low", "medium", "high", "xhigh"] }
+      },
+      {
+        "id": "gpt-6-astra",
+        "name": "GPT-6 Astra",
+        "capabilities": { "reasoningEffort": ["low", "medium", "high"] }
+      }
+    ]
+  }
+}

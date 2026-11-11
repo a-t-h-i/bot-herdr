@@ -117,6 +117,31 @@ test("classifier: failure falls back to rules", async () => {
   }
 });
 
+test("scripts for a step: one question, and it names the chosen scripts", async () => {
+  const C = await lib("classifier/index.mjs");
+  const scripts = [
+    { name: "repo_map", purpose: "the tree" },
+    { name: "diff_summary", purpose: "what the branch changed" },
+    { name: "find_symbol", purpose: "where a name is defined and used" },
+  ];
+  const asked = [];
+  const c = {
+    enabled: () => true,
+    ask: async (feature, req) => {
+      asked.push({ feature, req });
+      return { answers: { fit: { type: "choice", choice: "scripts.1", probabilities: { "scripts.1": 0.8, "scripts.2": 0.7, "scripts.0": 0.1, none: 0.05 }, confidence: 0.9 } } };
+    },
+  };
+  const picked = await C.pickScripts(c, "show what the branch changed", scripts);
+  assert.equal(asked.length, 1);
+  assert.deepEqual(Object.keys(asked[0].req.questions), ["fit"]);
+  assert.deepEqual(Object.keys(asked[0].req.questions.fit.criteria), ["scripts.0", "scripts.1", "scripts.2", "none"]);
+  assert.deepEqual(picked.map((s) => s.name), ["diff_summary", "find_symbol"]);
+
+  const none = { enabled: () => true, ask: async () => ({ answers: { fit: { type: "choice", choice: "none", probabilities: { none: 0.9 }, confidence: 0.9 } } }) };
+  assert.deepEqual(await C.pickScripts(none, "write a letter", scripts), []);
+});
+
 test("bh knowledge ask: starts (or reuses) scout and writes brief/reply via fake hc", () => {
   writeTeam();
   const bin = join(tmp, "bin");

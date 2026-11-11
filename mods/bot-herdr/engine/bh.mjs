@@ -8,7 +8,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { argvOf, effortsOf, slug, withPrompt } from "../roster.js";
-import { APP_HOME, BH, DATA, UsageError, accessOf, bodyText, ensureDir, myAddress, need, parseArgs, projectRoot, readJson, readText, sh, store, writeJson, writeText } from "./lib/core.mjs";
+import { APP_HOME, BH, BOOLEANS, DATA, UsageError, accessOf, bodyText, ensureDir, myAddress, need, parseArgs, projectRoot, readJson, readText, sh, store, writeJson, writeText } from "./lib/core.mjs";
 import * as T from "./lib/tasks.mjs";
 import * as P from "./lib/plans.mjs";
 import * as K from "./lib/knowledge.mjs";
@@ -67,7 +67,9 @@ Used by the bot-herdr chat and Settings (--data takes URI-encoded JSON; agents c
   bh team save --data <roster>    bh config [--data <changes>]    bh questions    bh open <file>
   bh harness add <key> --name "<Name>" --run "<command and arguments>"
   bh access [standard|full] [--allow "npm test, git commit"]     how agents run, what they may do without asking
-  bh mockup <file.html> | --data <html>     bh clip     bh preview <image>…     pictures for the chat`;
+  bh mockup <file.html> | --data <html>     bh clip     bh preview <image>…     pictures for the chat
+  bh files [<path>] [--all]                 a folder's entries for the composer's file browser
+  bh models <harness> [--command <exe>] [--refresh]   the models that harness really offers`;
 
 /**
  * Settings that decide what agents may do are the person's: refused when a headless agent runs
@@ -120,7 +122,7 @@ async function main(argv) {
   const [cmd = "help", sub, ...more] = argv;
   const root = projectRoot();
   const c = C.makeClassifier();
-  const { flags, rest } = parseArgs(argv.slice(1), ["option", "kinds"]);
+  const { flags, rest } = parseArgs(argv.slice(1), ["option", "kinds"], [...BOOLEANS, "refresh"]);
   const args = rest.slice(1);
 
   switch (cmd) {
@@ -528,6 +530,30 @@ async function main(argv) {
       const [cmd, args2] = process.platform === "win32" ? ["cmd", ["/c", "start", "", file]] : process.platform === "darwin" ? ["open", [file]] : ["xdg-open", [file]];
       spawn(cmd, args2, { detached: true, stdio: "ignore", windowsHide: true }).unref();
       return out(flags, { ok: true }, "Opened.");
+    }
+
+    case "files": {
+      // The composer's file browser: one folder's entries. A failure is a sentence, not a stack.
+      const F = await import("./lib/files.mjs");
+      let listed;
+      try {
+        listed = F.listFolder(sub ?? "", { all: Boolean(flags.all) });
+      } catch (e) {
+        console.log(JSON.stringify({ error: e.message }));
+        process.exit(1);
+      }
+      return out(flags, listed, (r) => r.entries.map((e) => `${e.dir ? "d" : "-"} ${e.name}`).join("\n") || "(empty folder)");
+    }
+
+    case "models": {
+      // Settings' model picker: what the harness itself says it offers (models.js when it can't say).
+      const M = await import("./lib/models.mjs");
+      if (!sub || !M.HARNESSES[sub]) {
+        console.error(`bh models: no harness ${sub ?? ""}. Known: ${Object.keys(M.HARNESSES).join(", ")}.`);
+        process.exit(1);
+      }
+      const shown = await M.modelsFor(sub, { command: typeof flags.command === "string" ? flags.command : null, refresh: Boolean(flags.refresh) });
+      return out(flags, shown, (r) => [`${r.harness}: ${r.models.length} models, ${r.source} (${r.method})${r.cached ? ", cached" : ""}${r.error ? ` — ${r.error}` : ""}`, ...r.models.map((m) => `${m.id}${m.name && m.name !== m.id ? `  ${m.name}` : ""}${m.efforts?.length ? `  [${m.efforts.join(", ")}]` : ""}`)].join("\n"));
     }
 
     case "path":

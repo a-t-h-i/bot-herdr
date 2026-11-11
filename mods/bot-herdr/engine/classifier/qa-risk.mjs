@@ -310,6 +310,74 @@ const AREA_QUESTIONS = {
     isolation: "Does `diff` change isolation: which branch, worktree, sandbox or permissions an agent or process works within?",
     contract: "Does `diff` change a public contract — an API route, a protocol, a file or wire format, a command-line interface — that existing callers or saved data rely on?"
 };
+const HUNK_CHARS = 12_000;
+/** Where a changed line from this kind of file goes: source before the rest, tests last. */
+function kindOrder(kind) {
+    if (kind === "code") return 0;
+    if (kind === "docs" || kind === "generated" || kind === "asset") return 3;
+    if (kind === "test") return 2;
+    return 1;
+}
+/**
+ * The change as the model reads it: a one-line summary per file, then changed lines as far as
+ * HUNK_CHARS allows, source files first and tests last. Never the raw diff.
+ */
+export function diffPayload(input) {
+    const { files: parsed } = parseDiff(input.diff);
+    const rows = input.files.map((path)=>{
+        const change = parsed.get(path);
+        return {
+            path,
+            kind: fileKind(path, [
+                ...change?.added ?? [],
+                ...change?.removed ?? []
+            ]),
+            change,
+            added: change?.added.length ?? 0,
+            removed: change?.removed.length ?? 0
+        };
+    });
+    const summary = rows.map((row)=>`${row.path} (${row.kind}, +${row.added}/-${row.removed})`).join("\n");
+    const ordered = [...rows].sort((a, b)=>kindOrder(a.kind) - kindOrder(b.kind) || a.path.localeCompare(b.path));
+    const picked = [];
+    let left = HUNK_CHARS;
+    let leftOut = 0;
+    for (const row of ordered){
+        const lines = [
+            ...(row.change?.removed ?? []).map((text)=>`-${text}`),
+            ...(row.change?.added ?? []).map((text)=>`+${text}`)
+        ];
+        if (!lines.length) continue;
+        const head = `--- a/${row.path}\n+++ b/${row.path}`;
+        const room = left - head.length - 2;
+        if (room <= 0) {
+            leftOut += lines.length;
+            continue;
+        }
+        const kept = [];
+        let used = 0;
+        for (const text of lines){
+            if (used + text.length + 1 > room) break;
+            kept.push(text);
+            used += text.length + 1;
+        }
+        if (!kept.length) {
+            leftOut += lines.length;
+            continue;
+        }
+        picked.push([
+            head,
+            ...kept
+        ].join("\n"));
+        left -= head.length + used + 1;
+        leftOut += lines.length - kept.length;
+    }
+    const hunks = picked.join("\n") + (leftOut ? `\n… ${leftOut} changed lines left out (the summary above lists their files).` : "");
+    return {
+        summary,
+        hunks
+    };
+}
 export function qaRiskRequest(input, reading) {
     const questions = {
         risk: score("How much verification does the change in `diff` warrant, judged by how likely it is to break something that works, how far a break would spread and how hard it would be to notice?", RISK_LEVELS),
@@ -317,6 +385,7 @@ export function qaRiskRequest(input, reading) {
         tests_cover: noul("Is the behaviour `diff` changes covered by tests — ones it adds or updates, or ones that plainly exist for this code — so few or no new tests are needed?", "Yes: a regression in what it changes would already fail a test.", "No: a regression in what it changes could pass every existing test.")
     };
     for (const [area, text] of Object.entries(AREA_QUESTIONS))questions[`area_${area}`] = noul(text);
+    const change = diffPayload(input);
     return {
         state: {
             ...input.request ? {
@@ -324,7 +393,8 @@ export function qaRiskRequest(input, reading) {
             } : {},
             changed_files: clip(input.files.join("\n"), 4000),
             engine_signals: clip(reading.factors.join("\n"), 2000),
-            diff: clip(input.diff, 60_000)
+            diff_summary: clip(change.summary, 4000),
+            diff: change.hunks
         },
         questions
     };

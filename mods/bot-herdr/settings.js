@@ -13,12 +13,13 @@
 
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, TextareaState, Textarea } from "gpui-base";
-import { agents, panes, spaces, exec, settings, shared, setShared, knownAgents, notify } from "herdr";
-import { SIZE, ICON } from "./look.js";
+import { agents, panes, spaces, settings, shared, setShared, knownAgents, notify } from "herdr";
+import { SIZE, ICON, TYPE, SPACE, CONTROL, CHIP, MARK, PIP, HAIR, GLYPH, clickable, pressable, focusable } from "./look.js";
+import { stateView } from "./switch.js";
 import { colors } from "./theme.js";
-import { ROSTER_KEY, HEADLESS_KEY, HEADLESS, ROLES, roster, roleOf, argvOf, runnable, runningAs, effortsOf, modelsOf, harnessOf, blank, slug, parseModelList } from "./roster.js";
+import { ROSTER_KEY, HEADLESS_KEY, HEADLESS, ROLES, roster, roleOf, argvOf, runnable, runningAs, effortsOf, modelsOf, blank, slug } from "./roster.js";
 import { bh, bhJson, enc, currentSpace, ROUTING_KEY } from "./bh.js";
-import { PICKED, openPick } from "./pick.js";
+import { PICKED, REFRESH, openPick } from "./pick.js";
 import { withQuiet } from "./live.js";
 
 const GAP = 14; // between cards
@@ -26,6 +27,10 @@ const MAX = 1140; // the page's widest
 const MIN_CARD = 280; // a card's narrowest before the grid drops a column
 const PAD = 14; // inside a card
 const KNOB = 16;
+
+/** What `bh models` said, per harness, for this session: the picker asks a harness once. */
+const MODEL_CACHE = new Map();
+const NO_MODELS = "This harness could not be asked for its models; type a model id.";
 
 const FIELDS = [
   { key: "name", placeholder: "Name" },
@@ -65,8 +70,10 @@ export class Settings {
     this.inputs = {}; // agent id → { name, model, args, instructions }
     this.open = null; // "<id>:harness" or "<id>:model": the field whose list is open
     this.pickedAt = shared(PICKED)?.at ?? 0;
-    this.listed = {}; // harness → model ids its own list command printed (pi, Oh My Pi)
-    this.listing = {}; // harness → true while asking it
+    this.refreshedAt = shared(REFRESH)?.at ?? 0;
+    this.asking = {}; // harness → true while `bh models` runs for it
+    this.waiting = {}; // harness → what to do with the answer (reopen its list)
+    this.pickBounds = null; // where the open list's field sits, to reopen it after a refresh
     this.drag = null; // { id, bounds } while an effort slider is held
     this.width = 900;
     this.saveGen = 0;
@@ -141,7 +148,6 @@ export class Settings {
         this.known = [];
       }
       this.sync();
-      for (const h of new Set(this.list().map((a) => a.harness))) this.askModels(h, cx);
       // The bh tool starts agents by these commands: keep its copy current.
       const now = JSON.stringify(this.knownForBh());
       if (now !== this.knownSaved) {
@@ -282,7 +288,7 @@ export class Settings {
   }
 
   /** Opens a field's list as a popup under it; the pick comes back through shared state. */
-  openList(a, field, bounds) {
+  openList(a, field, bounds, cx) {
     const key = `${a.id}:${field}`;
     this.open = key;
     if (field === "harness") {
@@ -291,15 +297,37 @@ export class Settings {
       openPick({ key, bounds, selected: a.harness, options: shown.map((k) => ({ value: k.key, label: k.name, note: k.installed ? "" : "not installed" })) });
       return;
     }
-    const own = modelsOf(a.harness);
-    const listed = (this.listed[a.harness] ?? []).filter((id) => !own.some((m) => m.id === id));
-    const row = (m) => ({ value: m.id, label: m.name, note: m.name !== m.id ? m.id : "" });
-    const options = [{ value: "", label: "The harness's default" }, ...own.filter((m) => m.current).map(row)];
-    if (listed.length) options.push({ heading: own.length ? "Your providers" : "Models it lists" }, ...listed.map((id) => ({ value: id, label: id })));
-    const older = own.filter((m) => !m.current);
-    if (older.length) options.push({ heading: "Older" }, ...older.map(row));
+    // Model lists come from this machine (`bh models`), so a space on another machine types one.
+    if (currentSpace()?.machine) return;
+    this.pickBounds = bounds;
+    const name = this.harnessName(a.harness);
+    const got = MODEL_CACHE.get(a.harness);
+    if (!got) {
+      this.ask(a.harness, cx, { then: () => this.openList(a, "model", bounds, cx) });
+      openPick({ key, bounds, selected: a.model, loading: true, options: [] });
+      return;
+    }
+    openPick({
+      key,
+      bounds,
+      selected: a.model,
+      header: got.source === "harness" ? `From ${name}` : "Built-in list",
+      error: got.error ?? null,
+      refreshable: true,
+      options: this.modelOptions(a, got),
+    });
+  }
+
+  harnessName(key) {
+    return this.known.find((k) => k.key === key)?.name ?? key;
+  }
+
+  /** The list the popup shows: the default, what the harness reports, and a typed id. */
+  modelOptions(a, got) {
+    const row = (m) => ({ value: m.id, label: m.name ?? m.id, note: m.name && m.name !== m.id ? m.id : "" });
+    const options = [{ value: "", label: "The harness's default" }, ...(got.models ?? []).map(row)];
     if (a.model && !options.some((o) => o.value === a.model)) options.splice(1, 0, { value: a.model, label: a.model, note: "typed" });
-    openPick({ key, bounds, selected: a.model, options });
+    return options;
   }
 
   /** The classifier's model: one of an installed harness's models, or a kind that needs none. */
@@ -338,27 +366,53 @@ export class Settings {
     if (field === "model") this.pickModel(a, picked.value, cx);
   }
 
-  /** pi and Oh My Pi print their models (every provider you set up): ask once per harness. */
-  askModels(harness, cx) {
-    const h = harnessOf(harness);
-    if (!h.lists || this.listed[harness] || this.listing[harness]) return;
+  /** Asks `bh models` for a harness (once per session, or again with --refresh); waiters run after. */
+  ask(harness, cx, { refresh = false, then = null } = {}) {
+    if (then) (this.waiting[harness] ??= []).push(then);
+    if (this.asking[harness]) return;
+    this.asking[harness] = true;
     const run = this.known.find((k) => k.key === harness)?.run ?? [harness];
-    this.listing[harness] = true;
     cx.spawn(async (cx) => {
-      try {
-        const r = await exec(run[0], [...run.slice(1), ...h.lists], { timeout: 20000, on: currentSpace()?.machine ?? null });
-        this.listed[harness] = parseModelList(`${r.stdout}\n${r.stderr}`);
-      } catch {
-        this.listed[harness] = [];
-      }
-      this.listing[harness] = false;
+      const got = await this.fetchModels(harness, run[0], refresh);
+      MODEL_CACHE.set(harness, got);
+      this.asking[harness] = false;
+      const waiting = this.waiting[harness] ?? [];
+      delete this.waiting[harness];
+      for (const w of waiting) w(got);
       cx.notify();
     });
   }
 
+  /** What `bh models` printed, or the shape of a failure: no models and one plain sentence. */
+  async fetchModels(harness, command, refresh) {
+    const args = ["models", harness];
+    if (command) args.push("--command", command);
+    if (refresh) args.push("--refresh");
+    const got = await bhJson(args, { timeout: 60000 });
+    return got ?? { harness, source: "builtin", method: "none", models: [], error: NO_MODELS };
+  }
+
+  /** The refresh button in the open list: ask again, then show the new list under the same field. */
+  applyRefresh(cx) {
+    const asked = shared(REFRESH);
+    this.refreshedAt = asked?.at ?? 0;
+    const [id, field] = String(asked?.key ?? "").split(":");
+    const a = this.list().find((x) => x.id === id);
+    if (!a || field !== "model" || currentSpace()?.machine) return;
+    this.open = `${a.id}:model`;
+    this.ask(a.harness, cx, { refresh: true, then: () => this.openList(a, "model", this.pickBounds, cx) });
+  }
+
+  /** The effort levels the model reports, else what the harness takes (roster.js). */
+  effortsFor(harness, model) {
+    const listed = MODEL_CACHE.get(harness)?.models?.find((m) => m.id === model);
+    if (listed?.efforts?.length) return listed.efforts;
+    return effortsOf(harness, model);
+  }
+
   pickModel(a, id, cx) {
     this.inputs[a.id]?.model.set_value(id);
-    const efforts = effortsOf(a.harness, id);
+    const efforts = this.effortsFor(a.harness, id);
     this.change(a.id, { model: id, effort: efforts.includes(a.effort) ? a.effort : "" }, cx);
     this.open = null;
   }
@@ -370,6 +424,7 @@ export class Settings {
     this.inputs[a.id]?.model.set_value(model);
     this.change(a.id, { harness: key, model, effort: effortsOf(key, model).includes(a.effort) ? a.effort : "" }, cx);
     this.open = null;
+    if (!currentSpace()?.machine) this.ask(key, cx);
   }
 
   addHarness(cx) {
@@ -405,6 +460,7 @@ export class Settings {
 
   render(cx) {
     if ((shared(PICKED)?.at ?? 0) > this.pickedAt) cx.timer.after(1, (cx) => this.applyPick(cx));
+    if ((shared(REFRESH)?.at ?? 0) > this.refreshedAt) cx.timer.after(1, (cx) => this.applyRefresh(cx));
     const c = colors();
     const list = this.list().filter((a) => this.inputs[a.id]);
     const content = Math.max(MIN_CARD, Math.min(MAX, this.width - SIZE.gutter * 2));
@@ -435,24 +491,24 @@ export class Settings {
             v_flex()
               .flex_none()
               .w(content)
-              .py(24)
+              .py(SPACE[5])
               .gap(GAP)
               .child(this.heading(c, "Agents", "Each agent runs on a harness with a model and an effort level. The Orchestrator gets every message that names no one and hands work to the others; reach any of them with @name. A change applies to an agent's next message when it runs headless, or the next time it starts."))
-              .when(Boolean(this.problem), (el) => el.child(div().text_size(12.5).text_color(c.danger).child(this.problem)))
+              .when(Boolean(this.problem), (el) => el.child(div().text_size(TYPE.sm).text_color(c.danger).child(this.problem)))
               .children(rows.map((row, r) =>
                 h_flex().id(`bh-row-${r}`).flex_none().gap(GAP).items_start().children(row.map((a) => this.card(c, a, cardW, running, space)))))
               .child(
                 h_flex()
-                  .gap(12)
+                  .gap(SPACE[4])
                   .items_center()
                   .child(this.button(c, "bh-add", "plus", "Add agent", (_e, cx) => this.add(cx)))
-                  .child(div().text_size(12).text_color(c.faint).child("Your own agents sit beside the six: give one a name, a harness and a model.")),
+                  .child(div().text_size(TYPE.sm).text_color(c.faint).child("Your own agents sit beside the six: give one a name, a harness and a model.")),
               )
-              .child(div().h(14))
+              .child(div().h(MARK))
               .child(this.accessCard(c))
-              .child(div().h(14))
+              .child(div().h(MARK))
               .child(this.harnesses(c))
-              .child(div().h(14))
+              .child(div().h(MARK))
               .child(this.classifierCard(c)),
           ),
       );
@@ -460,17 +516,17 @@ export class Settings {
 
   heading(c, title, about) {
     return v_flex()
-      .gap(4)
-      .child(div().text_size(19).font_semibold().child(title))
-      .when(Boolean(about), (el) => el.child(div().text_size(13).text_color(c.muted).child(about)));
+      .gap(SPACE[2])
+      .child(div().text_size(TYPE.xl).font_semibold().child(title))
+      .when(Boolean(about), (el) => el.child(div().text_size(TYPE.md).text_color(c.muted).child(about)));
   }
 
   label(c, text, right = null) {
     return h_flex()
-      .h(18)
+      .h(CHIP)
       .items_center()
       .justify_between()
-      .text_size(11.5)
+      .text_size(TYPE.xs)
       .font_medium()
       .text_color(c.muted)
       .child(div().child(text))
@@ -484,7 +540,7 @@ export class Settings {
     const live = runningAs(a, running, space);
     const inner = width - PAD * 2;
     const harnessName = this.known.find((k) => k.key === a.harness)?.name ?? a.harness;
-    const efforts = effortsOf(a.harness, a.model);
+    const efforts = this.effortsFor(a.harness, a.model);
     const stops = ["", ...efforts];
     const state = ok ? (live ? "running" : "") : "not installed";
     return v_flex()
@@ -492,37 +548,38 @@ export class Settings {
       .flex_none()
       .w(width)
       .p(PAD)
-      .gap(10)
+      .gap(SPACE[3])
       .rounded(SIZE.radius)
       .bg(c.fill)
       .border_1()
       .border_color(c.edge)
       .child(
         h_flex()
-          .h(28)
-          .gap(8)
+          .h(CONTROL)
+          .gap(SPACE[3])
           .items_center()
           .child(a.role === "custom"
-            ? this.field(c, inputs.name, { bold: true })
-            : div().flex_1().min_w(0).truncate().text_size(15).font_semibold().child(a.name))
-          .when(Boolean(state), (el) => el.child(div().flex_none().text_size(11.5).text_color(ok ? c.accent : c.danger).child(state)))
+            ? this.field(c, inputs.name)
+            : div().flex_1().min_w(0).truncate().text_size(TYPE.lg).font_semibold().child(a.name))
+          .when(Boolean(state), (el) => el.child(div().flex_none().text_size(TYPE.xs).text_color(ok ? c.accent : c.danger).child(state)))
           .when(a.role === "custom", (el) => el.child(this.iconButton(c, `bh-del-${a.id}`, "x", (_e, cx) => this.remove(a.id, cx), true))),
       )
-      .child(div().min_h(34).text_size(12.5).text_color(c.muted).child(role?.does ?? "An agent you added. It works on what you send it with @name."))
-      .child(v_flex().gap(5).child(this.label(c, "Harness")).child(this.select(c, a, "harness", harnessName, inner)))
-      .child(v_flex().gap(5).child(this.label(c, "Model")).child(this.modelField(c, a, inputs.model, inner)))
-      .child(v_flex().gap(5)
+      .child(div().min_h(34).text_size(TYPE.sm).text_color(c.muted).child(role?.does ?? "An agent you added. It works on what you send it with @name."))
+      .child(v_flex().gap(SPACE[2]).child(this.label(c, "Harness")).child(this.select(c, a, "harness", harnessName, inner)))
+      .child(v_flex().gap(SPACE[2]).child(this.label(c, "Model")).child(this.modelField(c, a, inputs.model, inner))
+        .when(Boolean(currentSpace()?.machine), (el) => el.child(div().text_size(TYPE.xs).text_color(c.faint).child("Model lists come from this machine; type a model id for this space."))))
+      .child(v_flex().gap(SPACE[2])
         .child(this.label(c, "Effort", efforts.length ? (a.effort || "Default") : null))
         .child(efforts.length
           ? this.slider(c, a, stops, inner)
-          : div().text_size(12).text_color(c.faint).child("No effort flag we know for this harness; use extra arguments.")))
-      .child(v_flex().gap(5).child(this.label(c, "Extra arguments")).child(this.field(c, inputs.args)))
-      .child(v_flex().gap(5).child(this.label(c, "Instructions")).child(this.textarea(c, inputs.instructions)))
+          : div().text_size(TYPE.sm).text_color(c.faint).child("No effort flag we know for this harness; use extra arguments.")))
+      .child(v_flex().gap(SPACE[2]).child(this.label(c, "Extra arguments")).child(this.field(c, inputs.args)))
+      .child(v_flex().gap(SPACE[2]).child(this.label(c, "Instructions")).child(this.textarea(c, inputs.instructions)))
       .child(
         div()
-          .pt(2)
+          .pt(SPACE[1])
           .truncate()
-          .text_size(11.5)
+          .text_size(TYPE.xs)
           .text_color(c.faint)
           .child(`${a.lead ? "Plain messages" : `@${slug(a.name)}`} · ${argvOf(a, this.known).join(" ")}`),
       );
@@ -531,88 +588,95 @@ export class Settings {
   /** A multi-line field, framed like field(). */
   textarea(c, state) {
     return div()
-      .px(10)
-      .py(6)
+      .px(SPACE[3])
+      .py(SPACE[3])
       .rounded(SIZE.control)
       .bg(c.ground)
       .border_1()
       .border_color(c.edge)
-      .child(Textarea.new(state).w_full().text_size(13).text_color(c.ink));
+      .child(Textarea.new(state).w_full().text_size(TYPE.md).text_color(c.ink));
   }
 
-  field(c, state, { bold = false } = {}) {
+  field(c, state) {
     return div()
       .flex_1()
       .min_w(0)
-      .h(32)
-      .px(10)
+      .h(CONTROL)
+      .px(SPACE[3])
       .flex()
       .items_center()
       .rounded(SIZE.control)
       .bg(c.ground)
       .border_1()
       .border_color(c.edge)
-      .child(Input.new(state).w_full().h_full().text_size(bold ? 14 : 13).text_color(c.ink));
+      .child(Input.new(state).w_full().h_full().text_size(TYPE.md).text_color(c.ink));
   }
 
   select(c, a, field, value, width) {
     const open = false;
-    return h_flex()
-      .id(`bh-sel-${a.id}-${field}`)
-      .w(width)
-      .h(32)
-      .px(10)
-      .gap(8)
-      .items_center()
-      .rounded(SIZE.control)
-      .bg(c.ground)
-      .border_1()
-      .border_color(open ? c.accent : c.edge)
-      .cursor_pointer()
-      .hover((s) => s.border_color(c.accent))
-      .on_mouse_down("left", (e, cx) => {
-        cx.stop_propagation();
-        this.openList(a, field, e.bounds);
-        cx.notify();
-      })
-      .child(div().flex_1().min_w(0).truncate().text_size(13).child(value))
-      .child(svg(ICON("chevron-down")).size(14).text_color(c.muted));
+    return focusable(
+      pressable(
+        h_flex()
+          .w(width)
+          .h(CONTROL)
+          .px(SPACE[3])
+          .gap(SPACE[3])
+          .items_center()
+          .rounded(SIZE.control)
+          .bg(c.ground)
+          .border_1()
+          .border_color(open ? c.accent : c.edge)
+          .hover((s) => s.border_color(c.accent))
+          .on_mouse_down("left", (e, cx) => {
+            cx.stop_propagation();
+            this.openList(a, field, e.bounds, cx);
+            cx.notify();
+          })
+          .child(div().flex_1().min_w(0).truncate().text_size(TYPE.md).child(value))
+          .child(svg(ICON("chevron-down")).size(MARK).text_color(c.muted)),
+      ),
+      `bh-sel-${a.id}-${field}`,
+      c,
+    );
   }
 
   modelField(c, a, state, inner) {
     const open = false; // the list is a popup now; the field stays as it is
+    const remote = Boolean(currentSpace()?.machine); //  asks this machine only
     return h_flex()
-      .h(32)
-      .pl(10)
-      .pr(4)
-      .gap(4)
+      .h(CONTROL)
+      .pl(SPACE[3])
+      .pr(SPACE[2])
+      .gap(SPACE[2])
       .items_center()
       .rounded(SIZE.control)
       .bg(c.ground)
       .border_1()
       .border_color(open ? c.accent : c.edge)
-      .child(div().flex_1().min_w(0).h_full().child(Input.new(state).w_full().h_full().text_size(13).text_color(c.ink)))
-      .child(
-        div()
-          .id(`bh-models-${a.id}`)
-          .size(24)
-          .flex_none()
-          .flex()
-          .items_center()
-          .justify_center()
-          .rounded(6)
-          .cursor_pointer()
-          .hover((s) => s.bg(c.hover))
-          .on_mouse_down("left", (e, cx) => {
-            cx.stop_propagation();
-            // Under the whole field, not just the arrow.
-            const b = e.bounds;
-            const field = b ? { x: b.x - (inner - 28) * (Number(settings().zoom) || 1), y: b.y - 4, width: inner * (Number(settings().zoom) || 1), height: b.height + 8 } : null;
-            this.openList(a, "model", field);
-            cx.notify();
-          })
-          .child(svg(ICON("chevron-down")).size(14).text_color(c.muted)),
-      );
+      .child(div().flex_1().min_w(0).h_full().child(Input.new(state).w_full().h_full().text_size(TYPE.md).text_color(c.ink)))
+      .when(!remote, (el) => el.child(focusable(
+        pressable(
+          div()
+            .size(CHIP)
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(SIZE.nested)
+            .hover((s) => s.bg(c.hover))
+            .on_mouse_down("left", (e, cx) => {
+              cx.stop_propagation();
+              // Under the whole field, not just the arrow.
+              const b = e.bounds;
+              const field = b ? { x: b.x - (inner - 28) * (Number(settings().zoom) || 1), y: b.y - 4, width: inner * (Number(settings().zoom) || 1), height: b.height + 8 } : null;
+              this.openList(a, "model", field, cx);
+              cx.notify();
+            })
+            .child(svg(ICON("chevron-down")).size(MARK).text_color(c.muted)),
+        ),
+        `bh-models-${a.id}`,
+        c,
+      )));
   }
 
   slider(c, a, stops, width) {
@@ -620,57 +684,61 @@ export class Settings {
     const at = Math.max(0, stops.indexOf(a.effort));
     const span = width - KNOB;
     const x = (i) => KNOB / 2 + (n > 1 ? (span * i) / (n - 1) : 0);
-    return div()
-      .id(`bh-eff-${a.id}`)
-      .relative()
-      .w(width)
-      .h(26)
-      .cursor_pointer()
-      .on_mouse_down("left", (e, cx) => {
-        cx.stop_propagation();
-        this.drag = { id: a.id, bounds: e.bounds };
-        this.slide(a, stops, e, cx);
-      })
-      .on_mouse_move((e, cx) => {
-        if (this.drag?.id === a.id) this.slide(a, stops, e, cx);
-      })
-      .on_mouse_up("left", (_e, cx) => {
-        this.drag = null;
-        cx.notify();
-      })
-      .on_hover((hovered, cx) => {
-        if (!hovered && this.drag?.id === a.id) {
-          this.drag = null;
-          cx.notify();
-        }
-      })
-      .child(div().absolute().left(KNOB / 2).w(span).top(11).h(4).rounded(2).bg(c.well))
-      .child(div().absolute().left(KNOB / 2).w(x(at) - KNOB / 2).top(11).h(4).rounded(2).bg(c.accent))
-      .children(stops.map((_s, i) => div().absolute().left(x(i) - 2).top(11).size(4).rounded(2).bg(i <= at ? c.accentInk : c.faint).opacity(i === at ? 0 : 0.7)))
-      .child(
+    return focusable(
+      pressable(
         div()
-          .absolute()
-          .left(x(at) - KNOB / 2)
-          .top(5)
-          .size(KNOB)
-          .rounded(KNOB / 2)
-          .bg(c.fill)
-          .border(2)
-          .border_color(c.accent),
-      );
+          .relative()
+          .w(width)
+          .h(CONTROL)
+          .on_mouse_down("left", (e, cx) => {
+            cx.stop_propagation();
+            this.drag = { id: a.id, bounds: e.bounds };
+            this.slide(a, stops, e, cx);
+          })
+          .on_mouse_move((e, cx) => {
+            if (this.drag?.id === a.id) this.slide(a, stops, e, cx);
+          })
+          .on_mouse_up("left", (_e, cx) => {
+            this.drag = null;
+            cx.notify();
+          })
+          .on_hover((hovered, cx) => {
+            if (!hovered && this.drag?.id === a.id) {
+              this.drag = null;
+              cx.notify();
+            }
+          })
+          .child(div().absolute().left(KNOB / 2).w(span).top(SPACE[4]).h(SPACE[2]).rounded(PIP).bg(c.well))
+          .child(div().absolute().left(KNOB / 2).w(x(at) - KNOB / 2).top(SPACE[4]).h(SPACE[2]).rounded(PIP).bg(c.accent))
+          .children(stops.map((_s, i) => div().absolute().left(x(i) - SPACE[1]).top(SPACE[4]).size(SPACE[2]).rounded(PIP).bg(i <= at ? c.accentInk : c.faint).opacity(i === at ? 0 : 0.7)))
+          .child(
+            div()
+              .absolute()
+              .left(x(at) - KNOB / 2)
+              .top(SPACE[2])
+              .size(KNOB)
+              .rounded_full()
+              .bg(c.fill)
+              .border(2)
+              .border_color(c.accent),
+          ),
+      ),
+      `bh-eff-${a.id}`,
+      c,
+    );
   }
 
   harnesses(c) {
     const installed = this.known.filter((k) => k.installed).map((k) => k.name);
     const f = this.harnessForm;
-    const col = (label, state, w) => v_flex().gap(5).w(w).child(this.label(c, label)).child(this.field(c, state));
+    const col = (label, state, w) => v_flex().gap(SPACE[2]).w(w).child(this.label(c, label)).child(this.field(c, state));
     return v_flex()
       .gap(GAP)
       .child(this.heading(c, "Harnesses", installed.length ? `herdr found ${installed.join(", ")} on your PATH. Add one it doesn't know by the command that starts it; models and effort for it then go in each agent's card.` : "herdr found no agent harness on your PATH yet. Add one by the command that starts it."))
       .child(
         h_flex()
           .p(PAD)
-          .gap(10)
+          .gap(SPACE[3])
           .items_end()
           .rounded(SIZE.radius)
           .bg(c.fill)
@@ -678,29 +746,29 @@ export class Settings {
           .border_color(c.edge)
           .child(col("Key", f.key, 130))
           .child(col("Name", f.name, 180))
-          .child(v_flex().flex_1().min_w(0).gap(5).child(this.label(c, "Command")).child(this.field(c, f.run)))
+          .child(v_flex().flex_1().min_w(0).gap(SPACE[2]).child(this.label(c, "Command")).child(this.field(c, f.run)))
           .child(this.button(c, "bh-add-harness", "plus", "Add harness", (_e, cx) => this.addHarness(cx))),
       );
   }
 
   accessCard(c) {
     const k = this.access;
-    if (!k) return this.heading(c, "How agents run", "Loading… (it needs node on your PATH).");
+    if (!k) return stateView(c, { id: "bh-access-loading", title: "Loading…", line: "It needs node on your PATH.", loading: true });
     const on = k.headless !== false;
     const full = k.access === "full";
     const quiet = this.known.filter((h) => h.installed && HEADLESS[h.key]).map((h) => h.name);
     const row = (label, chips, about, danger = false) => v_flex()
-      .gap(6)
+      .gap(SPACE[3])
       .child(this.label(c, label))
-      .child(h_flex().flex_wrap().gap(6).children(chips))
-      .child(div().text_size(12).text_color(danger ? c.danger : c.muted).child(about));
+      .child(h_flex().flex_wrap().gap(SPACE[3]).children(chips))
+      .child(div().text_size(TYPE.sm).text_color(danger ? c.danger : c.muted).child(about));
     return v_flex()
       .gap(GAP)
       .child(this.heading(c, "How agents run", "Headless, each message runs the harness on its own and the answer comes straight back to the chat. The agent's terminal still shows what it does, and /cli there opens the full CLI on the same conversation."))
       .child(
         v_flex()
           .p(PAD)
-          .gap(16)
+          .gap(SPACE[4])
           .rounded(SIZE.radius)
           .bg(c.fill)
           .border_1()
@@ -719,10 +787,10 @@ export class Settings {
             : "Agents edit files in the project, read and search, run bh (which runs the project's lint, typecheck and tests) and hc, and read git. Anything else is refused and the agent tells you what it needed.", full))
           .when(!full, (el) => el.child(
             v_flex()
-              .gap(5)
+              .gap(SPACE[2])
               .child(this.label(c, "Also allow these commands"))
               .child(this.field(c, this.allowInput))
-              .child(div().text_size(11.5).text_color(c.faint).child("Comma separated; each allows that command and anything after it. Claude Code, Gemini, opencode and Qwen Code follow this list. Codex runs commands in its workspace sandbox; pi and Oh My Pi have no permission system and run as they would in a terminal.")),
+              .child(div().text_size(TYPE.xs).text_color(c.faint).child("Comma separated; each allows that command and anything after it. Claude Code, Gemini, opencode and Qwen Code follow this list. Codex runs commands in its workspace sandbox; pi and Oh My Pi have no permission system and run as they would in a terminal.")),
           ))
           .child(row("Git isolation", ["off", "branch", "worktree"].map((m) =>
             this.chip(c, `bh-git-${m}`, { off: "Off", branch: "Branch", worktree: "Worktree" }[m], (k.git ?? "off") === m, (_e, cx) => this.setAccess({ git: m }, cx))),
@@ -732,7 +800,7 @@ export class Settings {
 
   classifierCard(c) {
     const k = this.classifier;
-    if (!k) return this.heading(c, "Classifier", "Loading… (it needs node on your PATH).");
+    if (!k) return stateView(c, { id: "bh-cls-loading", title: "Loading…", line: "It needs node on your PATH.", loading: true });
     const hosts = k.hosts ?? {};
     const using = hosts[k.using]?.label ?? k.using;
     const kind = k.harness ? null : kindOf(k.kind);
@@ -754,138 +822,153 @@ export class Settings {
       .child(
         v_flex()
           .p(PAD)
-          .gap(14)
+          .gap(SPACE[4])
           .rounded(SIZE.radius)
           .bg(c.fill)
           .border_1()
           .border_color(c.edge)
           .child(
             h_flex()
-              .gap(10)
+              .gap(SPACE[3])
               .items_center()
               .child(this.toggle(c, "bh-cls-on", k.enabled, (_e, cx) => this.config({ enabled: !k.enabled }, cx)))
-              .child(div().text_size(13).text_color(k.enabled && !ready ? c.danger : c.ink).child(status)),
+              .child(div().text_size(TYPE.md).text_color(k.enabled && !ready ? c.danger : c.ink).child(status)),
           )
-          .child(v_flex().gap(5).child(this.label(c, "Model", "from the harnesses installed here")).child(
-            h_flex()
-              .id("bh-cls-model")
-              .w(360)
-              .h(32)
-              .px(10)
-              .gap(8)
-              .items_center()
-              .rounded(SIZE.control)
-              .bg(c.ground)
-              .border_1()
-              .border_color(this.open === "classifier:model" ? c.accent : c.edge)
-              .cursor_pointer()
-              .hover((s) => s.border_color(c.accent))
-              .on_mouse_down("left", (e, cx) => {
-                cx.stop_propagation();
-                this.openClassifierModels(e.bounds);
-                cx.notify();
-              })
-              .child(div().flex_1().min_w(0).truncate().text_size(13).child(picked))
-              .child(svg(ICON("chevron-down")).size(14).text_color(c.muted)),
-          ))
+          .child(v_flex().gap(SPACE[2]).child(this.label(c, "Model", "from the harnesses installed here")).child(focusable(
+            pressable(
+              h_flex()
+                .w(360)
+                .h(CONTROL)
+                .px(SPACE[3])
+                .gap(SPACE[3])
+                .items_center()
+                .rounded(SIZE.control)
+                .bg(c.ground)
+                .border_1()
+                .border_color(this.open === "classifier:model" ? c.accent : c.edge)
+                .hover((s) => s.border_color(c.accent))
+                .on_mouse_down("left", (e, cx) => {
+                  cx.stop_propagation();
+                  this.openClassifierModels(e.bounds);
+                  cx.notify();
+                })
+                .child(div().flex_1().min_w(0).truncate().text_size(TYPE.md).child(picked))
+                .child(svg(ICON("chevron-down")).size(MARK).text_color(c.muted)),
+            ),
+            "bh-cls-model",
+            c,
+          )))
           .when(!k.harness && !kind, (el) => el
-            .child(v_flex().gap(5).child(this.label(c, "Host")).child(
-              h_flex().flex_wrap().gap(6).children(HOST_ORDER.filter((h) => h === "auto" || hosts[h]).map((h) =>
+            .child(v_flex().gap(SPACE[2]).child(this.label(c, "Host")).child(
+              h_flex().flex_wrap().gap(SPACE[3]).children(HOST_ORDER.filter((h) => h === "auto" || hosts[h]).map((h) =>
                 this.chip(c, `bh-host-${h}`, h === "auto" ? "Auto" : hosts[h].label, k.host === h, (_e, cx) => this.config({ host: h }, cx)))),
             )))
           .when(!k.harness && !rules, (el) => el
             .child(
               h_flex()
-                .gap(10)
+                .gap(SPACE[3])
                 .items_end()
-                .child(v_flex().flex_1().min_w(0).gap(5).child(this.label(c, "Key", k.key ? "set" : "not set")).child(this.field(c, this.keyInput)))
-                .child(v_flex().flex_1().min_w(0).gap(5).child(this.label(c, "API model")).child(this.field(c, this.modelInput))),
+                .child(v_flex().flex_1().min_w(0).gap(SPACE[2]).child(this.label(c, "Key", k.key ? "set" : "not set")).child(this.field(c, this.keyInput)))
+                .child(v_flex().flex_1().min_w(0).gap(SPACE[2]).child(this.label(c, "API model")).child(this.field(c, this.modelInput))),
             ))
-          .when(kind?.kind === "clef", (el) => el.child(v_flex().gap(5).child(this.label(c, "Account id")).child(this.field(c, this.accountIdInput))))
-          .when(kind?.kind === "laya", (el) => el.child(v_flex().gap(5).child(this.label(c, "Base URL")).child(this.field(c, this.baseUrlInput))))
-          .when(Boolean(k.harness), (el) => el.child(div().text_size(11.5).text_color(c.faint).child("Each call starts the harness once, so a routed message waits a few seconds longer than with the API. It uses the harness's own sign-in.")))
-          .child(v_flex().gap(5).child(this.label(c, "Use it for")).child(
-            h_flex().flex_wrap().gap(6).children(FEATURES.map((f) =>
+          .when(kind?.kind === "clef", (el) => el.child(v_flex().gap(SPACE[2]).child(this.label(c, "Account id")).child(this.field(c, this.accountIdInput))))
+          .when(kind?.kind === "laya", (el) => el.child(v_flex().gap(SPACE[2]).child(this.label(c, "Base URL")).child(this.field(c, this.baseUrlInput))))
+          .when(Boolean(k.harness), (el) => el.child(div().text_size(TYPE.xs).text_color(c.faint).child("Each call starts the harness once, so a routed message waits a few seconds longer than with the API. It uses the harness's own sign-in.")))
+          .child(v_flex().gap(SPACE[2]).child(this.label(c, "Use it for")).child(
+            h_flex().flex_wrap().gap(SPACE[3]).children(FEATURES.map((f) =>
               this.chip(c, `bh-feat-${f.key}`, f.label, k.features?.[f.key] !== false, (_e, cx) => this.config({ features: { [f.key]: k.features?.[f.key] === false } }, cx)))),
           ))
           .child(
-            h_flex().gap(10).children(THRESHOLDS.map((t) =>
-              v_flex().flex_1().min_w(0).gap(5).child(this.label(c, t.label)).child(div().w(84).child(this.field(c, this.thresholdInputs[t.key]))))),
+            h_flex().gap(SPACE[3]).children(THRESHOLDS.map((t) =>
+              v_flex().flex_1().min_w(0).gap(SPACE[2]).child(this.label(c, t.label)).child(div().w(84).child(this.field(c, this.thresholdInputs[t.key]))))),
           )
-          .child(div().text_size(11.5).text_color(c.faint).child("Thresholds are the classifier's confidence, 0 to 1. The effort set on each agent is the ceiling: routing only lowers it.")),
+          .child(div().text_size(TYPE.xs).text_color(c.faint).child("Thresholds are the classifier's confidence, 0 to 1. The effort set on each agent is the ceiling: routing only lowers it.")),
       );
   }
 
   toggle(c, id, on, onClick) {
-    return div()
-      .id(id)
-      .relative()
-      .flex_none()
-      .w(36)
-      .h(20)
-      .rounded(10)
-      .cursor_pointer()
-      .bg(on ? c.accent : c.well)
-      .border_1()
-      .border_color(on ? c.accentLip : c.edge)
-      .on_click(onClick)
-      .child(div().absolute().top(1).left(on ? 17 : 1).size(16).rounded(8).bg(c.fill));
+    return focusable(
+      pressable(
+        div()
+          .relative()
+          .flex_none()
+          .w(CONTROL + SPACE[3])
+          .h(CHIP)
+          .rounded(SIZE.control)
+          .bg(on ? c.accent : c.well)
+          .border_1()
+          .border_color(on ? c.accentLip : c.edge)
+          .hover((s) => s.opacity(0.9))
+          .on_click(onClick)
+          .child(div().absolute().top(HAIR).left(on ? CONTROL - SPACE[3] + HAIR : HAIR).size(GLYPH.lg).rounded(SIZE.nested).bg(c.fill)),
+      ),
+      id,
+      c,
+    );
   }
 
   chip(c, id, label, on, onClick) {
-    return div()
-      .id(id)
-      .flex_none()
-      .h(SIZE.chip)
-      .px(10)
-      .flex()
-      .items_center()
-      .rounded(SIZE.nested)
-      .border_1()
-      .text_size(12.5)
-      .cursor_pointer()
-      .when(on, (el) => el.bg(c.well).border_color(c.accent).text_color(c.ink).font_medium())
-      .when(!on, (el) => el.border_color(c.edge).text_color(c.muted).hover((s) => s.bg(c.hover).text_color(c.ink)))
-      .on_click(onClick)
-      .child(label);
+    return clickable(
+      div()
+        .flex_none()
+        .h(CHIP)
+        .px(SPACE[3])
+        .flex()
+        .items_center()
+        .rounded(SIZE.nested)
+        .border_1()
+        .text_size(TYPE.sm)
+        .when(on, (el) => el.bg(c.well).border_color(c.accent).text_color(c.ink).font_medium())
+        .when(!on, (el) => el.border_color(c.edge).text_color(c.muted).hover((s) => s.bg(c.hover).text_color(c.ink)))
+        .on_click(onClick)
+        .child(label),
+      c,
+      id,
+    );
   }
 
   iconButton(c, id, icon, onClick, danger = false) {
-    return div()
-      .id(id)
-      .size(26)
-      .flex_none()
-      .flex()
-      .items_center()
-      .justify_center()
-      .rounded(SIZE.nested)
-      .text_color(c.muted)
-      .cursor_pointer()
-      .hover((s) => s.bg(c.hover).text_color(danger ? c.danger : c.ink))
-      .on_click(onClick)
-      .child(svg(ICON(icon)).size(14));
+    return focusable(
+      pressable(
+        div()
+          .size(CONTROL)
+          .flex_none()
+          .flex()
+          .items_center()
+          .justify_center()
+          .rounded(SIZE.nested)
+          .text_color(c.muted)
+          .hover((s) => s.bg(c.hover).text_color(danger ? c.danger : c.ink))
+          .on_click(onClick)
+          .child(svg(ICON(icon)).size(MARK)),
+      ),
+      id,
+      c,
+    );
   }
 
   button(c, id, icon, label, onClick) {
-    return h_flex()
-      .id(id)
-      .flex_none()
-      .h(32)
-      .px(14)
-      .gap(6)
-      .items_center()
-      .rounded(SIZE.control)
-      .bg(c.accent)
-      .border_b(1)
-      .border_color(c.accentLip)
-      .text_size(13)
-      .font_medium()
-      .text_color(c.accentInk)
-      .cursor_pointer()
-      .hover((s) => s.opacity(0.92))
-      .on_click(onClick)
-      .when(Boolean(icon), (el) => el.child(svg(ICON(icon)).size(14).text_color(c.accentInk)))
-      .child(label);
+    return clickable(
+      h_flex()
+        .flex_none()
+        .h(CONTROL)
+        .px(SPACE[4])
+        .gap(SPACE[3])
+        .items_center()
+        .rounded(SIZE.control)
+        .bg(c.accent)
+        .border_b(1)
+        .border_color(c.accentLip)
+        .text_size(TYPE.md)
+        .font_medium()
+        .text_color(c.accentInk)
+        .hover((s) => s.opacity(0.92))
+        .on_click(onClick)
+        .when(Boolean(icon), (el) => el.child(svg(ICON(icon)).size(MARK).text_color(c.accentInk)))
+        .child(label),
+      c,
+      id,
+    );
   }
 }
 

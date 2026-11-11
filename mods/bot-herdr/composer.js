@@ -22,13 +22,14 @@
 // back in when they go.
 
 import { div, svg, image } from "gpui-kit";
-import { v_flex, h_flex, TextareaState, Textarea } from "gpui-base";
+import { v_flex, h_flex, TextareaState, Textarea, InputState, Input } from "gpui-base";
 import {
-  agents as reported, panes, terminals, spaces, focused, settings, run, hc, exec, knownAgents, pickFolder, home,
-  shared, appHome, window as appWindow,
+  agents as reported, panes, terminals, spaces, focused, settings, run, hc, knownAgents, pickFolder,
+  shared, appHome,
 } from "herdr";
 import { showPage, hold } from "./pages.js";
-import { SIZE, MOTION, ICON, tint, readable, textWidth, rowsFor } from "./look.js";
+import { SIZE, MOTION, ICON, TYPE, LINE, SPACE, ROW, CHIP, CONTROL, TARGET, MARK, DOT, PIP, HAIR, GLYPH, tint, readable, textWidth, rowsFor, baseName, parentPath, filterEntries, togglePick, sizeText, clickable, pressable, focusable } from "./look.js";
+import { stateView } from "./switch.js";
 import { colors } from "./theme.js";
 import {
   triggerAt, caretAfterEdit, slashRows, mentionRows, tokenFor, plan, orchestratorOf, withoutEnter, messageText, commandColor,
@@ -36,7 +37,7 @@ import {
 import { ROSTER_KEY, HEADLESS_KEY, roster, argvOf, runnable, runningAs, slug, headless, withPrompt } from "./roster.js";
 import { withQuiet, isQuiet } from "./live.js";
 import { BRIEFED, teamBrief, orchestratorBrief, briefed } from "./brief.js";
-import { bh, bhPath, enc, projectDir, ROUTING_KEY } from "./bh.js";
+import { bh, bhJson, bhPath, enc, projectDir, ROUTING_KEY } from "./bh.js";
 import { queue, push as pushToast, dismiss as dismissToast, stayFor, toastSize, noteText, TOAST_KEY } from "./toasts.js";
 import { TOAST_ICONS, toneOf } from "./toast.js";
 import * as Drawer from "./drawer.js";
@@ -84,6 +85,15 @@ export class Composer {
     this.toastN = 0;
     this.noteAt = shared(TOAST_KEY)?.at ?? 0; // the last herdr notification taken in
     this.questions = []; // agents' open questions, oldest first (the chat reads them)
+    // The attach pane's file browser: one listing at a time, on this machine only.
+    this.browse = null; // { path, parent, entries, truncated, error, loading, selected:Set, hidden, foreign }
+    this.browseAt = 0; // the row the keyboard is on
+    this.browseLast = null; // { path, at }: a second click on the same folder opens it
+    this.browseSearch = InputState.new({ placeholder: "Search this folder" });
+    this.browseSearch.on("change", (_e, cx) => cx.notify());
+    this.browseTyped = InputState.new({ placeholder: "A path on this machine" });
+    this.browseTyped.on("submit", (_e, cx) => this.attachTyped(cx));
+    this.browseHandle = cx.focus_handle();
     this.walk = null; // the questions being answered: drawer.js state
     this.putAway = new Set(); // question sets Esc put away: a bar brings them back
     this.dismissing = null; // the set whose Dismiss asks "Dismiss it?"
@@ -385,7 +395,7 @@ export class Composer {
     if (!n) return;
     this.at = (this.at + by + n) % n;
     if (this.at < this.offset) this.offset = this.at;
-    if (this.at >= this.offset + SIZE.rowsShown) this.offset = this.at - SIZE.rowsShown + 1;
+    if (this.at >= this.offset + ROWsShown) this.offset = this.at - ROWsShown + 1;
     cx.notify();
   }
 
@@ -457,7 +467,7 @@ export class Composer {
     if (!t || t.item.id !== id || t.phase === "out") return;
     t.phase = "out";
     cx.notify();
-    cx.timer.after(420, (cx) => {
+    cx.timer.after(MOTION.toastOut.duration + 16, (cx) => {
       if (this.toast !== t) return;
       this.toast = null;
       dismissToast(this.toasts, id);
@@ -518,29 +528,113 @@ export class Composer {
     openLightbox({ items: shown.map((f) => ({ image: f.image || f.path, title: f.name, note: "Attached to your message" })), at: Math.max(0, shown.findIndex((f) => f.path === path)) });
   }
 
-  pickFiles(cx) {
-    this.pane = null;
+  /**
+   * "Attach document…": the browser inside the attach pane. It lists this machine's folders
+   * through `bh files`; a space on another machine says so and takes a typed path instead.
+   */
+  openBrowser(cx) {
+    const space = this.space();
+    this.pane = "attach";
+    this.browse = {
+      path: projectDir(space),
+      parent: parentPath(projectDir(space)),
+      entries: [],
+      truncated: false,
+      error: null,
+      loading: !space?.machine,
+      selected: new Set(),
+      hidden: false,
+      foreign: Boolean(space?.machine),
+    };
+    this.browseAt = 0;
+    this.browseLast = null;
+    this.browseSearch.set_value("");
+    this.browseTyped.set_value("");
+    cx.timer.after(16, (cx) => {
+      this.browseHandle.focus();
+      cx.notify();
+    });
+    cx.notify();
+    if (!this.browse.foreign) this.loadBrowse(cx);
+  }
+
+  /** Reads one folder through `bh files`; the answer replaces the listing. */
+  loadBrowse(cx, path = this.browse?.path) {
+    const b = this.browse;
+    if (!b || b.foreign) return;
+    b.loading = true;
+    b.error = null;
     cx.notify();
     cx.spawn(async (cx) => {
-      const os = appWindow().platform;
-      const tries = os === "macos"
-        ? [["osascript", ["-e", "set fs to choose file with multiple selections allowed", "-e", "set out to \"\"",
-            "-e", "repeat with f in fs", "-e", "set out to out & POSIX path of f & linefeed", "-e", "end repeat", "-e", "out"]]]
-        : os === "windows"
-          ? [["powershell", ["-NoProfile", "-Command",
-              "Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.OpenFileDialog; $d.Multiselect = $true; if ($d.ShowDialog() -eq 'OK') { $d.FileNames -join \"`n\" }"]]]
-          : [["zenity", ["--file-selection", "--multiple", "--separator=\n"]], ["kdialog", ["--getopenfilename", home(), "--multiple", "--separate-output"]]];
-      for (const [cmd, args] of tries) {
-        try {
-          const r = await exec(cmd, args, { timeout: 600000 });
-          if (r.code === 0) this.addFiles(r.stdout.split(/\r?\n/).map((s) => s.trim()).filter(Boolean), cx);
-          return;
-        } catch {
-          // not installed: try the next picker
-        }
+      const r = await bh(["files", path, ...(b.hidden ? ["--all"] : []), "--json"], { cwd: projectDir() });
+      if (this.browse !== b) return;
+      let data = null;
+      try {
+        data = JSON.parse(r.stdout);
+      } catch {
+        data = null;
       }
-      this.say("No file picker here. Drop files on the composer instead.", cx);
+      b.loading = false;
+      if (r.code !== 0 || !data || !Array.isArray(data.entries)) {
+        b.error = String(data?.error ?? ((r.stderr || "").trim() || "Couldn't list that folder."));
+      } else {
+        b.path = data.path ?? path;
+        b.parent = data.parent ?? null;
+        b.entries = data.entries;
+        b.truncated = Boolean(data.truncated);
+        const files = new Set(data.entries.filter((e) => !e.dir).map((e) => e.path));
+        b.selected = new Set([...b.selected].filter((p) => files.has(p)));
+        b.error = null;
+      }
+      this.browseAt = 0;
+      cx.notify();
     });
+  }
+
+  openFolder(path, cx) {
+    const b = this.browse;
+    if (!b || b.foreign) return;
+    b.path = path;
+    b.parent = parentPath(path);
+    this.browseSearch.set_value("");
+    this.browseAt = 0;
+    this.loadBrowse(cx, path);
+  }
+
+  /** A row was clicked: a second click on a folder opens it; any click toggles its selection. */
+  pickBrowse(entry, index, cx) {
+    const b = this.browse;
+    if (!b) return;
+    const now = Date.now();
+    const again = this.browseLast?.path === entry.path && now - this.browseLast.at < 420;
+    this.browseLast = { path: entry.path, at: now };
+    this.browseAt = index;
+    if (entry.dir && again) return this.openFolder(entry.path, cx);
+    b.selected = togglePick(b.selected, entry.path);
+    cx.notify();
+  }
+
+  attachBrowse(cx) {
+    const paths = [...(this.browse?.selected ?? [])];
+    if (!paths.length) return;
+    this.browse = null;
+    this.addFiles(paths, cx);
+  }
+
+  /** A typed path (another machine, or this one): attached as it is. */
+  attachTyped(cx) {
+    const path = this.browseTyped.value().trim();
+    if (!path) return;
+    this.browse = null;
+    this.browseTyped.set_value("");
+    this.addFiles([path], cx);
+  }
+
+  closeBrowse(cx) {
+    this.browse = null;
+    this.browseSearch.set_value("");
+    this.browseTyped.set_value("");
+    cx.notify();
   }
 
   pickFolderToAttach(cx) {
@@ -550,6 +644,147 @@ export class Composer {
       const folder = await pickFolder({ prompt: "Attach" });
       if (folder) this.addFiles([folder], cx);
     });
+  }
+
+  /** One row of the browser: its checkbox, icon, name and (for a file) its size. */
+  browseRow(c, entry, index) {
+    const b = this.browse;
+    const picked = b.selected.has(entry.path);
+    const at = index === this.browseAt;
+    return clickable(
+      h_flex()
+        .h(ROW)
+        .px(SPACE[3])
+        .gap(SPACE[3])
+        .items_center()
+        .rounded(SIZE.nested)
+        .when(picked || at, (el) => el.bg(c.hover))
+        .on_click((_e, cx) => this.pickBrowse(entry, index, cx))
+        .child(
+          div()
+            .size(GLYPH.md)
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(PIP)
+            .border_1()
+            .border_color(picked ? c.accent : c.edge)
+            .when(picked, (el) => el.bg(c.accent).child(svg(ICON("check")).size(GLYPH.xs).text_color(c.accentInk))),
+        )
+        .child(svg(ICON(entry.dir ? "folder" : "file")).size(GLYPH.md).text_color(entry.dir ? c.muted : c.faint))
+        .child(div().flex_1().min_w(0).truncate().text_size(TYPE.sm).text_color(c.ink).child(entry.name))
+        .when(!entry.dir, (el) => el.child(div().flex_none().text_size(TYPE.xs).text_color(c.faint).child(sizeText(entry.size)))),
+      c,
+      `bc-browse-${index}`,
+    );
+  }
+
+  /** The browser's body and the height the pane gives it. */
+  browseBody(c) {
+    const b = this.browse;
+    const typed = (this.browseSearch.value?.() ?? "").trim();
+    const visible = filterEntries(b.entries, typed);
+    const shown = Math.min(8, Math.max(3, visible.length));
+    const listH = shown * ROW;
+    const h = Math.min(360, CONTROL + SPACE[2] + CONTROL + SPACE[2] + listH + SPACE[2] + CONTROL + SPACE[3] * 2);
+    const toggle = (id, label, on, onClick) => clickable(
+      div().flex_none().h(CHIP).px(SPACE[3]).flex().items_center().rounded(SIZE.nested).border_1()
+        .border_color(on ? c.accent : c.edge).text_size(TYPE.sm)
+        .when(on, (el) => el.bg(c.well).text_color(c.ink).font_medium())
+        .when(!on, (el) => el.text_color(c.muted))
+        .on_click(onClick)
+        .child(label),
+      c,
+      id,
+    );
+    const primary = (id, label, onClick) => clickable(
+      div().flex_none().h(CONTROL).px(SPACE[4]).flex().items_center().rounded(SIZE.control)
+        .bg(c.accent).border_b(1).border_color(c.accentLip).text_size(TYPE.sm).font_medium().text_color(c.accentInk)
+        .hover((s) => s.opacity(0.92))
+        .on_click(onClick)
+        .child(label),
+      c,
+      id,
+    );
+    const list = v_flex()
+      .id("bc-browse-list")
+      .w_full()
+      .h(listH)
+      .gap(SPACE[1])
+      .overflow_y_scroll()
+      .track_focus(this.browseHandle)
+      .tab_index(0)
+      .focus((s) => s.border_2().border_color(c.accent))
+      .on_key_down((e, cx) => {
+        const rows = filterEntries(b.entries, this.browseSearch.value?.() ?? "");
+        if (!rows.length) return;
+        const at = Math.max(0, Math.min(rows.length - 1, this.browseAt));
+        if (e.key === "up" || e.key === "arrow-up") this.browseAt = Math.max(0, at - 1);
+        else if (e.key === "down" || e.key === "arrow-down") this.browseAt = Math.min(rows.length - 1, at + 1);
+        else if (e.key === "space" || e.key === " ") b.selected = togglePick(b.selected, rows[at].path);
+        else if (e.key === "enter") {
+          if (rows[at].dir) return this.openFolder(rows[at].path, cx);
+          b.selected = togglePick(b.selected, rows[at].path);
+          return this.attachBrowse(cx);
+        } else if (e.key === "backspace") {
+          if (!b.parent) return;
+          return this.openFolder(b.parent, cx);
+        } else if (e.key === "escape") {
+          this.closeBrowse(cx);
+          return;
+        } else return;
+        cx.stop_propagation();
+        cx.notify();
+      })
+      .children(visible.map((entry, i) => this.browseRow(c, entry, i)))
+      .when(!visible.length, (el) => el.child(div().p(SPACE[4]).text_size(TYPE.sm).text_color(c.muted).child("Nothing here.")));
+
+    const body = v_flex()
+      .w_full()
+      .gap(SPACE[2])
+      .child(
+        h_flex().gap(SPACE[2]).items_center()
+          .child(this.iconButton(c, "bc-browse-up", "chevron-left", Boolean(b.parent) && !b.foreign, (_e, cx) => b.parent && this.openFolder(b.parent, cx)))
+          .child(div().flex_1().min_w(0).truncate().text_size(TYPE.sm).text_color(c.muted).child(b.foreign ? "Another machine" : b.path))
+          .child(this.iconButton(c, "bc-browse-close", "x", false, (_e, cx) => this.closeBrowse(cx))),
+      );
+
+    if (b.foreign) {
+      return {
+        h,
+        body: body
+          .child(div().text_size(TYPE.sm).text_color(c.muted).child("Browsing is for this machine. Drop files or type a path."))
+          .child(div().h(CONTROL).px(SPACE[3]).flex().items_center().rounded(SIZE.control).bg(c.ground).border_1().border_color(c.edge)
+            .child(Input.new(this.browseTyped).w_full().h_full().text_size(TYPE.md).text_color(c.ink)))
+          .child(h_flex().gap(SPACE[3]).items_center()
+            .child(div().flex_1().text_size(TYPE.xs).text_color(c.faint).child("Enter attaches what you typed."))
+            .child(primary("bc-browse-attach", "Attach", (_e, cx) => this.attachTyped(cx)))),
+      };
+    }
+
+    body
+      .child(div().h(CONTROL).px(SPACE[3]).flex().items_center().rounded(SIZE.control).bg(c.ground).border_1().border_color(c.edge)
+        .child(Input.new(this.browseSearch).w_full().h_full().text_size(TYPE.md).text_color(c.ink)))
+      .when(b.loading, (el) => el.child(stateView(c, { id: "bc-browse-loading", title: "Loading…", loading: true })))
+      .when(Boolean(b.error), (el) => el.child(stateView(c, {
+        id: "bc-browse-error",
+        title: "Couldn't list that folder",
+        line: b.error,
+        action: { label: "Retry", on: (_e, cx) => this.loadBrowse(cx) },
+      })))
+      .when(!b.loading && !b.error, (el) => el.child(list))
+      .when(b.truncated, (el) => el.child(div().text_size(TYPE.xs).text_color(c.faint).child("Showing the first 2000")))
+      .child(
+        h_flex().gap(SPACE[3]).items_center()
+          .child(div().flex_1().text_size(TYPE.xs).text_color(c.muted).child(`${b.selected.size} selected`))
+          .child(toggle("bc-browse-hidden", "Show hidden", b.hidden, (_e, cx) => {
+            b.hidden = !b.hidden;
+            this.loadBrowse(cx);
+          }))
+          .child(primary("bc-browse-attach", "Attach", (_e, cx) => this.attachBrowse(cx))),
+      );
+    return { h, body };
   }
 
   // ── Sending ────────────────────────────────────────────────────────────────────────────────
@@ -903,7 +1138,7 @@ export class Composer {
       .relative()
       .flex_none()
       .w(width)
-      .h(SIZE.textTop + textH + SIZE.tools + 2)
+      .h(SIZE.textTop + textH + SIZE.tools + SPACE[1])
       .bg(c.fill)
       .border_1()
       .border_color(c.edge)
@@ -916,7 +1151,7 @@ export class Composer {
       })
       // The bevel: a lit top edge inside the outline. Not while a pane is joined on top: it
       // would draw a line across the join.
-      .when(!joined, (el) => el.child(div().absolute().top(0).left(SIZE.radius).right(SIZE.radius).h(1).bg(c.rim)))
+      .when(!joined, (el) => el.child(div().absolute().top(0).left(SIZE.radius).right(SIZE.radius).h(HAIR).bg(c.rim)))
       .child(
         div()
           .relative()
@@ -926,14 +1161,14 @@ export class Composer {
           .h(SIZE.textTop + textH)
           .overflow_hidden()
           .when(!this.text, (el) =>
-            el.child(div().absolute().top(SIZE.textTop).left(SIZE.textX).text_size(14).text_color(c.faint).child(placeholder)))
+            el.child(div().absolute().top(SIZE.textTop).left(SIZE.textX).text_size(TYPE.md).text_color(c.faint).child(placeholder)))
           .child(
             Textarea.new(this.input)
               .w_full()
               .h(textH)
               .bg(CLEAR)
               .border_0()
-              .text_size(14)
+              .text_size(TYPE.md)
               .line_height(`${SIZE.line}px`)
               .text_color(c.ink)
               .token((tok) => this.chip(c, tok.token))
@@ -949,41 +1184,44 @@ export class Composer {
   /** A slim bar when the feed is scrolled away: click or type to grow it back, draft intact. */
   slim(c, width) {
     const draft = this.text.trim() ? this.text.replace(/\s+/g, " ").trim() : PLACEHOLDER;
-    return h_flex()
-      .id("bc-slim")
-      .flex_none()
-      .w(width)
-      .h(40)
-      .px(14)
-      .gap(10)
-      .items_center()
-      .bg(c.fill)
-      .border_1()
-      .border_color(c.edge)
-      .rounded(SIZE.radius)
-      .shadow_md()
-      .cursor_text()
-      .on_click((_e, cx) => {
-        this.expanded = true;
-        this.input.focus();
-        cx.notify();
-      })
-      .child(div().flex_1().min_w(0).truncate().text_size(13.5).text_color(this.text.trim() ? c.ink : c.faint).child(draft));
+    return clickable(
+      h_flex()
+        .flex_none()
+        .w(width)
+        .h(CONTROL + SPACE[4])
+        .px(SPACE[4])
+        .gap(SPACE[3])
+        .items_center()
+        .bg(c.fill)
+        .border_1()
+        .border_color(c.edge)
+        .rounded(SIZE.radius)
+        .shadow_md()
+        .cursor_text()
+        .on_click((_e, cx) => {
+          this.expanded = true;
+          this.input.focus();
+          cx.notify();
+        })
+        .child(div().flex_1().min_w(0).truncate().text_size(TYPE.md).text_color(this.text.trim() ? c.ink : c.faint).child(draft)),
+      c,
+      "bc-slim",
+    );
   }
 
   chip(c, token) {
     const agent = token.id.startsWith("agent:") ? agents().find((a) => a.address === token.id.slice(6)) : null;
     const command = token.id.startsWith("cmd:") ? commandColor(token.id.slice(4)) : null;
-    const color = command ? readable(c, command, c.hover) : agent?.program?.tile ? readable(c, agent.program.tile, c.hover) : token.id.startsWith("start:") ? c.muted : c.accent;
+    const color = command ? readable(command, c.hover, 4.5, c.ink) : agent?.program?.tile ? readable(agent.program.tile, c.hover, 4.5, c.ink) : token.id.startsWith("start:") ? c.muted : c.accent;
     return h_flex()
-      .px(6)
-      .h(20)
+      .px(SPACE[3])
+      .h(CHIP)
       .items_center()
-      .rounded(6)
+      .rounded(SIZE.nested)
       .bg(c.hover)
       .border_1()
       .border_color(c.edge)
-      .text_size(12.5)
+      .text_size(TYPE.sm)
       .font_medium()
       .text_color(color)
       .child(token.label ?? token.text);
@@ -991,62 +1229,65 @@ export class Composer {
 
   /** Attached files as thumbnails/chips above the composer box. */
   attachments(c, width) {
-    const remove = (i, id) => div()
-      .id(id)
-      .size(20)
-      .rounded(6)
-      .flex()
-      .items_center()
-      .justify_center()
-      .text_color(c.muted)
-      .cursor_pointer()
-      .hover((s) => s.bg(c.well).text_color(c.ink))
-      .on_click((_e, cx) => {
-        cx.stop_propagation();
-        this.files.splice(i, 1);
-        cx.notify();
-      })
-      .child(svg(ICON("x")).size(12));
+    const remove = (i, id) => clickable(
+      div()
+        .size(CHIP)
+        .rounded(SIZE.nested)
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_color(c.muted)
+        .on_click((_e, cx) => {
+          cx.stop_propagation();
+          this.files.splice(i, 1);
+          cx.notify();
+        })
+        .child(svg(ICON("x")).size(GLYPH.sm)),
+      c,
+      id,
+    );
     return h_flex()
       .id("bc-files")
       .flex_none()
       .w(width)
       .overflow_hidden()
-      .gap(8)
-      .pb(8)
+      .gap(SPACE[3])
+      .pb(SPACE[3])
       .items_end()
       .flex_wrap()
       .children(this.files.map((f, i) => (f.image || isImage(f.path))
         // An image: its thumbnail above the box, opened large on a click.
-        ? div()
-          .id(`bc-file-${i}`)
-          .relative()
-          .flex_none()
-          .w(96)
-          .h(72)
-          .rounded(SIZE.nested)
-          .bg(c.well)
-          .border_1()
-          .border_color(c.edge)
-          .overflow_hidden()
-          .cursor_pointer()
-          .hover((s) => s.border_color(c.faint))
-          .on_click(() => this.openImages(f.path))
-          .child(image(f.image || f.path).w(94).h(70))
-          .child(div().absolute().top(3).right(3).rounded(6).bg(c.fill).child(remove(i, `bc-file-x-${i}`)))
+        ? clickable(
+          div()
+            .relative()
+            .flex_none()
+            .w(SIZE.imagesRow + SPACE[5])
+            .h(SIZE.imagesRow - SPACE[3])
+            .rounded(SIZE.nested)
+            .bg(c.well)
+            .border_1()
+            .border_color(c.edge)
+            .overflow_hidden()
+            .hover((s) => s.border_color(c.faint))
+            .on_click(() => this.openImages(f.path))
+            .child(image(f.image || f.path).w(SIZE.imagesRow + SPACE[5] - SPACE[1]).h(SIZE.imagesRow - SPACE[3] - SPACE[1]))
+            .child(div().absolute().top(SPACE[2]).right(SPACE[2]).rounded(SIZE.nested).bg(c.fill).child(remove(i, `bc-file-x-${i}`))),
+          c,
+          `bc-file-${i}`,
+        )
         : h_flex()
           .id(`bc-file-${i}`)
-          .h(28)
-          .pl(8)
-          .pr(4)
-          .gap(6)
+          .h(CONTROL)
+          .pl(SPACE[3])
+          .pr(SPACE[2])
+          .gap(SPACE[3])
           .items_center()
           .rounded(SIZE.nested)
           .bg(c.hover)
           .border_1()
           .border_color(c.edge)
-          .text_size(12)
-          .child(svg(ICON("file")).size(14).text_color(c.muted))
+          .text_size(TYPE.sm)
+          .child(svg(ICON("file")).size(GLYPH.md).text_color(c.muted))
           .child(div().max_w(220).truncate().child(f.name))
           .child(remove(i, `bc-file-x-${i}`))));
   }
@@ -1063,26 +1304,30 @@ export class Composer {
     const { w: W, h: H } = toastSize(item, Math.min(512, width - 32), textWidth);
     const slot = GAP + H;
     const up = t.phase === "up";
-    const w = up ? W : Math.round(W * 0.4);
-    const h = up ? H : Math.round(H * 0.45);
-    const top = up ? 0 : Math.round(GAP + H * 0.85);
-    // Up it springs (rising a beat ahead of filling out); down it slides and fades away, mirroring the rise.
     const out = t.phase === "out";
+    // Up it springs (rising a beat ahead of filling out); out it shrinks to a pill in the
+    // composer's edge and fades, one continuous motion, and is removed only once invisible.
+    const w = out ? 24 : up ? W : Math.round(W * 0.4);
+    const h = out ? 12 : up ? H : Math.round(H * 0.45);
+    const top = out ? Math.round(GAP + H) : up ? 0 : Math.round(GAP + H * 0.85);
+    const left = Math.round((width - w) / 2);
     const rise = { response: 420, damping: 0.82 };
-    const shapeMotion = (el, prop, spring, outDur = 300) => (out ? el.transition(prop, { duration: outDur, easing: "ease-in" }) : el.spring(prop, spring));
+    const shapeMotion = (el, prop, spring) => (out ? el.transition(prop, MOTION.toastOut) : el.spring(prop, spring));
     let shape = div()
       .id(`bc-toast-shape-${t.n}`)
       .absolute()
       .top(top)
-      .left(Math.round((width - w) / 2))
+      .left(left)
       .w(w)
       .h(h)
+      .opacity(out ? 0 : 1)
+      .transition("opacity", MOTION.toastOut)
       .bg(c.fill)
       .border_1()
       .border_color(c.edge)
       .rounded(SIZE.radius)
       .shadow_md()
-      .child(div().absolute().top(0).left(SIZE.radius).right(SIZE.radius).h(1).bg(c.rim));
+      .child(div().absolute().top(0).left(SIZE.radius).right(SIZE.radius).h(HAIR).bg(c.rim));
     shape = shapeMotion(shape, "top", rise);
     shape = shapeMotion(shape, "height", { response: 360, damping: 0.66 });
     shape = shapeMotion(shape, "width", { response: 440, damping: 0.7 });
@@ -1092,46 +1337,45 @@ export class Composer {
       .id(`bc-toast-body-${t.n}`)
       .absolute()
       .top(top)
-      .left(Math.round((width - W) / 2))
-      .w(W)
-      .h(H)
-      .px(14)
-      .gap(10)
+      .left(left)
+      .w(w)
+      .h(h)
+      .px(SPACE[4])
+      .gap(SPACE[3])
       .items_center()
-      .opacity(up ? 1 : 0)
-      .transition("opacity", up ? { duration: 200, delay: 240, easing: "ease-out" } : { duration: 200, easing: "ease-in" })
-      .text_size(13.5)
-      .line_height("19px")
+      .opacity(out ? 0 : up ? 1 : 0)
+      .transition("opacity", out ? { ...MOTION.hover, easing: "ease-in" } : up ? { ...MOTION.row, delay: 240 } : MOTION.row)
+      .text_size(TYPE.md)
+      .line_height(`${LINE.md}px`)
       .text_color(c.ink)
-      .child(svg(ICON(TOAST_ICONS[item.kind] ?? "info")).flex_none().size(16).text_color(tone))
+      .child(svg(ICON(TOAST_ICONS[item.kind] ?? "info")).flex_none().size(GLYPH.lg).text_color(tone))
       .child(div().flex_1().min_w(0).child(item.message))
-      .when(Boolean(item.action), (el) => el.child(
+      .when(Boolean(item.action), (el) => el.child(clickable(
         div()
-          .id(`bc-toast-act-${t.n}`)
           .flex_none()
-          .h(28)
-          .px(10)
+          .h(CONTROL)
+          .px(SPACE[3])
           .flex()
           .items_center()
           .rounded(SIZE.nested)
           .border_1()
           .border_color(c.edge)
-          .text_size(12)
+          .text_size(TYPE.sm)
           .font_medium()
-          .cursor_pointer()
-          .hover((s) => s.bg(c.hover))
           .on_click((_e, cx) => {
             item.action.run?.(cx);
             this.dropToast(item.id, cx);
           })
           .child(item.action.label),
-      ));
+        c,
+        `bc-toast-act-${t.n}`,
+      )));
     body = shapeMotion(body, "top", rise);
     return div().id("bc-toast").absolute().left(0).right(0).top(-slot).h(slot).child(shape).child(body);
   }
 
   tools(c, target, busy, empty) {
-    const kbd = (text) => div().px(5).py(1).rounded(5).bg(c.kbd).text_size(11).text_color(c.muted).child(text);
+    const kbd = (text) => div().px(SPACE[2]).py(SPACE[1]).rounded(SIZE.nested).bg(c.kbd).text_size(TYPE.xs).text_color(c.muted).child(text);
     const hints = this.menuOpen()
       ? [kbd("↑"), kbd("↓"), "choose", kbd("↵"), "insert"]
       : this.pane
@@ -1145,82 +1389,87 @@ export class Composer {
       .id("bc-tools")
       .flex_none()
       .h(SIZE.tools)
-      .px(10)
-      .gap(6)
+      .px(SPACE[3])
+      .gap(SPACE[3])
       .items_center()
       .child(this.iconButton(c, "bc-attach", "paperclip", this.pane === "attach", (_e, cx) => this.toggle("attach", cx)))
-      .child(
+      .child(clickable(
         h_flex()
-          .id("bc-space")
-          .h(SIZE.chip)
-          .px(8)
-          .gap(6)
+          .h(CHIP)
+          .px(SPACE[3])
+          .gap(SPACE[3])
           .items_center()
           .rounded(SIZE.nested)
-          .text_size(12.5)
+          .text_size(TYPE.sm)
           .text_color(c.muted)
-          .cursor_pointer()
           .when(this.pane === "spaces", (el) => el.bg(c.well).text_color(c.ink))
-          .hover((s) => s.bg(c.hover).text_color(c.ink))
           .on_click((_e, cx) => this.toggle("spaces", cx))
-          .child(svg(ICON("folder")).size(14))
+          .child(svg(ICON("folder")).size(GLYPH.md))
           .child(div().max_w(180).truncate().child(space?.name ?? "No space"))
           .when(Boolean(space?.branch), (el) => el.child(div().text_color(c.faint).max_w(120).truncate().child(space.branch)))
-          .child(svg(ICON("chevron-down")).size(12).text_color(c.faint)),
-      )
+          .child(svg(ICON("chevron-down")).size(GLYPH.sm).text_color(c.faint)),
+        c,
+        "bc-space",
+      ))
       .child(div().flex_1())
       .when(Boolean(target), (el) =>
-        el.child(div().max_w(220).truncate().text_size(12).text_color(c.faint).child(`to ${this.leadEntry().name}`)))
+        el.child(div().max_w(220).truncate().text_size(TYPE.sm).text_color(c.faint).child(`to ${this.leadEntry().name}`)))
       .when(!target && Boolean(this.lead()), (el) =>
-        el.child(div().max_w(220).truncate().text_size(12).text_color(c.faint).child(`starts ${this.leadEntry().name} · ${this.lead().name}`)))
-      .when(this.width >= 560, (el) => el.child(h_flex().flex_none().gap(4).items_center().text_size(11.5).text_color(c.muted).children(hints)))
+        el.child(div().max_w(220).truncate().text_size(TYPE.sm).text_color(c.faint).child(`starts ${this.leadEntry().name} · ${this.lead().name}`)))
+      .when(this.width >= 560, (el) => el.child(h_flex().flex_none().gap(SPACE[2]).items_center().text_size(TYPE.xs).text_color(c.muted).children(hints)))
       .when(busy, (el) =>
-        el.child(
+        el.child(focusable(
+          pressable(
+            div()
+              .size(TARGET)
+              .rounded_full()
+              .flex()
+              .items_center()
+              .justify_center()
+              .bg(c.stop)
+              .hover((s) => s.bg(c.stopHover))
+              .on_click((_e, cx) => this.stop(cx))
+              .child(div().size(GLYPH.xs).rounded(PIP).bg("#ffffff")),
+          ),
+          "bc-stop",
+          c,
+        )))
+      .child(focusable(
+        pressable(
           div()
-            .id("bc-stop")
-            .size(SIZE.iconButton)
+            .size(TARGET)
             .rounded_full()
             .flex()
             .items_center()
             .justify_center()
-            .bg(c.stop)
-            .cursor_pointer()
-            .hover((s) => s.bg(c.stopHover))
-            .on_click((_e, cx) => this.stop(cx))
-            .child(div().size(10).rounded(2).bg("#ffffff")),
-        ))
-      .child(
-        div()
-          .id("bc-send")
-          .size(SIZE.iconButton)
-          .rounded_full()
-          .flex()
-          .items_center()
-          .justify_center()
-          .when(canSend, (el) =>
-            el.bg(c.accent).border_b(1).border_color(c.accentLip).text_color(c.accentInk).cursor_pointer().hover((s) => s.opacity(0.92)))
-          .when(!canSend, (el) => el.bg(c.well).text_color(c.faint))
-          .on_click((_e, cx) => this.send(cx))
-          .child(this.sending
-            ? svg(ICON("spinner")).size(16).spin(900)
-            : svg(ICON("send")).size(16)),
-      );
+            .when(canSend, (el) =>
+              el.bg(c.accent).border_b(1).border_color(c.accentLip).text_color(c.accentInk).hover((s) => s.opacity(0.92)))
+            .when(!canSend, (el) => el.bg(c.well).text_color(c.faint))
+            .on_click((_e, cx) => this.send(cx))
+            .child(this.sending
+              ? svg(ICON("spinner")).size(GLYPH.lg).spin(900)
+              : svg(ICON("send")).size(GLYPH.lg)),
+        ),
+        "bc-send",
+        c,
+      ));
   }
 
   iconButton(c, id, icon, on, onClick) {
-    return div()
-      .id(id)
-      .size(SIZE.iconButton)
-      .rounded_full()
-      .flex()
-      .items_center()
-      .justify_center()
-      .text_color(on ? c.ink : c.muted)
-      .cursor_pointer()
-      .when(on, (el) => el.bg(c.well))
-      .hover((s) => s.bg(c.well).text_color(c.ink))
-      .on_click(onClick)
-      .child(svg(ICON(icon)).size(16));
+    return clickable(
+      div()
+        .size(TARGET)
+        .rounded_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_color(on ? c.ink : c.muted)
+        .when(on, (el) => el.bg(c.well))
+        .on_click(onClick)
+        .child(svg(ICON(icon)).size(GLYPH.lg)),
+      c,
+      id,
+    );
   }
 
   // ── The pane that grows out of the top ─────────────────────────────────────────────────────
@@ -1241,59 +1490,65 @@ export class Composer {
     } else if (kind === "suggest") {
       const rows = this.rows();
       if (!rows.length) return null;
-      const shown = rows.slice(this.offset, this.offset + SIZE.rowsShown);
+      const shown = rows.slice(this.offset, this.offset + ROWsShown);
       let w = 0;
       for (const r of rows) w = Math.max(w, textWidth(r.label && r.kind !== "command" ? r.label : r.name, 13) + textWidth(r.hint, 12.5) + textWidth(r.tag, 10.5));
-      size = { w: Math.min(Math.max(Math.ceil(w) + 120, 220), width - 80), h: 12 + shown.length * SIZE.row };
+      size = { w: Math.min(Math.max(Math.ceil(w) + 120, 220), width - 80), h: 12 + shown.length * ROW };
       body = v_flex()
         .id("bc-rows")
         .w_full()
         .on_scroll_wheel((e, cx) => {
-          const max = Math.max(0, rows.length - SIZE.rowsShown);
+          const max = Math.max(0, rows.length - ROWsShown);
           const step = e.delta.y < 0 ? 1 : e.delta.y > 0 ? -1 : 0;
           this.offset = Math.max(0, Math.min(max, this.offset + step));
           cx.notify();
         })
         .children(shown.map((r, i) => this.row(c, r, this.offset + i, shown.length - 1 - i)));
+    } else if (kind === "attach" && this.browse) {
+      const got = this.browseBody(c);
+      size = { w: 420, h: got.h };
+      body = got.body;
+      pad = { x: SPACE[3], top: SPACE[3], bottom: SPACE[3] };
     } else if (kind === "attach") {
-      size = { w: 260, h: 12 + 3 * SIZE.row };
+      size = { w: 260, h: 12 + 3 * ROW };
       body = v_flex()
         .w_full()
-        .child(this.menuItem(c, "bc-attach-file", "file", "Attach document…", 2, (_e, cx) => this.pickFiles(cx)))
+        .child(this.menuItem(c, "bc-attach-file", "file", "Attach document…", 2, (_e, cx) => this.openBrowser(cx)))
         .child(this.menuItem(c, "bc-attach-folder", "folder", "Attach folder…", 1, (_e, cx) => this.pickFolderToAttach(cx)))
-        .child(h_flex().h(SIZE.row).px(8).items_center().text_size(11.5).text_color(c.muted).child("Or drop files on the composer"));
+        .child(h_flex().h(ROW).px(SPACE[3]).items_center().text_size(TYPE.xs).text_color(c.muted).child("Or drop files on the composer"));
     } else {
       const list = spaces();
       const current = this.space()?.id;
       const shown = list.slice(0, 7);
-      size = { w: 400, h: 12 + (shown.length + 1) * SIZE.row };
+      size = { w: 400, h: 12 + (shown.length + 1) * ROW };
       body = v_flex()
         .w_full()
         .children(shown.map((s, i) =>
-          h_flex()
-            .id(`bc-sp-${s.id}`)
-            .h(SIZE.row)
-            .px(8)
-            .gap(8)
-            .items_center()
-            .rounded(SIZE.nested)
-            .cursor_pointer()
-            .when(s.id === current, (el) => el.bg(c.hover))
-            .hover((st) => st.bg(c.hover))
-            .opacity(this.ready ? 1 : 0)
-            .transition("opacity", { ...MOTION.row, delay: (shown.length - i) * MOTION.rowStagger })
-            .on_click((_e, cx) => {
-              hold();
-              run("space.select", { id: s.id });
-              this.pane = null;
-              this.input.focus();
-              cx.notify();
-            })
-            .child(svg(ICON("folder")).size(14).text_color(c.muted))
-            .child(div().text_size(13).font_medium().truncate().child(s.name))
-            .when(Boolean(s.branch), (el) => el.child(div().text_size(12).text_color(c.faint).truncate().child(s.branch)))
-            .child(div().flex_1())
-            .when(Boolean(s.status), (el) => el.child(div().text_size(11).text_color(c.muted).child(s.status === "blocked" ? "needs you" : s.status)))))
+          clickable(
+            h_flex()
+              .h(ROW)
+              .px(SPACE[3])
+              .gap(SPACE[3])
+              .items_center()
+              .rounded(SIZE.nested)
+              .when(s.id === current, (el) => el.bg(c.hover))
+              .opacity(this.ready ? 1 : 0)
+              .transition("opacity", { ...MOTION.row, delay: (shown.length - i) * MOTION.stagger })
+              .on_click((_e, cx) => {
+                hold();
+                run("space.select", { id: s.id });
+                this.pane = null;
+                this.input.focus();
+                cx.notify();
+              })
+              .child(svg(ICON("folder")).size(GLYPH.md).text_color(c.muted))
+              .child(div().text_size(TYPE.md).font_medium().truncate().child(s.name))
+              .when(Boolean(s.branch), (el) => el.child(div().text_size(TYPE.sm).text_color(c.faint).truncate().child(s.branch)))
+              .child(div().flex_1())
+              .when(Boolean(s.status), (el) => el.child(div().text_size(TYPE.xs).text_color(c.muted).child(s.status === "blocked" ? "needs you" : s.status))),
+            c,
+            `bc-sp-${s.id}`,
+          )))
         .child(this.menuItem(c, "bc-open-folder", "folder-plus", "Open folder…", 0, (_e, cx) => {
           this.pane = null;
           cx.notify();
@@ -1317,7 +1572,7 @@ export class Composer {
       .flex_none()
       .w_full()
       .h(h)
-      .transition("height", MOTION.menuHeight)
+      .transition("height", MOTION.pane)
       .bg(c.fill)
       .border_t(1)
       .border_l(1)
@@ -1329,7 +1584,7 @@ export class Composer {
       .pt(pad.top)
       .pb(pad.bottom)
       .when(!pad.top_first, (el) => el.justify_end())
-      .child(div().absolute().top(0).left(SIZE.radius).right(SIZE.radius).h(1).bg(c.rim))
+      .child(div().absolute().top(0).left(SIZE.radius).right(SIZE.radius).h(HAIR).bg(c.rim))
       .child(body);
     // The joins: a concave curve each side, so the pane and the box read as one shape. Each is
     // one pixel wider than the gap it fills and is painted over the pane, so it also covers the
@@ -1341,10 +1596,10 @@ export class Composer {
         .bottom(0)
         .when(side === "left", (el) => el.left(0))
         .when(side === "right", (el) => el.right(0))
-        .w(F + 1)
+        .w(F + HAIR)
         .h(F)
-        .child(svg(ICON(`fillet-${side}`)).absolute().top(0).left(0).w(F + 1).h(F).text_color(c.fill))
-        .child(svg(ICON(`fillet-${side}-edge`)).absolute().top(0).left(0).w(F + 1).h(F).text_color(c.edge));
+        .child(svg(ICON(`fillet-${side}`)).absolute().top(0).left(0).w(F + HAIR).h(F).text_color(c.fill))
+        .child(svg(ICON(`fillet-${side}-edge`)).absolute().top(0).left(0).w(F + HAIR).h(F).text_color(c.edge));
     return div()
       .id("bc-pane-row")
       .relative()
@@ -1352,10 +1607,10 @@ export class Composer {
       .w(w + F * 2)
       .h(h)
       .transition("width", MOTION.menuWidth)
-      .transition("height", MOTION.menuHeight)
+      .transition("height", MOTION.pane)
       .mb(-1)
       .opacity(this.ready ? 1 : 0)
-      .transition("opacity", { duration: 110, easing: "ease-out" })
+      .transition("opacity", MOTION.menuClose)
       .child(h_flex().absolute().top(0).bottom(0).left(F).right(F).items_end().child(pane))
       .child(fillet("left"))
       .child(fillet("right"));
@@ -1364,7 +1619,7 @@ export class Composer {
   /** Who asked, in their colour: the colour reads on the pane. */
   askerTone(c, q) {
     const tile = agents().find((a) => a.address === q.from)?.program?.tile ?? terminals().find((t) => t.address === q.from)?.program?.tile ?? null;
-    return tile ? readable(c, tile, c.fill) : c.accent;
+    return tile ? readable(tile, c.fill, 4.5, c.ink) : c.accent;
   }
 
   /**
@@ -1380,81 +1635,83 @@ export class Composer {
     const tone = this.askerTone(c, q);
     const picks = walk.answers[at.step]?.picks ?? [];
     const rowsOf = (text, size, w) => Math.max(1, Math.ceil(textWidth(String(text ?? ""), size) / Math.max(40, w)));
-    const glyph = (n, size = 20) => div()
+    const glyph = (n, size = CHIP) => div()
       .flex_none()
       .size(size)
       .flex()
       .items_center()
       .justify_center()
-      .rounded(6)
+      .rounded(SIZE.nested)
       .bg(alpha(tone, 0.14))
       .border_1()
       .border_color(alpha(tone, 0.38))
-      .text_size(11)
+      .text_size(TYPE.xs)
       .font_semibold()
       .text_color(tone)
       .child(String(n));
-    const link = (id, label, onClick, color = c.muted) => div()
-      .id(id)
-      .flex_none()
-      .h(22)
-      .px(7)
-      .flex()
-      .items_center()
-      .rounded(6)
-      .text_size(12)
-      .text_color(color)
-      .cursor_pointer()
-      .hover((s) => s.bg(c.hover).text_color(c.ink))
-      .on_click(onClick)
-      .child(label);
+    const link = (id, label, onClick, color = c.muted) => clickable(
+      div()
+        .flex_none()
+        .h(CHIP)
+        .px(SPACE[3])
+        .flex()
+        .items_center()
+        .rounded(SIZE.nested)
+        .text_size(TYPE.sm)
+        .text_color(color)
+        .on_click(onClick)
+        .child(label),
+      c,
+      id,
+    );
 
     // The head row.
     const asking = this.dismissing === q.id;
     const head = h_flex()
       .flex_none()
-      .h(24)
-      .gap(8)
+      .h(CONTROL)
+      .gap(SPACE[3])
       .items_center()
-      .child(div().flex_none().text_size(12.5).font_semibold().text_color(tone).child(who))
-      .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(c.muted).child(q.title && q.title !== "Questions" ? q.title : "has a question"))
+      .child(div().flex_none().text_size(TYPE.sm).font_semibold().text_color(tone).child(who))
+      .child(div().flex_1().min_w(0).truncate().text_size(TYPE.sm).text_color(c.muted).child(q.title && q.title !== "Questions" ? q.title : "has a question"))
       .when(at.step > 0 && !asking, (el) => el.child(link("bc-ask-back", "‹ Back", (_e, cx) => {
         Drawer.back(walk);
         cx.notify();
       })))
-      .when(at.count > 1 && !asking, (el) => el.child(div().flex_none().text_size(12).text_color(c.faint).child(`${at.step + 1} of ${at.count}`)))
+      .when(at.count > 1 && !asking, (el) => el.child(div().flex_none().text_size(TYPE.sm).text_color(c.faint).child(`${at.step + 1} of ${at.count}`)))
       .when(!asking, (el) => el.child(link("bc-ask-dismiss", "Dismiss", (_e, cx) => {
         this.dismissing = q.id;
         cx.notify();
       })))
       .when(asking, (el) => el
-        .child(div().flex_none().text_size(12).text_color(c.ink).child("Dismiss it? The agent decides."))
+        .child(div().flex_none().text_size(TYPE.sm).text_color(c.ink).child("Dismiss it? The agent decides."))
         .child(link("bc-ask-yes", "Dismiss", (_e, cx) => this.dismissAsk(q, cx), c.danger))
         .child(link("bc-ask-no", "Keep", (_e, cx) => {
           this.dismissing = null;
           cx.notify();
         })))
-      .child(div()
-        .id("bc-ask-min")
-        .flex_none()
-        .size(22)
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(6)
-        .cursor_pointer()
-        .hover((s) => s.bg(c.hover))
-        .tooltip("Minimise: the agent keeps waiting")
-        .on_click((_e, cx) => this.minimiseAsk(cx))
-        .child(svg(ICON("chevron-down")).size(12).text_color(c.muted)));
-    let h = 24 + 8;
+      .child(clickable(
+        div()
+          .flex_none()
+          .size(CHIP)
+          .flex()
+          .items_center()
+          .justify_center()
+          .rounded(SIZE.nested)
+          .tooltip("Minimise: the agent keeps waiting")
+          .on_click((_e, cx) => this.minimiseAsk(cx))
+          .child(svg(ICON("chevron-down")).size(GLYPH.sm).text_color(c.muted)),
+        c,
+        "bc-ask-min",
+      ));
+    let h = CONTROL + SPACE[3];
 
     // The intro (first question only) and the question.
     const intro = at.step === 0 && q.intro ? String(q.intro).trim() : "";
-    const introRows = intro ? Math.min(4, rowsOf(intro, 13, inner)) : 0;
-    if (intro) h += introRows * 19 + 6;
-    const qRows = rowsOf(x.text, 15.5, inner);
-    h += qRows * 22 + 12;
+    const introRows = intro ? Math.min(4, rowsOf(intro, TYPE.md, inner)) : 0;
+    if (intro) h += introRows * LINE.md + SPACE[3];
+    const qRows = rowsOf(x.text, TYPE.lg, inner);
+    h += qRows * LINE.lg + SPACE[4];
 
     const options = x.options ?? [];
     const multi = Boolean(x.multi);
@@ -1462,7 +1719,7 @@ export class Composer {
     if (Drawer.hasMockups(x)) {
       // A grid of mockups: two across for two or four, else three.
       const cols = Drawer.gridCols(options.length);
-      const gap = 10;
+      const gap = SPACE[3];
       const tileW = Math.floor((inner - gap * (cols - 1)) / cols);
       const thumbH = Math.round((tileW * 11) / 16);
       const drawn = options.map((o) => (o.mockupFile ? mockupFile(o.mockupFile, this.cx) : null));
@@ -1480,7 +1737,7 @@ export class Composer {
       for (let r = 0; r < options.length; r += cols) rows.push(options.slice(r, r + cols).map((o, k) => ({ o, i: r + k })));
       let gridH = 0;
       const rowEls = rows.map((row, ri) => {
-        const rowH = Math.max(...row.map(({ o }) => thumbH + 6 + 20 + (o.meaning ? 2 + Math.min(3, rowsOf(o.meaning, 12.5, tileW)) * 17 : 0)));
+        const rowH = Math.max(...row.map(({ o }) => thumbH + SPACE[3] + CHIP + (o.meaning ? SPACE[1] + Math.min(3, rowsOf(o.meaning, TYPE.sm, tileW)) * LINE.sm : 0)));
         gridH += rowH + (ri ? gap : 0);
         return h_flex()
           .flex_none()
@@ -1490,149 +1747,156 @@ export class Composer {
           .children(row.map(({ o, i }) => {
             const d = drawn[i];
             const on = picks.includes(o.label);
-            return v_flex()
-              .id(`bc-ask-tile-${i}`)
-              .flex_none()
-              .w(tileW)
-              .gap(6)
-              .cursor_pointer()
-              .opacity(this.ready ? 1 : 0)
-              .transition("opacity", { ...MOTION.row, delay: i * MOTION.rowStagger })
-              .on_click((_e, cx) => (multi ? this.toggleAsk(q, o.label, cx) : this.answerAsk(q, { picks: [o.label] }, cx)))
-              .child(
-                div()
-                  .relative()
-                  .flex_none()
-                  .w(tileW)
-                  .h(thumbH)
-                  .rounded(SIZE.control)
-                  .bg(c.well)
-                  .border_1()
-                  .border_color(on ? tone : c.edge)
-                  .overflow_hidden()
-                  .flex()
-                  .items_center()
-                  .justify_center()
-                  .when(d?.state === "ready", (el) => el.child(image(d.image).w(tileW - 2).h(thumbH - 2)))
-                  .when(d?.state === "drawing", (el) => el.child(div().text_size(12).text_color(c.faint).child("Drawing…")))
-                  .when(d?.state === "failed" || !d, (el) => el.child(
-                    v_flex().items_center().gap(4).px(10)
-                      .child(div().text_size(12).text_color(c.muted).child("Couldn't draw it here"))
-                      .when(Boolean(o.mockupFile), (col) => col.child(link(`bc-ask-open-${i}`, "Open in browser", (_e, cx) => {
-                        cx.stop_propagation();
-                        openInBrowser(o.mockupFile, cx);
-                      }))),
-                  ))
-                  .when(d?.state === "ready", (el) => el.child(
-                    div()
-                      .id(`bc-ask-zoom-${i}`)
-                      .absolute()
-                      .top(6)
-                      .right(6)
-                      .size(22)
-                      .flex()
-                      .items_center()
-                      .justify_center()
-                      .rounded(6)
-                      .bg(c.fill)
-                      .border_1()
-                      .border_color(c.edge)
-                      .text_color(c.muted)
-                      .cursor_pointer()
-                      .hover((s) => s.text_color(c.ink))
-                      .on_click((_e, cx) => {
-                        cx.stop_propagation();
-                        open(i);
-                      })
-                      .child(svg(ICON("expand")).size(11)),
-                  )),
-              )
-              .child(h_flex().h(20).gap(6).items_center().child(glyph(i + 1, 18)).child(div().flex_1().min_w(0).truncate().text_size(13).font_medium().child(o.label)))
-              .when(Boolean(o.meaning), (el) => el.child(div().max_h(51).overflow_hidden().text_size(12.5).line_height("17px").text_color(c.muted).child(o.meaning)));
+            return clickable(
+              v_flex()
+                .flex_none()
+                .w(tileW)
+                .gap(SPACE[3])
+                .opacity(this.ready ? 1 : 0)
+                .transition("opacity", { ...MOTION.row, delay: i * MOTION.stagger })
+                .on_click((_e, cx) => (multi ? this.toggleAsk(q, o.label, cx) : this.answerAsk(q, { picks: [o.label] }, cx)))
+                .child(
+                  div()
+                    .relative()
+                    .flex_none()
+                    .w(tileW)
+                    .h(thumbH)
+                    .rounded(SIZE.control)
+                    .bg(c.well)
+                    .border_1()
+                    .border_color(on ? tone : c.edge)
+                    .overflow_hidden()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .when(d?.state === "ready", (el) => el.child(image(d.image).w(tileW - SPACE[1]).h(thumbH - SPACE[1])))
+                    .when(d?.state === "drawing", (el) => el.child(div().text_size(TYPE.sm).text_color(c.faint).child("Drawing…")))
+                    .when(d?.state === "failed" || !d, (el) => el.child(
+                      v_flex().items_center().gap(SPACE[2]).px(SPACE[3])
+                        .child(div().text_size(TYPE.sm).text_color(c.muted).child("Couldn't draw it here"))
+                        .when(Boolean(o.mockupFile), (col) => col.child(link(`bc-ask-open-${i}`, "Open in browser", (_e, cx) => {
+                          cx.stop_propagation();
+                          openInBrowser(o.mockupFile, cx);
+                        }))),
+                    ))
+                    .when(d?.state === "ready", (el) => el.child(clickable(
+                      div()
+                        .absolute()
+                        .top(SPACE[3])
+                        .right(SPACE[3])
+                        .size(CHIP)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(SIZE.nested)
+                        .bg(c.fill)
+                        .border_1()
+                        .border_color(c.edge)
+                        .text_color(c.muted)
+                        .on_click((_e, cx) => {
+                          cx.stop_propagation();
+                          open(i);
+                        })
+                        .child(svg(ICON("expand")).size(GLYPH.xs)),
+                      c,
+                      `bc-ask-zoom-${i}`,
+                    ))),
+                )
+                .child(h_flex().h(CHIP).gap(SPACE[3]).items_center().child(glyph(i + 1, CHIP)).child(div().flex_1().min_w(0).truncate().text_size(TYPE.md).font_medium().child(o.label)))
+                .when(Boolean(o.meaning), (el) => el.child(div().max_h(LINE.sm * 3).overflow_hidden().text_size(TYPE.sm).line_height(`${LINE.sm}px`).text_color(c.muted).child(o.meaning))),
+              c,
+              `bc-ask-tile-${i}`,
+            );
           }));
       });
       h += gridH;
       list = v_flex().flex_none().gap(gap).children(rowEls);
     } else {
       // Option rows: the number, the label and what it means, in full.
-      const textW = inner - 16 - 20 - 10 - (multi ? 26 : 0);
+      const textW = inner - SPACE[5] - CHIP - SPACE[3] - (multi ? CONTROL : 0);
       let listH = 0;
       const rowEls = options.map((o, i) => {
-        const descRows = o.meaning ? rowsOf(o.meaning, 13, textW) : 0;
-        const rowH = Math.max(34, 15 + 18 + descRows * 19);
-        listH += rowH + (i ? 2 : 0);
+        const descRows = o.meaning ? rowsOf(o.meaning, TYPE.md, textW) : 0;
+        const rowH = Math.max(ROW, TYPE.lg + LINE.sm + descRows * LINE.md);
+        listH += rowH + (i ? SPACE[1] : 0);
         const on = picks.includes(o.label);
-        return h_flex()
-          .id(`bc-ask-opt-${i}`)
-          .flex_none()
-          .h(rowH)
-          .pl(8)
-          .pr(10)
-          .pt(7)
-          .gap(10)
-          .items_start()
-          .rounded(SIZE.nested)
-          .cursor_pointer()
-          .when(on, (el) => el.bg(c.hover))
-          .hover((s) => s.bg(c.hover))
-          .opacity(this.ready ? 1 : 0)
-          .transition("opacity", { ...MOTION.row, delay: i * MOTION.rowStagger })
-          .on_click((_e, cx) => (multi ? this.toggleAsk(q, o.label, cx) : this.answerAsk(q, { picks: [o.label] }, cx)))
-          .child(glyph(i + 1))
-          .child(
-            v_flex()
-              .flex_1()
-              .min_w(0)
-              .child(h_flex().h(18).gap(6).items_center()
-                .child(div().text_size(13).font_medium().child(o.label))
-                .when(Boolean(o.recommended), (el) => el.child(div().text_size(11).text_color(c.accent).child("Recommended"))))
-              .when(Boolean(o.meaning), (el) => el.child(div().text_size(13).line_height("19px").text_color(c.muted).child(o.meaning))),
-          )
-          .when(multi, (el) => el.child(
-            div()
-              .flex_none()
-              .mt(1)
-              .size(16)
-              .flex()
-              .items_center()
-              .justify_center()
-              .rounded(4)
-              .border_1()
-              .border_color(on ? c.accent : c.faint)
-              .when(on, (b) => b.bg(c.accent).child(svg(ICON("check")).size(11).text_color(c.accentInk))),
-          ));
+        return clickable(
+          h_flex()
+            .flex_none()
+            .h(rowH)
+            .pl(SPACE[3])
+            .pr(SPACE[3])
+            .pt(SPACE[3])
+            .gap(SPACE[3])
+            .items_start()
+            .rounded(SIZE.nested)
+            .when(on, (el) => el.bg(c.hover))
+            .opacity(this.ready ? 1 : 0)
+            .transition("opacity", { ...MOTION.row, delay: i * MOTION.stagger })
+            .on_click((_e, cx) => (multi ? this.toggleAsk(q, o.label, cx) : this.answerAsk(q, { picks: [o.label] }, cx)))
+            .child(glyph(i + 1))
+            .child(
+              v_flex()
+                .flex_1()
+                .min_w(0)
+                .child(h_flex().h(CHIP).gap(SPACE[3]).items_center()
+                  .child(div().text_size(TYPE.md).font_medium().child(o.label))
+                  .when(Boolean(o.recommended), (el) => el.child(div().text_size(TYPE.xs).text_color(c.accent).child("Recommended"))))
+                .when(Boolean(o.meaning), (el) => el.child(div().text_size(TYPE.md).line_height(`${LINE.md}px`).text_color(c.muted).child(o.meaning))),
+            )
+            .when(multi, (el) => el.child(
+              div()
+                .flex_none()
+                .mt(SPACE[1])
+                .size(GLYPH.lg)
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(PIP)
+                .border_1()
+                .border_color(on ? c.accent : c.faint)
+                .when(on, (b) => b.bg(c.accent).child(svg(ICON("check")).size(GLYPH.xs).text_color(c.accentInk))),
+            )),
+          c,
+          `bc-ask-opt-${i}`,
+        );
       });
       h += listH;
-      list = v_flex().flex_none().gap(2).children(rowEls);
+      list = v_flex().flex_none().gap(SPACE[1]).children(rowEls);
     }
     // A multi-select moves on when you say so.
     const more = multi
-      ? h_flex()
-        .id("bc-ask-multi")
-        .flex_none()
-        .h(34)
-        .mt(6)
-        .px(10)
-        .gap(8)
-        .items_center()
-        .rounded(SIZE.nested)
-        .text_size(13)
-        .font_medium()
-        .when(picks.length > 0, (el) => el.text_color(c.accent).cursor_pointer().hover((s) => s.bg(c.hover)).on_click((_e, cx) => this.answerAsk(q, { text: "" }, cx)))
-        .when(!picks.length, (el) => el.text_color(c.faint))
-        .child(picks.length ? `Answer with ${picks.length} picked` : "Pick one or more")
+      ? focusable(
+        pressable(
+          h_flex()
+            .flex_none()
+            .h(ROW)
+            .mt(SPACE[3])
+            .px(SPACE[3])
+            .gap(SPACE[3])
+            .items_center()
+            .rounded(SIZE.nested)
+            .text_size(TYPE.md)
+            .font_medium()
+            .when(picks.length > 0, (el) => el.text_color(c.accent).hover((s) => s.bg(c.hover)).on_click((_e, cx) => this.answerAsk(q, { text: "" }, cx)))
+            .when(!picks.length, (el) => el.text_color(c.faint))
+            .child(picks.length ? `Answer with ${picks.length} picked` : "Pick one or more"),
+        ),
+        "bc-ask-multi",
+        c,
+      )
       : null;
-    if (multi) h += 40;
+    if (multi) h += CONTROL + SPACE[4];
 
     // Taller than there is room for: the questions scroll, the head stays.
     const most = Math.max(200, Math.round(this.pageHeight * 0.62) - this.height(this.width) - 40);
     const content = v_flex()
       .flex_none()
-      .when(Boolean(intro), (el) => el.child(div().flex_none().h(introRows * 19).mb(6).overflow_hidden().text_size(13).line_height("19px").text_color(c.muted).child(intro)))
-      .child(div().flex_none().mb(12).text_size(15.5).font_medium().line_height("22px").child(x.text))
+      .when(Boolean(intro), (el) => el.child(div().flex_none().h(introRows * LINE.md).mb(SPACE[3]).overflow_hidden().text_size(TYPE.md).line_height(`${LINE.md}px`).text_color(c.muted).child(intro)))
+      .child(div().flex_none().mb(SPACE[4]).text_size(TYPE.lg).font_medium().line_height(`${LINE.lg}px`).child(x.text))
       .child(list)
       .when(Boolean(more), (el) => el.child(more));
-    h += 4; // a little room: the heights of wrapped words are a guess
+    h += SPACE[2]; // a little room: the heights of wrapped words are a guess
     const scroll = h > most;
     const shownH = scroll ? most : h;
     const body = v_flex()
@@ -1643,8 +1907,8 @@ export class Composer {
         div()
           .id(`bc-ask-scroll-${q.id}-${at.step}`)
           .flex_none()
-          .mt(8)
-          .h(shownH - 32)
+          .mt(SPACE[3])
+          .h(shownH - CONTROL - SPACE[2])
           .overflow_y_scroll()
           .child(content),
       );
@@ -1668,25 +1932,26 @@ export class Composer {
     const n = Drawer.left(q, this.walk?.id === q.id ? this.walk : null);
     const more = this.questions.length - 1;
     return {
-      h: 30,
-      body: h_flex()
-        .id("bc-ask-bar")
-        .w_full()
-        .h(30)
-        .px(8)
-        .gap(8)
-        .items_center()
-        .rounded(SIZE.nested)
-        .cursor_pointer()
-        .hover((s) => s.bg(c.hover))
-        .on_click((_e, cx) => {
-          this.putAway.delete(q.id);
-          this.input.focus();
-          cx.notify();
-        })
-        .child(svg(ICON("ask")).size(15).text_color(c.accent))
-        .child(div().flex_none().text_size(13).font_medium().text_color(c.accent).child(`${q.fromName ?? this.nameOf(q.from)} is waiting for your answer`))
-        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(c.muted).child(`${n} left${more > 0 ? ` · ${more} more set${more > 1 ? "s" : ""}` : ""}`)),
+      h: CONTROL,
+      body: clickable(
+        h_flex()
+          .w_full()
+          .h(CONTROL)
+          .px(SPACE[3])
+          .gap(SPACE[3])
+          .items_center()
+          .rounded(SIZE.nested)
+          .on_click((_e, cx) => {
+            this.putAway.delete(q.id);
+            this.input.focus();
+            cx.notify();
+          })
+          .child(svg(ICON("ask")).size(GLYPH.lg).text_color(c.accent))
+          .child(div().flex_none().text_size(TYPE.md).font_medium().text_color(c.accent).child(`${q.fromName ?? this.nameOf(q.from)} is waiting for your answer`))
+          .child(div().flex_1().min_w(0).truncate().text_size(TYPE.sm).text_color(c.muted).child(`${n} left${more > 0 ? ` · ${more} more set${more > 1 ? "s" : ""}` : ""}`)),
+        c,
+        "bc-ask-bar",
+      ),
     };
   }
 
@@ -1694,63 +1959,65 @@ export class Composer {
     const active = index === this.at;
     const color = tint(c, r);
     const showName = r.kind === "command" ? r.name : r.label;
-    return h_flex()
-      .id(`bc-row-${r.id}`)
-      .flex_none()
-      .h(SIZE.row)
-      .px(8)
-      .gap(8)
-      .items_center()
-      .rounded(SIZE.nested)
-      .cursor_pointer()
-      .when(active, (el) => el.bg(c.hover))
-      .hover((s) => s.bg(c.hover))
-      .opacity(this.ready ? 1 : 0)
-      .transition("opacity", { ...MOTION.row, delay: fromBottom * MOTION.rowStagger })
-      .on_hover((hovered, cx) => {
-        if (hovered && this.at !== index) {
-          this.at = index;
-          cx.notify();
-        }
-      })
-      .on_click((_e, cx) => this.pick(r, cx))
-      // Commands get a tile with their first letter; agents are named in their own colour, no dot.
-      .when(r.kind === "command" || r.kind === "all", (el) =>
-        el.child(
-          div()
-            .size(18)
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(6)
-            .border_1()
-            .border_color(r.color ? color : c.edge)
-            .text_size(10.5)
-            .font_semibold()
-            .text_color(r.color ? color : c.muted)
-            .child(r.name.charAt(0).toUpperCase()),
-        ))
-      .child(div().flex_none().text_size(13).font_medium().text_color(r.kind === "all" ? c.ink : color).child(r.kind === "command" ? `/${showName}` : showName))
-      .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(c.muted).child(r.hint))
-      .child(div().flex_none().px(5).rounded(5).text_size(10.5).font_medium().text_color(color).child(r.tag));
+    return clickable(
+      h_flex()
+        .flex_none()
+        .h(ROW)
+        .px(SPACE[3])
+        .gap(SPACE[3])
+        .items_center()
+        .rounded(SIZE.nested)
+        .when(active, (el) => el.bg(c.hover))
+        .opacity(this.ready ? 1 : 0)
+        .transition("opacity", { ...MOTION.row, delay: fromBottom * MOTION.stagger })
+        .on_hover((hovered, cx) => {
+          if (hovered && this.at !== index) {
+            this.at = index;
+            cx.notify();
+          }
+        })
+        .on_click((_e, cx) => this.pick(r, cx))
+        // Commands get a tile with their first letter; agents are named in their own colour, no dot.
+        .when(r.kind === "command" || r.kind === "all", (el) =>
+          el.child(
+            div()
+              .size(CHIP)
+              .flex_none()
+              .flex()
+              .items_center()
+              .justify_center()
+              .rounded(SIZE.nested)
+              .border_1()
+              .border_color(r.color ? color : c.edge)
+              .text_size(TYPE.xs)
+              .font_semibold()
+              .text_color(r.color ? color : c.muted)
+              .child(r.name.charAt(0).toUpperCase()),
+          ))
+        .child(div().flex_none().text_size(TYPE.md).font_medium().text_color(r.kind === "all" ? c.ink : color).child(r.kind === "command" ? `/${showName}` : showName))
+        .child(div().flex_1().min_w(0).truncate().text_size(TYPE.sm).text_color(c.muted).child(r.hint))
+        .child(div().flex_none().px(SPACE[2]).rounded(SIZE.nested).text_size(TYPE.xs).font_medium().text_color(color).child(r.tag)),
+      c,
+      `bc-row-${r.id}`,
+    );
   }
 
   menuItem(c, id, icon, label, fromBottom, onClick) {
-    return h_flex()
-      .id(id)
-      .flex_none()
-      .h(SIZE.row)
-      .px(8)
-      .gap(8)
-      .items_center()
-      .rounded(SIZE.nested)
-      .cursor_pointer()
-      .hover((s) => s.bg(c.hover))
-      .opacity(this.ready ? 1 : 0)
-      .transition("opacity", { ...MOTION.row, delay: fromBottom * MOTION.rowStagger })
-      .on_click(onClick)
-      .child(svg(ICON(icon)).size(16).text_color(c.muted))
-      .child(div().text_size(13).font_medium().child(label));
+    return clickable(
+      h_flex()
+        .flex_none()
+        .h(ROW)
+        .px(SPACE[3])
+        .gap(SPACE[3])
+        .items_center()
+        .rounded(SIZE.nested)
+        .opacity(this.ready ? 1 : 0)
+        .transition("opacity", { ...MOTION.row, delay: fromBottom * MOTION.stagger })
+        .on_click(onClick)
+        .child(svg(ICON(icon)).size(GLYPH.lg).text_color(c.muted))
+        .child(div().text_size(TYPE.md).font_medium().child(label)),
+      c,
+      id,
+    );
   }
 }

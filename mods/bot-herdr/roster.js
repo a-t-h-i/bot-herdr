@@ -26,11 +26,11 @@ export const roleOf = (key) => ROLES.find((r) => r.role === key) ?? null;
 export const HARNESSES = {
   claude: { model: (m) => ["--model", m], effort: (e) => ["--effort", e], efforts: ["low", "medium", "high", "xhigh", "max"] },
   codex: { model: (m) => ["-m", m], effort: (e) => ["-c", `model_reasoning_effort=${e}`], efforts: ["minimal", "low", "medium", "high", "xhigh"] },
-  pi: { model: (m) => ["--model", m], effort: (e) => ["--thinking", e], efforts: ["off", "minimal", "low", "medium", "high", "xhigh"], lists: ["--list-models"] },
+  pi: { model: (m) => ["--model", m], effort: (e) => ["--thinking", e], efforts: ["off", "minimal", "low", "medium", "high", "xhigh"] },
   omp: { model: (m) => ["--model", m], effort: (e) => ["--thinking", e], efforts: ["off", "minimal", "low", "medium", "high", "xhigh"] },
-  gemini: { model: (m) => ["-m", m], efforts: [], lists: ["models"] },
+  gemini: { model: (m) => ["-m", m], efforts: [] },
   qwen: { model: (m) => ["-m", m], efforts: [] },
-  opencode: { model: (m) => ["-m", m], efforts: [], lists: ["models"] },
+  opencode: { model: (m) => ["-m", m], efforts: [] },
 };
 const OTHER = { model: (m) => ["--model", m], efforts: [] };
 

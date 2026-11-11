@@ -1,0 +1,15 @@
+{
+  "configOptions": [
+    {
+      "id": "model",
+      "name": "Model",
+      "category": "model",
+      "type": "select",
+      "currentValue": "opencode/iceman-free",
+      "options": [
+        { "value": "deepseek/deepseek-v4-pro", "name": "deepseek/DeepSeek V4 Pro" },
+        { "value": "opencode/big-pickle", "name": "opencode/Big Pickle" }
+      ]
+    }
+  ]
+}

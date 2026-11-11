@@ -68,8 +68,3 @@ unnecessary abstraction. Keep business logic out of transport handlers.
 
 Do not directly modify frontend implementation. If frontend behavior requires
 backend changes, report the requirement to the Orchestrator.
-
-## Verification
-
-Test new public behavior and bug fixes according to project standards. Inspect
-the resulting diff before reporting completion.

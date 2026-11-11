@@ -10,16 +10,19 @@
 // .bot-herdr folder); messages for the team go through the chat's composer.
 
 import { div, svg } from "gpui-kit";
-import { v_flex, h_flex, TextView, InputState, Input, TextareaState, Textarea } from "gpui-base";
+import { v_flex, h_flex, TextView, InputState, Input } from "gpui-base";
 import { settings, shared } from "herdr";
-import { SIZE, ICON, agentHue } from "./look.js";
+import { SIZE, ICON, TYPE, LINE, SPACE, ROW, CHIP, CONTROL, MARK, DOT, PIP, HAIR, GLYPH, MOTION, mix, agentHue, agentInk, agentInkOn, isLight, clickable, pressable, focusable } from "./look.js";
+import { segmented, stateView } from "./switch.js";
+import { commentRow, openFirst, openPlan } from "./plandoc.js";
 import { colors } from "./theme.js";
 import { activePage, sendFromChat, OPEN_TASK } from "./pages.js";
 import { ROSTER_KEY, roster, slug } from "./roster.js";
 import { bh, bhJson, enc, projectDir } from "./bh.js";
-import { blocks, outline, notesOn } from "./doc.js";
+import { outline, notesOn } from "./doc.js";
 import { hash } from "./feed.js";
 import { alpha } from "./working.js";
+import { MarkdownEditor } from "./mdedit.js";
 import { Composer } from "./composer.js";
 
 const TABS = [
@@ -57,41 +60,6 @@ export function duration(ms) {
   if (m < 1) return "<1m";
   const h = Math.floor(m / 60);
   return h ? `${h}h ${m % 60}m` : `${m}m`;
-}
-
-/** Comments, the open ones first, then the resolved ones, each in their own order. */
-const openFirst = (list) => [...(list ?? []).filter((x) => x.open !== false), ...(list ?? []).filter((x) => x.open === false)];
-
-/**
- * A comment of yours: a quiet line with the accent at its edge, then its links (Resolve, Edit,
- * Delete; Reopen and Delete once resolved). `actions.key` makes the links' ids; each link is
- * `(cx) => void`. Shared by the work pages and the chat.
- */
-export function commentRow(c, comment, actions) {
-  const open = comment.open !== false;
-  const link = (name, label, run) => div()
-    .id(`${actions.key}-${name}`)
-    .flex_none()
-    .text_size(11.5)
-    .line_height("18px")
-    .text_color(c.faint)
-    .cursor_pointer()
-    .hover((s) => s.text_color(c.ink))
-    .on_click((_e, cx) => {
-      cx.stop_propagation();
-      run(cx);
-    })
-    .child(label);
-  return h_flex()
-    .flex_none()
-    .gap(8)
-    .items_start()
-    .when(!open, (el) => el.opacity(0.55))
-    .child(div().flex_none().w(2).h_full().min_h(18).rounded(1).bg(c.accent))
-    .child(div().flex_1().min_w(0).text_size(12.5).line_height("18px").text_color(c.muted).when(!open, (el) => el.line_through()).child(comment.text))
-    .when(open, (el) => el.child(link("resolve", "Resolve", actions.resolve)).child(link("edit", "Edit", actions.edit)))
-    .when(!open && Boolean(actions.reopen), (el) => el.child(link("reopen", "Reopen", actions.reopen)))
-    .child(link("delete", "Delete", actions.delete));
 }
 
 const workedOf = (t, at = Date.now()) => (t.steps ?? []).reduce((sum, s) => sum + (s.workedMs ?? 0) + (s.status === "active" && s.started ? at - Date.parse(s.started) : 0), 0);
@@ -139,6 +107,8 @@ export class Work {
     this.idea = InputState.new({ placeholder: "What should the team plan?" });
     this.idea.on("submit", (_e, cx) => this.startPlan(cx));
     this.showPrevious = false; // the Plans page's list of plans, from the rail
+    this.pageKey = null; // the page/tab drawn last: rows stagger when it changes
+    this.rowsIn = true; // false for the one frame a freshly opened list is still hidden
     this.comment.on("submit", (_e, cx) => this.sendComment(cx));
     // A comment on one line of a plan, or one step of a task: { kind: "plan" | "task", id, at }.
     this.commenting = null;
@@ -146,9 +116,8 @@ export class Work {
     this.inline.on("submit", (_e, cx) => this.sendInline(cx));
     this.taskComment = InputState.new({ placeholder: "Comment on this task; the Orchestrator takes it up" });
     this.taskComment.on("submit", (_e, cx) => this.sendTaskComment(cx));
-    this.editor = TextareaState.new({ rows: 20 });
-    this.editor.set_soft_wrap(true);
-    this.editor.on("change", (_e, cx) => cx.notify());
+    this.editor = new MarkdownEditor({ value: "", placeholder: "The file itself, as Markdown" });
+    this.editor.on("change", (_value, cx) => cx.notify());
     this.knowSearch = InputState.new({ placeholder: "Search notes" });
     this.knowSearch.on("change", (_e, cx) => cx.notify());
     this.knowFilter = new Set();
@@ -408,6 +377,16 @@ export class Work {
     }
     const c = colors();
     const content = Math.max(320, Math.min(MAX, this.width - SIZE.gutter * 2));
+    // A page or tab opening draws its rows from hidden, then staggers them in; re-renders do not.
+    const pageKey = `${this.tab}:${this.archived}`;
+    if (pageKey !== this.pageKey) {
+      this.pageKey = pageKey;
+      this.rowsIn = false;
+      cx.timer.after(16, (cx) => {
+        this.rowsIn = true;
+        cx.notify();
+      });
+    }
     const body = this.tab === "plans" ? this.plansView(c, content) : this.tab === "knowledge" ? this.knowledgeView(c, content) : this.tasksView(c, content);
     return div()
       .id("bh-work")
@@ -431,60 +410,43 @@ export class Work {
             v_flex()
               .flex_none()
               .w(content)
-              .py(20)
+              .py(SPACE[5])
               .gap(GAP)
               .child(
                 h_flex()
-                  .gap(12)
+                  .gap(SPACE[4])
                   .items_center()
-                  .child(this.fixed ? div().text_size(19).font_semibold().child(TABS.find((t) => t.id === this.fixed).label) : this.tabs(c))
-                  .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(c.faint).child(this.dir ?? ""))
+                  .child(this.fixed ? div().text_size(TYPE.xl).font_semibold().child(TABS.find((t) => t.id === this.fixed).label) : this.tabs(c))
+                  .child(div().flex_1().min_w(0).truncate().text_size(TYPE.sm).text_color(c.faint).child(this.dir ?? ""))
                   .child(this.iconButton(c, "bh-work-refresh", "refresh-cw", (_e, cx) => this.reload(cx))),
               )
-              .when(Boolean(this.problem), (el) => el.child(div().text_size(12.5).text_color(c.danger).child(this.problem)))
+              .when(Boolean(this.problem), (el) => el.child(stateView(c, {
+                id: "bh-work-error",
+                title: "Couldn't load this page",
+                line: this.problem,
+                action: { label: "Try again", on: (_e, cx) => this.reload(cx) },
+              })))
               .child(body),
           ),
       );
   }
 
   tabs(c) {
-    return h_flex()
-      .h(30)
-      .p(2)
-      .gap(2)
-      .items_center()
-      .rounded(SIZE.control)
-      .bg(c.well)
-      .children(TABS.map((t) =>
-        div()
-          .id(`bh-work-tab-${t.id}`)
-          .h(26)
-          .px(11)
-          .flex()
-          .items_center()
-          .rounded(SIZE.nested)
-          .text_size(12.5)
-          .font_medium()
-          .cursor_pointer()
-          .when(t.id === this.tab, (el) => el.bg(c.fill).text_color(c.ink).shadow_sm())
-          .when(t.id !== this.tab, (el) => el.text_color(c.muted).hover((s) => s.text_color(c.ink)))
-          .on_click((_e, cx) => this.show(t.id, cx))
-          .child(t.label)));
+    return segmented(c, {
+      id: "bh-work-tabs",
+      items: TABS.map((t) => ({ id: t.id, label: t.label, on: t.id === this.tab })),
+      onPick: (id, cx) => this.show(id, cx),
+    });
   }
 
   empty(c, title, about) {
-    return v_flex()
-      .py(48)
-      .items_center()
-      .gap(6)
-      .child(div().text_size(16).font_semibold().child(title))
-      .child(div().max_w(460).text_size(13).text_color(c.muted).child(about));
+    return stateView(c, { id: "bh-work-state", title, line: about });
   }
 
   // Tasks
 
   tasksView(c, width) {
-    if (this.tasks === null) return this.empty(c, "Loading…", "");
+    if (this.tasks === null) return stateView(c, { id: "bh-tasks-loading", title: "Loading tasks…", loading: true });
     if (!this.tasks.length) return this.empty(c, "No tasks yet", "Ask the Orchestrator for something sizeable, or type /task in the chat. Its steps, who works on each and for how long show up here.");
     const archived = this.tasks.filter((t) => t.archived);
     const current = this.tasks.filter((t) => !t.archived);
@@ -501,15 +463,19 @@ export class Work {
           .flex_none()
           .w(LIST_W)
           .h(paneH)
-          .gap(10)
-          .pr(14)
-          .child(this.segmented(c, [
-            { id: "tasks", label: "Tasks", count: current.length, on: !this.archived },
-            { id: "archived", label: "Archived", count: archived.length, on: this.archived },
-          ], (id, cx) => {
-            this.archived = id === "archived";
-            this.opened = null;
-            cx.notify();
+          .gap(SPACE[3])
+          .pr(SPACE[4])
+          .child(segmented(c, {
+            id: "bh-task-filter",
+            items: [
+              { id: "tasks", label: "Tasks", count: current.length, on: !this.archived, grow: true },
+              { id: "archived", label: "Archived", count: archived.length, on: this.archived, grow: true },
+            ],
+            onPick: (id, cx) => {
+              this.archived = id === "archived";
+              this.opened = null;
+              cx.notify();
+            },
           }))
           .child(
             v_flex()
@@ -517,17 +483,17 @@ export class Work {
               .flex_1()
               .min_h(0)
               .overflow_y_scroll()
-              .gap(2)
-              .when(!list.length, (el) => el.child(div().pt(12).text_size(12.5).text_color(c.muted).child(this.archived ? "Nothing archived. Archive a finished task from its detail to keep this list short." : "Every task is archived.")))
+              .gap(SPACE[1])
+              .when(!list.length, (el) => el.child(div().pt(SPACE[4]).text_size(TYPE.sm).text_color(c.muted).child(this.archived ? "Nothing archived. Archive a finished task from its detail to keep this list short." : "Every task is archived.")))
               .children(groups.flatMap((g) => [
-                ...(groups.length > 1 || this.archived ? [h_flex().flex_none().h(26).pt(6).px(10).gap(6).items_center()
-                  .child(div().text_size(11.5).font_semibold().text_color(c.muted).child(g.label.toUpperCase()))
-                  .child(div().text_size(11.5).text_color(c.faint).child(String(g.rows.length)))] : []),
-                ...g.rows.map((t) => this.taskRow(c, t)),
+                ...(groups.length > 1 || this.archived ? [h_flex().flex_none().h(CONTROL).pt(SPACE[3]).px(SPACE[3]).gap(SPACE[3]).items_center()
+                  .child(div().text_size(TYPE.xs).font_semibold().text_color(c.muted).child(g.label.toUpperCase()))
+                  .child(div().text_size(TYPE.xs).text_color(c.faint).child(String(g.rows.length)))] : []),
+                ...g.rows.map((t, i) => this.taskRow(c, t, i)),
               ])),
           ),
       )
-      .child(div().flex_none().w(1).h(paneH).bg(c.edge))
+      .child(div().flex_none().w(HAIR).h(paneH).bg(c.edge))
       .child(
         v_flex()
           .id("bh-task-detail")
@@ -535,15 +501,15 @@ export class Work {
           .min_w(0)
           .h(paneH)
           .overflow_y_scroll()
-          .pl(22)
+          .pl(SPACE[4])
           .child(open
             ? this.taskDetail(c, open, width - LIST_W - 37)
-            : v_flex().pt(60).items_center().gap(6).child(div().text_size(13).text_color(c.muted).child("Choose a task to see its steps, progress and comments."))),
+            : v_flex().pt(SPACE[5]).items_center().gap(SPACE[3]).child(div().text_size(TYPE.md).text_color(c.muted).child("Choose a task to see its steps, progress and comments."))),
       );
   }
 
   /** A row of the list: its mark, the title and its age; under them the facts and the steps' pips. */
-  taskRow(c, t) {
+  taskRow(c, t, i = 0) {
     const steps = t.steps ?? [];
     const done = steps.filter((s) => s.status === "done" || s.status === "skipped").length;
     const on = this.opened === t.id;
@@ -552,52 +518,55 @@ export class Work {
     const facts = finished
       ? `${t.status === "done" ? "done" : "abandoned"} · worked ${duration(workedOf(t))}`
       : [blocked ? "blocked" : t.status, t.track ? `${t.track} track` : "", t.git?.branch ? t.git.branch : ""].filter(Boolean).join(" · ");
-    return v_flex()
-      .id(`bh-task-${t.id}`)
-      .flex_none()
-      .px(10)
-      .py(8)
-      .gap(3)
-      .rounded(SIZE.control)
-      .border_1()
-      .border_color(on ? c.edge : "#00000000")
-      .when(on, (el) => el.bg(c.fill))
-      .when(!on, (el) => el.hover((s) => s.bg(c.hover)))
-      .cursor_pointer()
-      .on_click((_e, cx) => {
-        this.opened = t.id;
-        this.commenting = null;
-        cx.notify();
-      })
-      .child(
-        h_flex()
-          .gap(10)
-          .items_center()
-          .child(this.mark(c, t.status, { pulse: false }))
-          .child(div().flex_1().min_w(0).truncate().text_size(13).font_medium().text_color(t.status === "abandoned" ? c.faint : finished ? c.muted : c.ink).child(t.title ?? t.id))
-          .child(div().flex_none().text_size(11.5).text_color(c.faint).child(age(t.updated ?? t.created))),
-      )
-      .child(
-        h_flex()
-          .pl(26)
-          .gap(8)
-          .items_center()
-          .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(blocked ? c.warning : c.muted).child(facts))
-          .when(steps.length > 0 && !finished, (el) => el
-            .child(this.pips(c, steps))
-            .child(div().flex_none().text_size(11.5).text_color(c.faint).child(`${done}/${steps.length}`))),
-      );
+    return clickable(
+      v_flex()
+        .flex_none()
+        .px(SPACE[3])
+        .py(SPACE[3])
+        .gap(SPACE[1])
+        .rounded(SIZE.control)
+        .border_1()
+        .border_color(on ? c.edge : "#00000000")
+        .when(on, (el) => el.bg(c.fill))
+        .opacity(this.rowsIn === false ? 0 : 1)
+        .transition("opacity", { ...MOTION.row, delay: Math.min(i, 8) * MOTION.stagger })
+        .on_click((_e, cx) => {
+          this.opened = t.id;
+          this.commenting = null;
+          cx.notify();
+        })
+        .child(
+          h_flex()
+            .gap(SPACE[3])
+            .items_center()
+            .child(this.mark(c, t.status, { pulse: false }))
+            .child(div().flex_1().min_w(0).truncate().text_size(TYPE.md).font_medium().text_color(t.status === "abandoned" ? c.faint : finished ? c.muted : c.ink).child(t.title ?? t.id))
+            .child(div().flex_none().text_size(TYPE.xs).text_color(c.faint).child(age(t.updated ?? t.created))),
+        )
+        .child(
+          h_flex()
+            .pl(SPACE[4])
+            .gap(SPACE[3])
+            .items_center()
+            .child(div().flex_1().min_w(0).truncate().text_size(TYPE.sm).text_color(blocked ? c.warning : c.muted).child(facts))
+            .when(steps.length > 0 && !finished, (el) => el
+              .child(this.pips(c, steps))
+              .child(div().flex_none().text_size(TYPE.xs).text_color(c.faint).child(`${done}/${steps.length}`))),
+        ),
+      c,
+      `bh-task-${t.id}`,
+    );
   }
 
   /** A task's checkbox mark (read-only): done = accent+tick, active = pulsing inner, blocked/paused = amber !. */
   mark(c, status, { pulse = false, small = false } = {}) {
-    const size = small ? 14 : 16;
-    const box = div().flex_none().size(size).flex().items_center().justify_center().rounded(4);
-    if (status === "done") return box.bg(c.accent).child(svg(ICON("check")).size(small ? 9 : 10).text_color(c.accentInk));
-    if (status === "abandoned" || status === "skipped") return box.border_1().border_color(c.faint).child(div().w(size - 7).h(1.5).rounded(1).bg(c.faint));
-    if (status === "blocked" || status === "paused") return box.border_1().border_color(c.warning).child(div().text_size(small ? 10 : 11).font_bold().line_height(`${size}px`).text_color(c.warning).child("!"));
+    const size = small ? MARK : GLYPH.lg;
+    const box = div().flex_none().size(size).flex().items_center().justify_center().rounded(PIP);
+    if (status === "done") return box.bg(c.accent).child(svg(ICON("check")).size(GLYPH.xs).text_color(c.accentInk));
+    if (status === "abandoned" || status === "skipped") return box.border_1().border_color(c.faint).child(div().w(size - SPACE[3]).h(HAIR).rounded(PIP).bg(c.faint));
+    if (status === "blocked" || status === "paused") return box.border_1().border_color(c.warning).child(div().text_size(TYPE.xs).font_bold().line_height(`${size}px`).text_color(c.warning).child("!"));
     if (status === "active" || status === "now") {
-      const inner = div().size(small ? 6 : 7).rounded(2).bg(c.accent);
+      const inner = div().size(small ? DOT : SPACE[3]).rounded(PIP).bg(c.accent);
       return box.border_1().border_color(c.accent).child(pulse ? inner.opacity(0.45).loop("opacity", { from: 0.25, to: 0.9, period: 1600, easing: "ease-in-out" }) : inner.opacity(0.55));
     }
     return box.border_1().border_color(c.faint);
@@ -606,8 +575,8 @@ export class Work {
   /** A pip per step: done ones lit, the running one half lit. */
   pips(c, steps) {
     const shown = steps.slice(0, 12);
-    return h_flex().flex_none().gap(2).items_center().children(shown.map((s) =>
-      div().flex_none().w(6).h(6).rounded(2).bg(s.status === "done" || s.status === "skipped" ? c.accent : s.status === "active" ? alpha(c.accent, 0.5) : s.status === "blocked" ? c.warning : c.edge)));
+    return h_flex().flex_none().gap(SPACE[1]).items_center().children(shown.map((s) =>
+      div().flex_none().w(DOT).h(DOT).rounded(PIP).bg(s.status === "done" || s.status === "skipped" ? c.accent : s.status === "active" ? alpha(c.accent, 0.5) : s.status === "blocked" ? c.warning : c.edge)));
   }
 
   taskDetail(c, t, width) {
@@ -622,19 +591,19 @@ export class Work {
     const reqText = reqLong && !reqOpen ? req.slice(0, 200).replace(/\s+\S*$/, "") + "…" : req;
     return v_flex()
       .w(width)
-      .gap(14)
-      .pb(24)
+      .gap(SPACE[4])
+      .pb(SPACE[4])
       .child(
         h_flex()
-          .gap(10)
+          .gap(SPACE[3])
           .items_start()
           .child(
             v_flex()
               .flex_1()
               .min_w(0)
-              .gap(3)
-              .child(div().text_size(17).font_semibold().line_height("24px").child(t.title ?? t.id))
-              .child(div().text_size(12).text_color(c.muted).child(`${t.id} · ${facts}`)),
+              .gap(SPACE[1])
+              .child(div().text_size(TYPE.lg).font_semibold().line_height(`${LINE.lg}px`).child(t.title ?? t.id))
+              .child(div().text_size(TYPE.sm).text_color(c.muted).child(`${t.id} · ${facts}`)),
           )
           .when(t.status === "paused", (el) => el.child(this.button(c, `bh-resume-${t.id}`, "Resume", () => sendFromChat(`Resume task ${t.id}`))))
           .when(t.status === "active", (el) => el.child(this.button(c, `bh-pause-${t.id}`, "Pause", (_e, cx) => this.act(["task", "status", t.id, "paused"], cx))))
@@ -642,32 +611,36 @@ export class Work {
           .child(this.chip(c, `bh-arch-${t.id}`, t.archived ? "Unarchive" : "Archive", false, (_e, cx) => this.act(["task", t.archived ? "unarchive" : "archive", t.id], cx))),
       )
       .when(Boolean(t.git?.branch), (el) => el.child(
-        h_flex().gap(6).items_center().text_size(12).text_color(c.muted)
-          .child(svg(ICON("folder")).size(13).text_color(c.faint))
+        h_flex().gap(SPACE[3]).items_center().text_size(TYPE.sm).text_color(c.muted)
+          .child(svg(ICON("folder")).size(GLYPH.md).text_color(c.faint))
           .child(div().min_w(0).truncate().child(t.git.mode === "worktree" ? `Worktree ${t.git.path} · branch ${t.git.branch}` : `Branch ${t.git.branch}${t.git.from ? ` (from ${t.git.from})` : ""}`)),
       ))
-      .when(Boolean(req), (el) => el.child(v_flex().gap(4)
-        .child(div().text_size(13).line_height("20px").child(TextView.markdown(`bh-task-req-${t.id}-${reqOpen ? "o" : "c"}`, reqText)))
-        .when(reqLong, (x) => x.child(div()
-          .id(`bh-task-req-more-${t.id}`)
-          .text_size(12.5)
-          .font_medium()
-          .text_color(c.accent)
-          .cursor_pointer()
-          .hover((s) => s.opacity(0.85))
-          .on_click((_e, cx) => {
-            if (!this.descOpen) this.descOpen = new Set();
-            if (reqOpen) this.descOpen.delete(reqKey); else this.descOpen.add(reqKey);
-            cx.notify();
-          })
-          .child(reqOpen ? "Show less" : "Show more")))))
+      .when(Boolean(req), (el) => el.child(v_flex().gap(SPACE[2])
+        .child(div().text_size(TYPE.md).line_height(`${LINE.md}px`).child(TextView.markdown(`bh-task-req-${t.id}-${reqOpen ? "o" : "c"}`, reqText)))
+        .when(reqLong, (x) => x.child(focusable(
+          pressable(
+            div()
+              .text_size(TYPE.sm)
+              .font_medium()
+              .text_color(c.accent)
+              .hover((s) => s.opacity(0.85))
+              .on_click((_e, cx) => {
+                if (!this.descOpen) this.descOpen = new Set();
+                if (reqOpen) this.descOpen.delete(reqKey); else this.descOpen.add(reqKey);
+                cx.notify();
+              })
+              .child(reqOpen ? "Show less" : "Show more"),
+          ),
+          `bh-task-req-more-${t.id}`,
+          c,
+        )))))
       .child(
         v_flex()
-          .gap(2)
-          .child(h_flex().h(26).gap(8).items_center()
-            .child(div().text_size(12).font_semibold().text_color(c.muted).child("STEPS"))
-            .child(div().text_size(11.5).text_color(c.faint).child(steps.length ? "Click a step to comment on it." : "None yet: the Orchestrator adds them.")))
-          .children(steps.map((s) => {
+          .gap(SPACE[1])
+          .child(h_flex().h(CONTROL).gap(SPACE[3]).items_center()
+            .child(div().text_size(TYPE.sm).font_semibold().text_color(c.muted).child("STEPS"))
+            .child(div().text_size(TYPE.xs).text_color(c.faint).child(steps.length ? "Click a step to comment on it." : "None yet: the Orchestrator adds them.")))
+          .children(steps.map((s, i) => {
             const on = this.addingAt("task", t.id, s.n);
             const notes = comments.filter((x) => x.step === s.n);
             const live = notes.filter((x) => x.open !== false).length;
@@ -676,28 +649,31 @@ export class Work {
             return v_flex()
               .flex_none()
               .child(
-                h_flex()
-                  .id(`bh-step-${t.id}-${s.n}`)
-                  .px(8)
-                  .py(6)
-                  .gap(10)
-                  .items_start()
-                  .rounded(SIZE.nested)
-                  .cursor_pointer()
-                  .when(on, (el) => el.bg(c.hover))
-                  .hover((st) => st.bg(c.hover))
-                  .on_click((_e, cx) => this.startInline("task", t.id, s.n, cx))
-                  .child(this.mark(c, status, { pulse: s.status === "active", small: true }))
-                  .child(v_flex().flex_1().min_w(0)
-                    .child(div().text_size(13).line_height("19px")
-                      .text_color(s.status === "done" || s.status === "skipped" ? c.faint : c.ink)
-                      .child(`${s.n}. ${s.title}`))
-                    // The step under way: a short accent segment travelling along a faint track.
-                    .when(s.status === "active", (el) => el.child(div().relative().h(2).mt(2).rounded(1).bg(alpha(c.accent, 0.15)).overflow_hidden()
-                      .child(div().absolute().top(0).w(12).h(2).rounded(1).bg(c.accent).loop("left", { from: -12, to: 200, period: 2400, easing: "linear" })))))
-                  .child(div().flex_none().text_size(11.5).text_color(c.faint).child([s.agent, time].filter(Boolean).join(" · ")))
-                  .when(live > 0, (el) => el.child(h_flex().flex_none().gap(3).items_center().text_size(11.5).text_color(c.accent)
-                    .child(svg(ICON("comment")).size(12)).child(String(live)))),
+                clickable(
+                  h_flex()
+                    .px(SPACE[3])
+                    .py(SPACE[3])
+                    .gap(SPACE[3])
+                    .items_start()
+                    .rounded(SIZE.nested)
+                    .when(on, (el) => el.bg(c.hover))
+                    .opacity(this.rowsIn === false ? 0 : 1)
+                    .transition("opacity", { ...MOTION.row, delay: Math.min(i, 8) * MOTION.stagger })
+                    .on_click((_e, cx) => this.startInline("task", t.id, s.n, cx))
+                    .child(this.mark(c, status, { pulse: s.status === "active", small: true }))
+                    .child(v_flex().flex_1().min_w(0)
+                      .child(div().text_size(TYPE.md).line_height(`${LINE.md}px`)
+                        .text_color(s.status === "done" || s.status === "skipped" ? c.faint : c.ink)
+                        .child(`${s.n}. ${s.title}`))
+                      // The step under way: a short accent segment travelling along a faint track.
+                      .when(s.status === "active", (el) => el.child(div().relative().h(SPACE[1]).mt(SPACE[1]).rounded(PIP).bg(alpha(c.accent, 0.15)).overflow_hidden()
+                        .child(div().absolute().top(0).w(SPACE[4]).h(SPACE[1]).rounded(PIP).bg(c.accent).loop("left", { from: -SPACE[4], to: 200, period: 2400, easing: "linear" })))))
+                    .child(div().flex_none().text_size(TYPE.xs).text_color(c.faint).child([s.agent, time].filter(Boolean).join(" · ")))
+                    .when(live > 0, (el) => el.child(h_flex().flex_none().gap(SPACE[1]).items_center().text_size(TYPE.xs).text_color(c.accent)
+                      .child(svg(ICON("comment")).size(GLYPH.sm)).child(String(live)))),
+                  c,
+                  `bh-step-${t.id}-${s.n}`,
+                ),
               )
               .children(notes.map((x) => this.commentNote(c, x, this.commentActions("task", t.id, x))))
               .when(on, (el) => el.child(this.inlineBox(c)));
@@ -705,13 +681,13 @@ export class Work {
       )
       .when(comments.some((x) => !x.step), (el) => el.child(
         v_flex()
-          .gap(6)
-          .child(div().text_size(12).font_semibold().text_color(c.muted).child("YOUR COMMENTS"))
+          .gap(SPACE[3])
+          .child(div().text_size(TYPE.sm).font_semibold().text_color(c.muted).child("YOUR COMMENTS"))
           .children(comments.filter((x) => !x.step).map((x) => this.commentNote(c, x, this.commentActions("task", t.id, x)))),
       ))
       .child(
         h_flex()
-          .gap(8)
+          .gap(SPACE[3])
           .items_center()
           .child(this.inputBox(c, this.taskComment))
           .child(this.button(c, "bh-task-comment", "Comment", (_e, cx) => this.sendTaskComment(cx))),
@@ -723,7 +699,7 @@ export class Work {
    * resolved); the inline box opens under it while it is being edited.
    */
   commentNote(c, comment, actions) {
-    const row = commentRow(c, comment, actions).ml(32).mr(8).mb(4);
+    const row = commentRow(c, comment, actions).ml(SPACE[5]).mr(SPACE[3]).mb(SPACE[2]);
     return actions.editing ? v_flex().flex_none().child(row).child(this.inlineBox(c)) : row;
   }
 
@@ -731,11 +707,11 @@ export class Work {
   inlineBox(c) {
     return h_flex()
       .flex_none()
-      .ml(32)
-      .mr(8)
-      .mt(4)
-      .mb(8)
-      .gap(8)
+      .ml(SPACE[5])
+      .mr(SPACE[3])
+      .mt(SPACE[2])
+      .mb(SPACE[3])
+      .gap(SPACE[3])
       .items_center()
       .child(this.inputBox(c, this.inline))
       .child(this.button(c, "bh-inline-send", "Comment", (_e, cx) => this.sendInline(cx)))
@@ -749,45 +725,15 @@ export class Work {
     return div()
       .flex_1()
       .min_w(0)
-      .h(32)
-      .px(10)
+      .h(CONTROL)
+      .px(SPACE[3])
       .flex()
       .items_center()
       .rounded(SIZE.control)
       .bg(c.fill)
       .border_1()
       .border_color(c.edge)
-      .child(Input.new(state).w_full().h_full().text_size(13).text_color(c.ink));
-  }
-
-  /** A row of choices with counts, one lit (Tasks / Archived). */
-  segmented(c, items, onPick) {
-    return h_flex()
-      .flex_none()
-      .h(30)
-      .p(2)
-      .gap(2)
-      .items_center()
-      .rounded(SIZE.control)
-      .bg(c.well)
-      .children(items.map((x) =>
-        h_flex()
-          .id(`bh-seg-${x.id}`)
-          .flex_1()
-          .h(26)
-          .px(10)
-          .gap(6)
-          .items_center()
-          .justify_center()
-          .rounded(SIZE.nested)
-          .text_size(12.5)
-          .font_medium()
-          .cursor_pointer()
-          .when(x.on, (el) => el.bg(c.fill).text_color(c.ink).shadow_sm())
-          .when(!x.on, (el) => el.text_color(c.muted).hover((s) => s.text_color(c.ink)))
-          .on_click((_e, cx) => onPick(x.id, cx))
-          .child(x.label)
-          .child(div().text_size(11.5).text_color(c.faint).child(String(x.count)))));
+      .child(Input.new(state).w_full().h_full().text_size(TYPE.md).text_color(c.ink));
   }
 
   // Plans
@@ -798,7 +744,7 @@ export class Work {
    * panel's seats (click one to leave it out) and the actions; Previous lists the other plans.
    */
   plansView(c, width) {
-    if (this.plans === null) return this.empty(c, "Loading…", "");
+    if (this.plans === null) return stateView(c, { id: "bh-plans-loading", title: "Loading plans…", loading: true });
     const p = this.plan;
     if (!this.plans.length || !p) {
       if (!this.plans.length) return this.planIntro(c, width);
@@ -817,25 +763,57 @@ export class Work {
         .flex_none()
         .w(mainW)
         .h(Math.max(300, this.height - 110))
-        .gap(0)
-        .child(v_flex().flex_1().min_h(0).overflow_y_scroll().gap(14).pb(16)
-          .child(this.planConversation(c, p, mainW))
-          .child(this.planDoc(c, p, mainW)))
-        .child(div().flex_none().pt(8).border_t(1).border_color(c.edge).child(this.planComposer.render(this.cx || { notify() {}, spawn() {}, timer: { after() {}, every() {} } }, mainW, this.height))))
+        .gap(SPACE[1])
+        .child(v_flex().flex_1().min_h(0).overflow_y_scroll().gap(SPACE[4]).pb(SPACE[4])
+          .child(this.planConversation(c, p, mainW)))
+        .child(
+          v_flex()
+            .flex_none()
+            .w_full()
+            .items_center()
+            .when(Boolean(p.markdown), (el) => el.child(this.viewPlanTab(c, p)))
+            .child(this.planComposer.render(this.cx || { notify() {}, spawn() {}, timer: { after() {}, every() {} } }, mainW, this.height)),
+        ))
       .child(div().flex_1())
       .child(this.planRail(c, p, railW));
+  }
+
+  /** The tab on the composer's top edge that opens the plan over everything. */
+  viewPlanTab(c, p) {
+    return clickable(
+      h_flex()
+        .flex_none()
+        .h(CHIP)
+        .px(SPACE[3])
+        .gap(SPACE[2])
+        .items_center()
+        .rounded_t(SIZE.radius)
+        .border_1()
+        .border_color(c.edge)
+        .bg(c.fill)
+        .text_size(TYPE.sm)
+        .font_medium()
+        .text_color(c.muted)
+        .hover((s) => s.text_color(c.ink))
+        .on_click(() => openPlan(p))
+        .child(svg(ICON("file")).size(GLYPH.sm))
+        .child("View plan")
+        .child(div().size(GLYPH.lg).rounded_full().bg(c.well).flex().items_center().justify_center().child(svg(ICON("expand")).size(GLYPH.xs))),
+      c,
+      "bh-view-plan",
+    );
   }
 
   /** Before any plan: one line asking what to plan, and a box that starts it. */
   planIntro(c, width) {
     return v_flex()
       .w(width)
-      .pt(80)
+      .pt(SPACE[5])
       .items_center()
-      .gap(8)
-      .child(div().text_size(17).font_semibold().child("What are we planning?"))
-      .child(div().text_size(13).text_color(c.muted).child("Describe it. The Orchestrator and the panel (Dev, Design, QA, Research) ask what they need, then draft the plan here."))
-      .child(h_flex().mt(10).w(Math.min(560, width)).gap(8).items_center()
+      .gap(SPACE[3])
+      .child(div().text_size(TYPE.lg).font_semibold().child("What are we planning?"))
+      .child(div().text_size(TYPE.md).text_color(c.muted).child("Describe it. The Orchestrator and the panel (Dev, Design, QA, Research) ask what they need, then draft the plan here."))
+      .child(h_flex().mt(SPACE[3]).w(Math.min(560, width)).gap(SPACE[3]).items_center()
         .child(this.inputBox(c, this.idea))
         .child(this.button(c, "bh-plan-go", "Plan it", (_e, cx) => this.startPlan(cx))));
   }
@@ -852,32 +830,39 @@ export class Work {
     return v_flex()
       .flex_none()
       .w(w)
-      .gap(4)
-      .child(div().px(10).pb(2).text_size(12).font_semibold().text_color(c.muted).child("Plans"))
-      .children(this.plans.map((x) =>
-        v_flex()
-          .id(`bh-plan-${x.id}`)
-          .px(10)
-          .py(8)
-          .gap(2)
-          .rounded(SIZE.control)
-          .cursor_pointer()
-          .when(p?.id === x.id, (el) => el.bg(c.fill).border_1().border_color(c.edge))
-          .hover((s) => s.bg(c.hover))
+      .gap(SPACE[2])
+      .child(div().px(SPACE[3]).pb(SPACE[1]).text_size(TYPE.sm).font_semibold().text_color(c.muted).child("Plans"))
+      .children(this.plans.map((x, i) =>
+        clickable(
+          v_flex()
+            .px(SPACE[3])
+            .py(SPACE[3])
+            .gap(SPACE[1])
+            .rounded(SIZE.control)
+            .when(p?.id === x.id, (el) => el.bg(c.fill).border_1().border_color(c.edge))
+            .opacity(this.rowsIn === false ? 0 : 1)
+            .transition("opacity", { ...MOTION.row, delay: Math.min(i, 8) * MOTION.stagger })
+            .on_click((_e, cx) => {
+              this.planId = x.id;
+              keep("plan", x.id);
+              this.reload(cx);
+            })
+            .child(div().truncate().text_size(TYPE.md).font_medium().text_color(x.status === "archived" ? c.faint : c.ink).child(x.title ?? x.id))
+            .child(div().text_size(TYPE.xs).text_color(c.faint).child(`${{ grilling: "Being planned", ready: "Ready", task: "Became a task", archived: "Archived" }[x.status] ?? x.status} · ${day(x.updated)}`)),
+          c,
+          `bh-plan-${x.id}`,
+        )))
+      .child(clickable(
+        div().mt(SPACE[2]).px(SPACE[3]).py(SPACE[3]).rounded(SIZE.control).text_size(TYPE.sm).text_color(c.accent)
           .on_click((_e, cx) => {
-            this.planId = x.id;
-            keep("plan", x.id);
-            this.reload(cx);
+            this.planId = "__new";
+            this.plan = null;
+            cx.notify();
           })
-          .child(div().truncate().text_size(13).font_medium().text_color(x.status === "archived" ? c.faint : c.ink).child(x.title ?? x.id))
-          .child(div().text_size(11.5).text_color(c.faint).child(`${{ grilling: "Being planned", ready: "Ready", task: "Became a task", archived: "Archived" }[x.status] ?? x.status} · ${day(x.updated)}`))))
-      .child(div().id("bh-plan-new-row").mt(4).px(10).py(6).rounded(SIZE.control).text_size(12.5).text_color(c.accent).cursor_pointer().hover((s) => s.bg(c.hover))
-        .on_click((_e, cx) => {
-          this.planId = "__new";
-          this.plan = null;
-          cx.notify();
-        })
-        .child("New plan"));
+          .child("New plan"),
+        c,
+        "bh-plan-new-row",
+      ));
   }
 
   /** Your idea in a bubble, then each set of the panel's questions with what you answered. */
@@ -886,48 +871,48 @@ export class Work {
     const bubble = h_flex().justify_end().child(
       div()
         .max_w(Math.round(width * 0.82))
-        .px(13)
-        .py(9)
+        .px(SPACE[4])
+        .py(SPACE[3])
         .rounded(SIZE.radius)
         .bg(c.bubble)
         .border_1()
         .border_color(c.bubbleEdge)
-        .text_size(14)
+        .text_size(TYPE.md)
         .line_height(`${SIZE.line}px`)
         .child(p.idea || p.title || p.id),
     );
     const set = (q) => v_flex()
       .flex_none()
-      .gap(8)
-      .child(h_flex().gap(8).items_center()
-        .child(div().text_size(12.5).font_semibold().text_color(c.accent).child(q.fromName || "The panel"))
-        .child(div().text_size(11).text_color(c.faint).child(q.status === "open" ? "waiting for you: answer in the chat" : `answered ${day(q.answered)}`)))
+      .gap(SPACE[3])
+      .child(h_flex().gap(SPACE[3]).items_center()
+        .child(div().text_size(TYPE.sm).font_semibold().text_color(c.accent).child(q.fromName || "The panel"))
+        .child(div().text_size(TYPE.xs).text_color(c.faint).child(q.status === "open" ? "waiting for you: answer in the chat" : `answered ${day(q.answered)}`)))
       .children(q.questions.map((x, i) => {
         const a = q.answers?.[i] ?? {};
         const picked = [...(a.picks ?? [])];
         const typed = (a.text ?? "").trim();
         return v_flex()
           .flex_none()
-          .pl(10)
-          .gap(4)
+          .pl(SPACE[3])
+          .gap(SPACE[2])
           .border_l(2)
           .border_color(c.edge)
-          .child(div().text_size(13.5).line_height("20px").child(`${x.seat ? `[${x.seat}] ` : ""}${x.text}`))
-          .child(h_flex().flex_wrap().gap(6).children(x.options.map((o) => {
+          .child(div().text_size(TYPE.md).line_height(`${LINE.md}px`).child(`${x.seat ? `[${x.seat}] ` : ""}${x.text}`))
+          .child(h_flex().flex_wrap().gap(SPACE[3]).children(x.options.map((o) => {
             const on = picked.includes(o.label);
-            return div().h(24).px(8).flex().items_center().rounded(SIZE.nested).border_1().text_size(12)
+            return div().h(CHIP).px(SPACE[3]).flex().items_center().rounded(SIZE.nested).border_1().text_size(TYPE.sm)
               .border_color(on ? c.accent : c.edge).text_color(on ? c.ink : c.muted).when(on, (el) => el.bg(c.well).font_medium())
               .child(`${o.label}${o.recommended ? " (recommended)" : ""}`);
           })))
-          .when(Boolean(typed), (el) => el.child(div().text_size(12.5).text_color(c.muted).child(`You: ${typed}`)))
-          .when(q.status !== "open" && !picked.length && !typed, (el) => el.child(div().text_size(12).text_color(c.faint).child("Left for the panel to decide")));
+          .when(Boolean(typed), (el) => el.child(div().text_size(TYPE.sm).text_color(c.muted).child(`You: ${typed}`)))
+          .when(q.status !== "open" && !picked.length && !typed, (el) => el.child(div().text_size(TYPE.sm).text_color(c.faint).child("Left for the panel to decide")));
       }));
     return v_flex()
       .flex_none()
-      .gap(14)
+      .gap(SPACE[4])
       .child(bubble)
       .children(asked.map(set))
-      .when(!asked.length && !p.markdown, (el) => el.child(div().text_size(13).text_color(c.muted).child("The panel is reading the code. Its questions show here and in the chat.")));
+      .when(!asked.length && !p.markdown, (el) => el.child(div().text_size(TYPE.md).text_color(c.muted).child("The panel is reading the code. Its questions show here and in the chat.")));
   }
 
   /** The rail: the round, the panel's seats, the actions. */
@@ -939,116 +924,65 @@ export class Work {
       ["qa", "QA", ICON("check"), false],
       ["research", "Research", ICON("info"), false],
     ];
-    const hues = { orchestrator: c.accent, dev: "#5b8def", design: "#d6825a", qa: "#3fa877", research: "#a47bd6" };
+    const hues = { orchestrator: agentHue("orchestrator", c.accent), dev: agentHue("dev"), design: agentHue("design"), qa: agentHue("qa"), research: agentHue("research") };
     const off = new Set(p.off ?? []);
     return v_flex()
       .flex_none()
       .w(w)
-      .pt(2)
-      .gap(6)
+      .pt(SPACE[1])
+      .gap(SPACE[3])
       .items_center()
-      .child(v_flex().items_center().pb(4)
-        .child(div().text_size(15).font_semibold().child(String(Math.max(1, p.round ?? 0))))
-        .child(div().text_size(10.5).text_color(c.faint).child("round")))
+      .child(v_flex().items_center().pb(SPACE[2])
+        .child(div().text_size(TYPE.lg).font_semibold().child(String(Math.max(1, p.round ?? 0))))
+        .child(div().text_size(TYPE.xs).text_color(c.faint).child("round")))
       .children(seats.map(([seat, name, icon, fixed]) => {
         const on = !off.has(seat);
         const hue = hues[seat] || c.accent;
-        return div()
-          .id(`bh-seat-${seat}`)
-          .tooltip(name)
-          .relative()
-          .size(36)
-          .flex_none()
-          .flex()
-          .items_center()
-          .justify_center()
-          .rounded(SIZE.control)
-          .border_1()
-          .border_color(on ? alpha(hue, 0.45) : c.edge)
-          .bg(on ? alpha(hue, 0.14) : c.ground)
-          .text_color(on ? hue : c.faint)
-          .when(!fixed, (el) => el.cursor_pointer().hover((s) => s.bg(on ? alpha(hue, 0.22) : c.hover)).on_click((_e, cx) => {
-            this.act(["plan", "seat", p.id, seat, off.has(seat) ? "--on" : "--off"], cx);
-          }))
-          .child(svg(icon).size(16));
+        return focusable(
+          pressable(
+            div()
+              .tooltip(name)
+              .relative()
+              .size(ROW)
+              .flex_none()
+              .flex()
+              .items_center()
+              .justify_center()
+              .rounded(SIZE.control)
+              .border_1()
+              .border_color(on ? alpha(hue, 0.45) : c.edge)
+              .bg(on ? alpha(hue, 0.14) : c.ground)
+              .text_color(on ? agentInk(c, name) : c.faint)
+              .when(!fixed, (el) => el.hover((s) => s.bg(on ? alpha(hue, 0.22) : c.hover)).on_click((_e, cx) => {
+                this.act(["plan", "seat", p.id, seat, off.has(seat) ? "--on" : "--off"], cx);
+              }))
+              .child(svg(icon).size(GLYPH.lg)),
+          ),
+          `bh-seat-${seat}`,
+          c,
+        );
       }))
-      .child(div().w(24).h(1).my(4).bg(c.edge))
-      .child(div().id("bh-plan-prev").size(36).flex().items_center().justify_center().rounded(SIZE.control).border_1().border_color(c.edge).cursor_pointer().hover((s) => s.bg(c.hover))
-        .on_click((_e, cx) => { this.showPrevious = !this.showPrevious; cx.notify(); })
-        .child(svg(ICON("chevron-left")).size(15).text_color(this.showPrevious ? c.accent : c.muted)))
-      .child(div().id("bh-plan-new").size(36).flex().items_center().justify_center().rounded(SIZE.control).border_1().border_color(c.edge).cursor_pointer().hover((s) => s.bg(c.hover))
-        .on_click((_e, cx) => { this.planId = "__new"; this.plan = null; cx.notify(); })
-        .child(svg(ICON("plus")).size(15).text_color(c.muted)));
-  }
-
-  planDoc(c, p, width) {
-    const all = openFirst(p.comments);
-    return v_flex()
-      .flex_none()
-      .w(width)
-      .p(16)
-      .gap(12)
-      .rounded(SIZE.radius)
-      .bg(c.fill)
-      .border_1()
-      .border_color(c.edge)
-      .child(
-        h_flex()
-          .gap(8)
-          .items_center()
-          .child(div().flex_1().min_w(0).text_size(16).font_semibold().child(p.title ?? p.id))
-          .when(p.status === "ready" && !p.task, (el) => el.child(this.button(c, "bh-plan-start", "Start task", () => sendFromChat(`The plan ${p.id} ("${p.title}") is agreed: make it a task (bh plan task ${p.id}) and start it.`))))
-          .child(this.chip(c, "bh-plan-arch", p.status === "archived" ? "Unarchive" : "Archive", false, (_e, cx) => this.act(["plan", p.status === "archived" ? "unarchive" : "archive", p.id], cx))),
-      )
-      .when(Boolean(p.markdown), (el) => el.child(div().text_size(11.5).text_color(c.faint).child("Click any line to comment on it.")))
-      .child(p.markdown
-        ? this.planLines(c, p)
-        : div().text_size(13).text_color(c.muted).child("No draft yet: the panel is still asking."))
-      .when(all.some((x) => !x.line), (el) => el.child(
-        v_flex()
-          .gap(6)
-          .child(div().text_size(12).font_semibold().text_color(c.muted).child("Your comments on the plan"))
-          .children(all.filter((x) => !x.line).map((x) => this.commentNote(c, x, this.commentActions("plan", p.id, x)))),
+      .child(div().w(CHIP).h(HAIR).my(SPACE[2]).bg(c.edge))
+      .child(clickable(
+        div().size(ROW).flex().items_center().justify_center().rounded(SIZE.control).border_1().border_color(c.edge)
+          .on_click((_e, cx) => { this.showPrevious = !this.showPrevious; cx.notify(); })
+          .child(svg(ICON("chevron-left")).size(GLYPH.lg).text_color(this.showPrevious ? c.accent : c.muted)),
+        c,
+        "bh-plan-prev",
+      ))
+      .child(clickable(
+        div().size(ROW).flex().items_center().justify_center().rounded(SIZE.control).border_1().border_color(c.edge)
+          .on_click((_e, cx) => { this.planId = "__new"; this.plan = null; cx.notify(); })
+          .child(svg(ICON("plus")).size(GLYPH.lg).text_color(c.muted)),
+        c,
+        "bh-plan-new",
       ));
-  }
-
-  /** The draft in pieces (a heading, an item, a paragraph…), each one a click away from a comment. */
-  planLines(c, p) {
-    const parts = blocks(p.markdown);
-    const lines = String(p.markdown).split("\n").length;
-    return v_flex()
-      .gap(1)
-      .children(parts.map((b, i) => {
-        const next = parts[i + 1]?.line ?? lines + 1;
-        const notes = openFirst(p.comments).filter((x) => x.line != null && x.line >= b.line && x.line < next);
-        const live = notes.filter((x) => x.open !== false).length;
-        const on = this.addingAt("plan", p.id, b.line);
-        return v_flex()
-          .flex_none()
-          .child(
-            h_flex()
-              .id(`bh-plan-b-${p.id}-${b.line}`)
-              .px(8)
-              .py(2)
-              .gap(8)
-              .items_start()
-              .rounded(SIZE.nested)
-              .cursor_pointer()
-              .when(on, (el) => el.bg(c.hover))
-              .hover((st) => st.bg(c.hover))
-              .on_click((_e, cx) => this.startInline("plan", p.id, b.line, cx))
-              .child(div().flex_1().min_w(0).text_size(13.5).line_height(`${SIZE.line}px`).child(TextView.markdown(`bh-plan-md-${p.id}-${p.round ?? 0}-${b.line}`, b.text)))
-              .when(live > 0, (el) => el.child(h_flex().flex_none().pt(3).gap(3).items_center().text_size(11.5).text_color(c.accent)
-                .child(svg(ICON("comment")).size(12)).child(String(live)))),
-          )
-          .children(notes.map((x) => this.commentNote(c, x, this.commentActions("plan", p.id, x))))
-          .when(on, (el) => el.child(this.inlineBox(c)));
-      }));
   }
 
   // Knowledge
 
   knowledgeView(c, width) {
+    if (this.knowAll == null) return stateView(c, { id: "bh-know-loading", title: "Loading knowledge…", loading: true });
     const all = this.knowAll ?? [];
     const agents = all.map((x) => x.agent);
     const q = (this.knowSearch?.value?.() ?? "").toLowerCase().trim();
@@ -1065,40 +999,54 @@ export class Work {
     const edited = this.knownText !== null && this.editor.value() === this.knownText ? false : this.knownText !== null && this.editor.value() !== this.knownText;
     if (this.editing) {
       const who = (this.agent ?? "orchestrator");
-      return v_flex().w(width).gap(10)
-        .child(h_flex().gap(8).items_center()
-          .child(div().text_size(16).font_semibold().child(who.charAt(0).toUpperCase() + who.slice(1)))
+      return v_flex().w(width).gap(SPACE[3])
+        .child(h_flex().gap(SPACE[3]).items_center()
+          .child(div().text_size(TYPE.lg).font_semibold().child(who.charAt(0).toUpperCase() + who.slice(1)))
           .child(div().flex_1())
           .child(this.chip(c, "bh-know-undo", "Cancel", false, (_e, cx) => { this.editor.set_value(this.knownText ?? ""); this.editing = false; cx.notify(); }))
           .when(this.knownText !== null && this.editor.value() !== this.knownText, (x) => x.child(this.button(c, "bh-know-save", "Save", (_e, cx) => this.saveKnowledge(cx)))))
-        .child(div().text_size(12).text_color(c.muted).child("The file itself, as Markdown. Saving keeps the version before in the archive."))
-        .child(div().h(bodyH).p(10).rounded(SIZE.control).bg(c.ground).border_1().border_color(c.edge)
-          .child(Textarea.new(this.editor).w_full().h(bodyH - 20).text_size(13).text_color(c.ink)));
+        .child(div().text_size(TYPE.sm).text_color(c.muted).child("The file itself, as Markdown. Saving keeps the version before in the archive."))
+        .child(div().h(bodyH).p(SPACE[3]).rounded(SIZE.control).bg(c.ground).border_1().border_color(c.edge).overflow_y_scroll()
+          .child(this.editor.render(c, this.cx, "bh-know-md")));
     }
     return v_flex()
       .w(width)
-      .gap(12)
-      .child(h_flex().gap(8).items_center()
-        .child(div().flex_1().min_w(180).max_w(320).h(32).px(10).flex().items_center().rounded(SIZE.control).bg(c.fill).border_1().border_color(c.edge)
-          .child(Input.new(this.knowSearch).w_full().h_full().text_size(13).text_color(c.ink)))
-        .child(h_flex().flex_1().gap(6).flex_wrap().items_center().children(agents.map((a) => {
+      .gap(SPACE[4])
+      .child(h_flex().gap(SPACE[3]).items_center()
+        .child(div().flex_1().min_w(180).max_w(320).h(CONTROL).px(SPACE[3]).flex().items_center().rounded(SIZE.control).bg(c.fill).border_1().border_color(c.edge)
+          .child(Input.new(this.knowSearch).w_full().h_full().text_size(TYPE.md).text_color(c.ink)))
+        .child(h_flex().flex_1().gap(SPACE[3]).flex_wrap().items_center().children(agents.map((a) => {
           const on = !filter.size || filter.has(a);
           const hue = hueFor(a);
-          return div().id(`bh-know-chip-${a}`).h(28).px(10).flex().items_center().gap(6).rounded_full().border_1().cursor_pointer()
-            .border_color(on ? alpha(hue, 0.5) : c.edge).bg(on ? alpha(hue, 0.16) : c.ground).text_color(on ? hue : c.muted)
-            .hover((s) => s.bg(alpha(hue, 0.22)))
-            .on_click((_e, cx) => {
-              if (!this.knowFilter) this.knowFilter = new Set();
-              if (this.knowFilter.has(a)) this.knowFilter.delete(a); else { if (!this.knowFilter.size) this.knowFilter = new Set(agents.filter((x) => x !== a)); else this.knowFilter.add(a); }
-              if (this.knowFilter.size === agents.length) this.knowFilter.clear();
-              cx.notify();
-            })
-            .child(div().size(8).rounded_full().bg(hue))
-            .child(div().text_size(12.5).font_medium().child(a.charAt(0).toUpperCase() + a.slice(1)));
+          const light = isLight(c);
+          return focusable(
+            pressable(
+              div().h(CONTROL).px(SPACE[3]).flex().items_center().gap(SPACE[3]).rounded_full().border_1()
+                .border_color(on ? alpha(hue, light ? 0.35 : 0.5) : c.edge)
+                .bg(on ? (light ? alpha(hue, 0.04) : alpha(hue, 0.16)) : c.fill)
+                .text_color(on ? c.ink : c.muted)
+                .hover((s) => s.bg(light ? c.hover : alpha(hue, 0.22)))
+                .on_click((_e, cx) => {
+                  if (!this.knowFilter) this.knowFilter = new Set();
+                  if (this.knowFilter.has(a)) this.knowFilter.delete(a); else { if (!this.knowFilter.size) this.knowFilter = new Set(agents.filter((x) => x !== a)); else this.knowFilter.add(a); }
+                  if (this.knowFilter.size === agents.length) this.knowFilter.clear();
+                  cx.notify();
+                })
+                .child(div().size(SPACE[3]).rounded_full().bg(hue))
+                .child(div().text_size(TYPE.sm).font_medium().child(a.charAt(0).toUpperCase() + a.slice(1))),
+            ),
+            `bh-know-chip-${a}`,
+            c,
+          );
         }))))
-      .child(h_flex().w(width).gap(12).items_start().children(columns.map((col, ci) =>
-        v_flex().flex_1().min_w(0).gap(12).children(col.map((card, i) => this.knowNoteCard(c, card, hueFor(card.agent))))))
-        .when(!cards.length, (el) => el.child(div().w_full().py(40).text_size(13).text_color(c.muted).child("No notes match."))));
+      .child(h_flex().w(width).gap(SPACE[4]).items_start().children(
+        columns.map((col) =>
+          v_flex().flex_1().min_w(0).gap(SPACE[4]).children(
+            col.map((card, i) => this.knowNoteCard(c, card, hueFor(card.agent), i)),
+          ),
+        ),
+      ))
+      .when(!cards.length, (el) => el.child(div().w_full().py(SPACE[5]).text_size(TYPE.md).text_color(c.muted).child("No notes match.")));
   }
 
   /** A knowledge note's links: Resolve and Delete both take it back; Edit is unnote, then note again. */
@@ -1117,97 +1065,121 @@ export class Work {
     };
   }
 
-  knowNoteCard(c, card, hue) {
+  knowNoteCard(c, card, hue, index = 0) {
     const { agent, entry: e, notes, section } = card;
     const on = this.addingAt("knowledge", agent, e.line);
     const body = /^\s{0,3}[-*+]\s+/.test(e.text) ? e.text.replace(/^\s{0,3}[-*+]\s+/, "") : e.text;
-    return v_flex()
-      .id(`bh-know-card-${agent}-${e.line}`)
-      .flex_none()
-      .p(12)
-      .gap(8)
-      .rounded(SIZE.radius)
-      .bg(alpha(hue, 0.1))
-      .border_1()
-      .border_color(alpha(hue, 0.28))
-      .shadow_sm()
-      .hover((s) => s.bg(alpha(hue, 0.14)).border_color(alpha(hue, 0.38)))
-      .cursor_pointer()
-      .on_click((_e, cx) => { this.agent = agent; this.startInline("knowledge", agent, e.line, cx); })
-      .child(h_flex().gap(6).items_center()
-        .child(div().size(8).rounded_full().bg(hue))
-        .child(div().text_size(11.5).font_medium().text_color(hue).child(agent.charAt(0).toUpperCase() + agent.slice(1)))
-        .when(Boolean(section), (el) => el.child(div().text_size(11).text_color(c.faint).child(section)))
-        .child(div().flex_1())
-        .child(div().id(`bh-know-edit-${agent}-${e.line}`).size(22).flex().items_center().justify_center().rounded(SIZE.nested).text_color(c.faint).hover((s) => s.bg(c.hover).text_color(c.ink))
-          .on_click((_ev, cx) => { cx.stop_propagation?.(); this.agent = agent; this.knownText = (this.knowAll?.find((x) => x.agent === agent)?.text ?? ""); this.editor.set_value(this.knownText); this.editing = true; cx.notify(); })
-          .child(svg(ICON("external-link")).size(12)))
-        .child(this.confirmDelete === `${agent}:${e.line}`
-          ? h_flex().gap(4).items_center()
-            .child(this.chip(c, `bh-know-del-yes-${e.line}`, "Delete", false, (_ev, cx) => { cx.stop_propagation?.(); this.deleteEntry(agent, e, cx); }))
-            .child(this.chip(c, `bh-know-del-no-${e.line}`, "Keep", false, (_ev, cx) => { cx.stop_propagation?.(); this.confirmDelete = null; cx.notify(); }))
-          : div().id(`bh-know-del-${agent}-${e.line}`).size(22).flex().items_center().justify_center().rounded(SIZE.nested).text_color(c.faint).hover((s) => s.bg(c.well).text_color(c.danger))
-            .on_click((_ev, cx) => { cx.stop_propagation?.(); this.confirmDelete = `${agent}:${e.line}`; this.agent = agent; cx.notify(); })
-            .child(svg(ICON("trash")).size(12))))
-      .child(div().text_size(13.5).line_height("20px").child(TextView.markdown(`bh-know-card-md-${agent}-${e.line}-${hash(e.text)}`, body)))
-      .when(notes.length > 0, (el) => el.child(v_flex().gap(4).children(notes.map((n) => this.commentNote(c, { id: n.at, text: n.note, open: true }, this.noteActions(agent, e, n))))))
-      .when(on, (el) => el.child(this.inlineBox(c).ml(0).mr(0)));
+    const light = isLight(c);
+    return clickable(
+      v_flex()
+        .flex_none()
+        .relative()
+        .p(SPACE[4])
+        .gap(SPACE[3])
+        .rounded(SIZE.radius)
+        .bg(light ? c.fill : mix(c.ground, hue, 0.08))
+        .border_1()
+        .border_color(c.edge)
+        .hover((s) => (light ? s.border_color(alpha(hue, 0.35)) : s.bg(mix(c.ground, hue, 0.12)).border_color(alpha(hue, 0.35))))
+        .opacity(this.rowsIn === false ? 0 : 1)
+        .transition("opacity", { ...MOTION.row, delay: Math.min(index, 8) * MOTION.stagger })
+        .on_click((_e, cx) => { this.agent = agent; this.startInline("knowledge", agent, e.line, cx); })
+        // The hue stays a mark in light mode: a 2px bar, the dot and the name.
+        .child(div().absolute().left(0).top(SPACE[4]).bottom(SPACE[4]).w(SPACE[1]).rounded(PIP).bg(hue))
+        .child(h_flex().gap(SPACE[3]).items_center()
+          .child(div().size(SPACE[3]).rounded_full().bg(hue))
+          .child(div().text_size(TYPE.xs).font_medium().text_color(light ? agentInk(c, agent) : agentInkOn(c, agent, mix(c.ground, hue, 0.12))).child(agent.charAt(0).toUpperCase() + agent.slice(1)))
+          .when(Boolean(section), (el) => el.child(div().text_size(TYPE.xs).text_color(c.faint).child(section)))
+          .child(div().flex_1())
+          .child(focusable(
+            pressable(
+              div().size(CHIP).flex().items_center().justify_center().rounded(SIZE.nested).text_color(c.faint).hover((s) => s.bg(c.hover).text_color(c.ink))
+                .on_click((_ev, cx) => { cx.stop_propagation?.(); this.agent = agent; this.knownText = (this.knowAll?.find((x) => x.agent === agent)?.text ?? ""); this.editor.set_value(this.knownText); this.editing = true; cx.notify(); })
+                .child(svg(ICON("external-link")).size(GLYPH.sm)),
+            ),
+            `bh-know-edit-${agent}-${e.line}`,
+            c,
+          ))
+          .child(this.confirmDelete === `${agent}:${e.line}`
+            ? h_flex().gap(SPACE[2]).items_center()
+              .child(this.chip(c, `bh-know-del-yes-${e.line}`, "Delete", false, (_ev, cx) => { cx.stopPropagation?.(); this.deleteEntry(agent, e, cx); }))
+              .child(this.chip(c, `bh-know-del-no-${e.line}`, "Keep", false, (_ev, cx) => { cx.stopPropagation?.(); this.confirmDelete = null; cx.notify(); }))
+            : focusable(
+              pressable(
+                div().size(CHIP).flex().items_center().justify_center().rounded(SIZE.nested).text_color(c.faint).hover((s) => s.bg(c.well).text_color(c.danger))
+                  .on_click((_ev, cx) => { cx.stopPropagation?.(); this.confirmDelete = `${agent}:${e.line}`; this.agent = agent; cx.notify(); })
+                  .child(svg(ICON("trash")).size(GLYPH.sm)),
+              ),
+              `bh-know-del-${agent}-${e.line}`,
+              c,
+            )))
+        .child(div().text_size(TYPE.md).line_height(`${LINE.md}px`).child(TextView.markdown(`bh-know-card-md-${agent}-${e.line}-${hash(e.text)}`, body)))
+        .when(notes.length > 0, (el) => el.child(v_flex().gap(SPACE[2]).children(notes.map((n) => this.commentNote(c, { id: n.at, text: n.note, open: true }, this.noteActions(agent, e, n))))))
+        .when(on, (el) => el.child(this.inlineBox(c).ml(0).mr(0))),
+      c,
+      `bh-know-card-${agent}-${e.line}`,
+    );
   }
 
   // Bits
 
   chip(c, id, label, on, onClick) {
-    return div()
-      .id(id)
-      .flex_none()
-      .h(SIZE.chip)
-      .px(10)
-      .flex()
-      .items_center()
-      .rounded(SIZE.nested)
-      .border_1()
-      .text_size(12.5)
-      .cursor_pointer()
-      .when(on, (el) => el.bg(c.well).border_color(c.accent).text_color(c.ink).font_medium())
-      .when(!on, (el) => el.border_color(c.edge).text_color(c.muted).hover((s) => s.bg(c.hover).text_color(c.ink)))
-      .on_click(onClick)
-      .child(label);
+    return clickable(
+      div()
+        .flex_none()
+        .h(CHIP)
+        .px(SPACE[3])
+        .flex()
+        .items_center()
+        .rounded(SIZE.nested)
+        .border_1()
+        .text_size(TYPE.sm)
+        .when(on, (el) => el.bg(c.well).border_color(c.accent).text_color(c.ink).font_medium())
+        .when(!on, (el) => el.border_color(c.edge).text_color(c.muted).hover((s) => s.bg(c.hover).text_color(c.ink)))
+        .on_click(onClick)
+        .child(label),
+      c,
+      id,
+    );
   }
 
   button(c, id, label, onClick) {
-    return div()
-      .id(id)
-      .flex_none()
-      .h(30)
-      .px(12)
-      .flex()
-      .items_center()
-      .rounded(SIZE.control)
-      .bg(c.accent)
-      .border_b(1)
-      .border_color(c.accentLip)
-      .text_size(12.5)
-      .font_medium()
-      .text_color(c.accentInk)
-      .cursor_pointer()
-      .hover((s) => s.opacity(0.92))
-      .on_click(onClick)
-      .child(label);
+    return clickable(
+      div()
+        .flex_none()
+        .h(CONTROL)
+        .px(SPACE[4])
+        .flex()
+        .items_center()
+        .rounded(SIZE.control)
+        .bg(c.accent)
+        .border_b(1)
+        .border_color(c.accentLip)
+        .text_size(TYPE.sm)
+        .font_medium()
+        .text_color(c.accentInk)
+        .hover((s) => s.opacity(0.92))
+        .on_click(onClick)
+        .child(label),
+      c,
+      id,
+    );
   }
 
   iconButton(c, id, icon, onClick) {
-    return div()
-      .id(id)
-      .size(28)
-      .flex_none()
-      .flex()
-      .items_center()
-      .justify_center()
-      .rounded(SIZE.nested)
-      .text_color(c.muted)
-      .cursor_pointer()
-      .hover((s) => s.bg(c.hover).text_color(c.ink))
-      .on_click(onClick)
-      .child(svg(ICON(icon)).size(14));
+    return clickable(
+      div()
+        .size(CONTROL)
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(SIZE.nested)
+        .text_color(c.muted)
+        .on_click(onClick)
+        .child(svg(ICON(icon)).size(MARK)),
+      c,
+      id,
+    );
   }
 }

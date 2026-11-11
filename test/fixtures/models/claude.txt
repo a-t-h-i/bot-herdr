@@ -1,0 +1,11 @@
+﻿Claude Code version: 2.1.322 (Claude Code)
+Command: claude --help (model selection flags)
+
+>   --fallback-model <model>              Enable automatic fallback to specified
+                                          model(s) when the default model is
+                                          overloaded or not available. Accepts a
+>   --model <model>                       Model for the current session. Provide
+                                          an alias for the latest model (e.g.
+                                          'fable', 'opus', or 'sonnet') or a
+
+

@@ -10,11 +10,12 @@ import { div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextView, InputState, Input } from "gpui-base";
 import { terminals, spaces, focused, settings, shared, setShared, readTextFile } from "herdr";
 import * as fs from "fs/promises";
-import { SIZE, ICON, readable, textWidth, agentHue } from "./look.js";
+import { SIZE, ICON, TYPE, LINE, SPACE, ROW, CHIP, TARGET, MARK, DOT, PIP, GLYPH, MOTION, readable, textWidth, agentInk, clickable } from "./look.js";
+import { stateView } from "./switch.js";
 import { colors } from "./theme.js";
 import { Composer, outboxDir, liveAgents } from "./composer.js";
 import { isQuiet, quietStatus } from "./live.js";
-import { FOCUS, OUTGOING, OPEN_TASK, activePage, openTerminal, showPage } from "./pages.js";
+import { FOCUS, OUTGOING, OPEN_TASK, activePage, openTerminal, showPage, sendFromChat } from "./pages.js";
 import { replyFile, replyBody, push, shown, scrollBy, isNew, outcome, clock, segments, fold, linkFiles, fileTarget, FILE_LINK, addComment, editComment, resolveComment, deleteComment } from "./feed.js";
 import { openFile } from "./viewer.js";
 import { bh, bhJson, enc, projectDir } from "./bh.js";
@@ -23,7 +24,7 @@ import { indicatorFor, roleOf, onTurn, TURN_MS } from "./working.js";
 import { findAgent, roster, ROSTER_KEY } from "./roster.js";
 import { summary } from "./drawer.js";
 import { mockup, openInBrowser } from "./media.js";
-import { commentRow } from "./work.js";
+import { commentRow } from "./plandoc.js";
 import { openLightbox } from "./lightbox.js";
 
 /** Where agents' questions for the person wait (bh ask writes them; answered ones move aside). */
@@ -72,6 +73,10 @@ export class Chat {
     this.turnShown = true; // the line's first frame is drawn low and clear, then slides up
     this.drawnFx = null; // the motion the working line showed last, to redraw when it changes
     this.verbShown = true; // false for the one frame before a new verb fades in
+    this.hovered = null; // entry id under the pointer: its actions show
+    this.arrived = new Set(); // entry ids already drawn once: new ones arrive with MOTION.arrive
+    this.primed = false; // the first draw is not an arrival
+    this.arriving = new Set(); // ids drawn at rest for their one arrival frame
     this.commenting = null; // the reply with its comment box open: { entry, edit: cid | null }
     this.commentBoxes = new Map(); // agent name → its comment box (a placeholder is fixed when made)
     this.composer = new Composer({
@@ -193,28 +198,31 @@ export class Chat {
   }
 
   /** Under a reply: its comments (the box under the one being edited), the Comment link, the new box. */
-  replyComments(c, e) {
+  replyComments(c, e, show = true) {
     const w = this.commenting?.entry === e.id ? this.commenting : null;
     return v_flex()
       .flex_none()
-      .gap(4)
+      .gap(SPACE[2])
       .children((e.comments ?? []).map((x) => (w?.edit === x.id
-        ? v_flex().flex_none().gap(4).child(commentRow(c, x, this.replyCommentActions(e, x))).child(this.commentInput(c, e))
+        ? v_flex().flex_none().gap(SPACE[2]).child(commentRow(c, x, this.replyCommentActions(e, x))).child(this.commentInput(c, e))
         : commentRow(c, x, this.replyCommentActions(e, x)))))
       .child(
-        h_flex()
-          .id(`bh-e-c-${e.id}`)
-          .flex_none()
-          .self_start()
-          .gap(4)
-          .items_center()
-          .text_size(11.5)
-          .text_color(c.faint)
-          .cursor_pointer()
-          .hover((st) => st.text_color(c.ink))
-          .on_click((_ev, cx) => this.startComment(e, null, cx))
-          .child(svg(ICON("comment")).size(12))
-          .child("Comment"),
+        clickable(
+          h_flex()
+            .flex_none()
+            .self_start()
+            .gap(SPACE[2])
+            .items_center()
+            .text_size(TYPE.xs)
+            .text_color(c.faint)
+            .opacity(show ? 1 : 0)
+            .transition("opacity", MOTION.hover)
+            .on_click((_ev, cx) => this.startComment(e, null, cx))
+            .child(svg(ICON("comment")).size(GLYPH.sm))
+            .child("Comment"),
+          c,
+          `bh-e-c-${e.id}`,
+        ),
       )
       .when(Boolean(w && !w.edit), (el) => el.child(this.commentInput(c, e)));
   }
@@ -222,21 +230,21 @@ export class Chat {
   commentInput(c, e) {
     return h_flex()
       .flex_none()
-      .gap(8)
+      .gap(SPACE[3])
       .items_center()
       .child(
         div()
           .flex_1()
           .min_w(0)
-          .h(32)
-          .px(10)
+          .h(CONTROL)
+          .px(SPACE[3])
           .flex()
           .items_center()
           .rounded(SIZE.control)
           .bg(c.fill)
           .border_1()
           .border_color(c.edge)
-          .child(Input.new(this.commentBox(e.from?.name ?? "Agent")).w_full().h_full().text_size(13).text_color(c.ink)),
+          .child(Input.new(this.commentBox(e.from?.name ?? "Agent")).w_full().h_full().text_size(TYPE.md).text_color(c.ink)),
       )
       .child(this.link(c, `bh-e-c-cancel-${e.id}`, "Cancel", (_ev, cx) => {
         this.commenting = null;
@@ -378,15 +386,15 @@ export class Chat {
     const rows = this.tasks;
     const open = this.taskOpen === undefined ? rows[0]?.id : this.taskOpen;
     const box = (mark, { pulse = false } = {}) => {
-      const el = div().flex_none().mt(2).size(14).rounded(4).flex().items_center().justify_center();
-      if (mark === "done") return el.bg(c.accent).child(svg(ICON("check")).size(10).text_color(c.accentInk));
+      const el = div().flex_none().mt(SPACE[1]).size(MARK).rounded(PIP).flex().items_center().justify_center();
+      if (mark === "done") return el.bg(c.accent).child(svg(ICON("check")).size(GLYPH.xs).text_color(c.accentInk));
       if (mark === "now") {
-        const inner = div().size(6).rounded(2).bg(c.accent);
+        const inner = div().size(DOT).rounded(PIP).bg(c.accent);
         return el.border_1().border_color(c.accent).child(pulse ? inner.opacity(0.45).loop("opacity", { from: 0.25, to: 0.9, period: 1600, easing: "ease-in-out" }) : inner.opacity(0.6));
       }
-      if (mark === "blocked") return el.border_1().border_color(c.warning).child(div().text_size(10).font_bold().text_color(c.warning).child("!"));
+      if (mark === "blocked") return el.border_1().border_color(c.warning).child(div().text_size(TYPE.xs).font_bold().text_color(c.warning).child("!"));
       if (mark === "wait") return el.border_1().border_color(c.warning);
-      if (mark === "skip") return el.border_1().border_color(c.edge).child(div().w(6).h(1.5).bg(c.faint));
+      if (mark === "skip") return el.border_1().border_color(c.edge).child(div().w(DOT).h(HAIR).bg(c.faint));
       return el.border_1().border_color(c.edge);
     };
     const markOf = (s) => (s.status === "done" ? "done" : s.status === "skipped" ? "skip" : s.status === "active" ? "now" : s.status === "blocked" ? "blocked" : "open");
@@ -394,91 +402,94 @@ export class Chat {
       .id("bh-tasks-widget")
       .on_scroll_wheel((_e, cx) => cx.stop_propagation())
       .absolute()
-      .top(14)
-      .left(14)
+      .top(SPACE[4])
+      .left(SPACE[4])
       .w(WIDGET_W)
       .max_h(Math.max(160, this.size.height - 220))
-      .p(8)
-      .gap(2)
+      .overflow_hidden()
+      .p(SPACE[3])
+      .gap(SPACE[1])
       .rounded(SIZE.radius)
       .bg(c.fill)
       .border_1()
       .border_color(c.edge)
-      .shadow_sm()
-      .child(h_flex().px(6).pb(4).gap(6).items_center()
-        .child(div().text_size(11.5).font_semibold().text_color(c.muted).child(rows.length === 1 ? "Task" : "Tasks"))
-        .when(rows.length > 1, (el) => el.child(div().text_size(11).text_color(c.faint).child(String(rows.length)))))
+      .child(h_flex().px(SPACE[3]).pb(SPACE[2]).gap(SPACE[3]).items_center()
+        .child(div().text_size(TYPE.sm).font_semibold().text_color(c.muted).child(rows.length === 1 ? "Task" : "Tasks"))
+        .when(rows.length > 1, (el) => el.child(div().text_size(TYPE.xs).text_color(c.faint).child(String(rows.length)))))
       .child(v_flex()
         .id("bh-tasks-widget-list")
         .overflow_y_scroll()
-        .gap(2)
+        .gap(SPACE[1])
         .on_scroll_wheel((_e, cx) => {
           // Scroll the tasks list on its own; never let the wheel reach the chat feed.
           cx.stop_propagation();
         })
         .children(rows.map((t) => {
-        const steps = t.steps ?? [];
-        const done = steps.filter((s) => s.status === "done" || s.status === "skipped").length;
-        const live = steps.some((s) => s.status === "active");
-        const isOpen = open === t.id;
-        return v_flex()
-          .flex_none()
-          .child(h_flex()
-            .id(`bh-tw-${t.id}`)
-            .px(6)
-            .py(5)
-            .gap(8)
-            .items_start()
-            .rounded(SIZE.nested)
-            .cursor_pointer()
-            .hover((s) => s.bg(c.hover))
-            .on_click((_e, cx) => {
-              this.taskOpen = isOpen ? null : t.id;
-              cx.notify();
-            })
-            .child(box(live ? "now" : t.status === "paused" ? "wait" : "open", { pulse: false }))
-            .child(div().flex_1().min_w(0).text_size(13).font_medium().line_height("18px").truncate().child(t.title ?? t.id))
-            .when(steps.length > 0, (el) => el.child(div().flex_none().text_size(11.5).line_height("18px").text_color(c.faint).child(`${done}/${steps.length}`)))
-            .child(svg(ICON(isOpen ? "chevron-down" : "chevron-right")).flex_none().mt(3).size(12).text_color(c.faint)))
-          .when(isOpen, (el) => el.child(v_flex().pl(10).pr(6).pb(6).gap(3)
-            .when(!steps.length, (x) => x.child(div().pl(12).text_size(12).text_color(c.faint).child("No plan yet.")))
-            .children(steps.map((s) => h_flex().relative().gap(8).items_start()
-              .child(box(markOf(s), { pulse: s.status === "active" }))
-              .child(v_flex().flex_1().min_w(0)
-                .child(div().text_size(12.5).line_height("18px")
-                  .text_color(s.status === "done" || s.status === "skipped" ? c.faint : s.status === "active" ? c.ink : c.muted)
-                  .child(s.title ?? `Step ${s.n}`))
-                // The step under way: a short accent segment travelling along a faint track.
-                .when(s.status === "active", (el) => el.child(div().relative().h(2).mt(2).rounded(1).bg(alpha(c.accent, 0.15)).overflow_hidden()
-                  .child(div().absolute().top(0).w(12).h(2).rounded(1).bg(c.accent).loop("left", { from: -12, to: 200, period: 2400, easing: "linear" })))))))
-            .child(h_flex().mt(4).gap(10).items_center()
-              .child(h_flex()
-                .id(`bh-tw-open-${t.id}`)
-                .gap(4)
-                .items_center()
-                .text_size(12)
-                .text_color(c.accent)
-                .cursor_pointer()
-                .hover((st) => st.opacity(0.85))
-                .on_click(() => {
-                  setShared(OPEN_TASK, { id: t.id, at: Date.now() });
-                  showPage("tasks");
-                })
-                .child("Open in Tasks")
-                .child(svg(ICON("external-link")).size(11)))
-              .child(div()
-                .id(`bh-tw-toggle-${t.id}`)
-                .text_size(12)
-                .font_medium()
-                .text_color(t.status === "paused" ? c.accent : c.warning)
-                .cursor_pointer()
-                .hover((st) => st.opacity(0.85))
+          const steps = t.steps ?? [];
+          const done = steps.filter((s) => s.status === "done" || s.status === "skipped").length;
+          const live = steps.some((s) => s.status === "active");
+          const isOpen = open === t.id;
+          return v_flex()
+            .flex_none()
+            .child(clickable(
+              h_flex()
+                .px(SPACE[3])
+                .py(SPACE[2])
+                .gap(SPACE[3])
+                .items_start()
+                .rounded(SIZE.nested)
                 .on_click((_e, cx) => {
-                  if (t.status === "paused") sendFromChat(`Resume task ${t.id}`);
-                  else this.actTask(t.id, "paused", cx);
+                  this.taskOpen = isOpen ? null : t.id;
+                  cx.notify();
                 })
-                .child(t.status === "paused" ? "Resume" : "Pause")))));
-      })));
+                .child(box(live ? "now" : t.status === "paused" ? "wait" : "open", { pulse: false }))
+                .child(div().flex_1().min_w(0).text_size(TYPE.md).font_medium().line_height(`${LINE.sm}px`).truncate().child(t.title ?? t.id))
+                .when(steps.length > 0, (el) => el.child(div().flex_none().text_size(TYPE.xs).line_height(`${LINE.sm}px`).text_color(c.faint).child(`${done}/${steps.length}`)))
+                .child(svg(ICON(isOpen ? "chevron-down" : "chevron-right")).flex_none().mt(SPACE[1]).size(GLYPH.sm).text_color(c.faint)),
+              c,
+              `bh-tw-${t.id}`,
+            ))
+            .when(isOpen, (el) => el.child(v_flex().pl(SPACE[3]).pr(SPACE[2]).pb(SPACE[3]).gap(SPACE[1])
+              .when(!steps.length, (x) => x.child(div().pl(SPACE[4]).text_size(TYPE.sm).text_color(c.faint).child("No plan yet.")))
+              .children(steps.map((s) => h_flex().relative().gap(SPACE[3]).items_start()
+                .child(box(markOf(s), { pulse: s.status === "active" }))
+                .child(v_flex().flex_1().min_w(0)
+                  .child(div().text_size(TYPE.sm).line_height(`${LINE.sm}px`)
+                    .text_color(s.status === "done" || s.status === "skipped" ? c.faint : s.status === "active" ? c.ink : c.muted)
+                    .child(s.title ?? `Step ${s.n}`))
+                  // The step under way: a short accent segment travelling along a faint track.
+                  .when(s.status === "active", (el) => el.child(div().relative().h(SPACE[1]).mt(SPACE[1]).rounded(PIP).bg(alpha(c.accent, 0.15)).overflow_hidden()
+                    .child(div().absolute().top(0).w(SPACE[4]).h(SPACE[1]).rounded(PIP).bg(c.accent).loop("left", { from: -SPACE[4], to: 200, period: 2400, easing: "linear" })))))))
+              .child(h_flex().mt(SPACE[2]).gap(SPACE[3]).items_center()
+                .child(clickable(
+                  h_flex()
+                    .gap(SPACE[2])
+                    .items_center()
+                    .text_size(TYPE.sm)
+                    .text_color(c.accent)
+                    .on_click(() => {
+                      setShared(OPEN_TASK, { id: t.id, at: Date.now() });
+                      showPage("tasks");
+                    })
+                    .child("Open in Tasks")
+                    .child(svg(ICON("external-link")).size(GLYPH.xs)),
+                  c,
+                  `bh-tw-open-${t.id}`,
+                ))
+                .child(clickable(
+                  div()
+                    .text_size(TYPE.sm)
+                    .font_medium()
+                    .text_color(t.status === "paused" ? c.accent : c.warning)
+                    .on_click((_e, cx) => {
+                      if (t.status === "paused") sendFromChat(`Resume task ${t.id}`);
+                      else this.actTask(t.id, "paused", cx);
+                    })
+                    .child(t.status === "paused" ? "Resume" : "Pause"),
+                  c,
+                  `bh-tw-toggle-${t.id}`,
+                )))));
+        })));
   }
 
   /** Reads new question files; a file that went (answered) drops its card. */
@@ -587,9 +598,18 @@ export class Chat {
     const view = shown(this.entries, space, this.back);
     this.back = view.back;
     if (view.total === 0) this.px = 0;
+    // A new message lands rather than appears: drawn at rest for one frame, then faded in.
+    const fresh = view.list.filter((e) => !this.arrived.has(e.id));
+    for (const e of fresh) this.arrived.add(e.id);
+    if (!this.primed) this.primed = true;
+    this.arriving = this.primed && fresh.length ? new Set(fresh.map((e) => e.id)) : new Set();
+    if (this.arriving.size) cx.timer.after(16, (cx) => {
+      this.arriving = new Set();
+      cx.notify();
+    });
     const up = this.back > 0 || this.px > 0;
     const working = this.workers();
-    const foot = SIZE.foot + this.composer.height(width) + 14;
+    const foot = SIZE.foot + this.composer.height(width) + SPACE[4];
     this.composer.questions = this.questions;
 
     return div()
@@ -636,8 +656,8 @@ export class Chat {
                 .left(Math.round((this.size.width - width) / 2))
                 .flex_none()
                 .w(width)
-                .gap(14)
-                .pt(16)
+                .gap(SPACE[4])
+                .pt(SPACE[4])
                 .children(view.list.map((e) => this.entry(c, e, width)))
                 .when(!up && working.length > 0, (col) => col.child(this.working(c, working, width))),
             ))
@@ -692,69 +712,82 @@ export class Chat {
       .flex_1()
       .items_center()
       .justify_center()
-      .gap(6)
-      .child(div().text_size(17).font_semibold().child(`Talk to ${lead}`))
-      .child(div().text_size(13).text_color(c.muted).child("It plans, hands work to other agents and reports back here."))
-      .child(div().text_size(13).text_color(c.muted).child("Type @ to reach one agent, / for commands."));
+      .child(stateView(c, {
+        id: "bh-chat-empty",
+        title: `Talk to ${lead}`,
+        line: "It plans, hands work to other agents and reports back here. Type @ to reach one agent, / for commands.",
+      }));
   }
 
   entry(c, e, width) {
     const el = e.kind === "me" ? this.mine(c, e, width) : e.kind === "agent" ? this.reply(c, e, width) : this.note(c, e);
-    // Measured for the pixel scroll: its height plus the column's 14 px gap.
-    return el.on_size_change((size) => {
-      this.heights.set(e.id, size.height + 14);
-    });
+    const arriving = this.arriving.has(e.id);
+    // Measured for the pixel scroll: its height plus the column's gap.
+    return el
+      .relative()
+      .top(arriving ? SPACE[3] : 0)
+      .opacity(arriving ? 0 : 1)
+      .transition("top", MOTION.arrive)
+      .transition("opacity", MOTION.arrive)
+      .on_size_change((size) => {
+        this.heights.set(e.id, size.height + SPACE[4]);
+      });
   }
 
   mine(c, e, width) {
-    // A long message folds, with Show more.
-    const inner = Math.round(width * 0.82) - 26;
-    const folded = fold(e.text, inner, (line) => textWidth(line, 14));
+    // A long message folds, with Show more; both text measures stay near 75 characters.
+    const room = Math.min(600, Math.round(width * 0.82));
+    const inner = room - SPACE[4] * 2;
+    const folded = fold(e.text, inner, (line) => textWidth(line, TYPE.md));
     const open = this.unfolded.has(e.id);
     const text = folded.folded && !open ? folded.text : String(e.text ?? "");
     const lines = text.split("\n");
+    const chips = (e.files ?? []).map((name, i) => {
+      const chip = h_flex().h(CHIP).px(SPACE[3]).gap(SPACE[2]).items_center().rounded(SIZE.nested).bg(c.hover).text_size(TYPE.xs).text_color(c.muted)
+        .child(svg(ICON("file")).size(GLYPH.sm)).child(name);
+      return e.paths?.[i]
+        ? clickable(chip.on_click(() => openFile({ path: e.paths[i] })), c, `bh-mine-file-${e.id}-${i}`)
+        : chip;
+    });
     return v_flex()
       .id(`bh-e-${e.id}`)
       .flex_none()
       .items_end()
-      .gap(4)
+      .gap(SPACE[2])
       .child(
         v_flex()
-          .max_w(Math.round(width * 0.82))
-          .px(13)
-          .py(9)
+          .max_w(room)
+          .px(SPACE[4])
+          .py(SPACE[3])
           .rounded(SIZE.radius)
           .bg(c.bubble)
           .border_1()
           .border_color(c.bubbleEdge)
-          .text_size(14)
-          .line_height(`${SIZE.line}px`)
-          .children(lines.map((line) => div().min_h(SIZE.line).child(line)))
+          .text_size(TYPE.md)
+          .line_height(`${LINE.md}px`)
+          .children(lines.map((line) => div().min_h(LINE.md).child(line)))
           .when(folded.folded, (el) => el.child(
-            div()
-              .id(`bh-fold-${e.id}`)
-              .pt(4)
-              .text_size(12.5)
-              .font_medium()
-              .text_color(c.accent)
-              .cursor_pointer()
-              .hover((s) => s.opacity(0.85))
-              .on_click((_ev, cx) => {
-                if (open) this.unfolded.delete(e.id);
-                else this.unfolded.add(e.id);
-                cx.notify();
-              })
-              .child(open ? "Show less" : `Show more · ${folded.rows - 12} more lines`),
+            clickable(
+              div()
+                .pt(SPACE[2])
+                .text_size(TYPE.sm)
+                .font_medium()
+                .text_color(c.accent)
+                .on_click((_ev, cx) => {
+                  if (open) this.unfolded.delete(e.id);
+                  else this.unfolded.add(e.id);
+                  cx.notify();
+                })
+                .child(open ? "Show less" : `Show more · ${folded.rows - 12} more lines`),
+              c,
+              `bh-fold-${e.id}`,
+            ),
           ))
-          .when((e.files ?? []).length > 0, (el) =>
-            el.child(h_flex().pt(4).gap(6).flex_wrap().children(e.files.map((name, i) =>
-              h_flex().id(`bh-mine-file-${e.id}-${i}`).h(22).px(6).gap(4).items_center().rounded(6).bg(c.hover).text_size(11.5).text_color(c.muted)
-                .when(Boolean(e.paths?.[i]), (x) => x.cursor_pointer().hover((s) => s.text_color(c.ink)).on_click(() => openFile({ path: e.paths[i] })))
-                .child(svg(ICON("file")).size(12)).child(name))))),
+          .when(chips.length > 0, (el) =>
+            el.child(h_flex().pt(SPACE[2]).gap(SPACE[3]).flex_wrap().children(chips))),
       )
-      .child(h_flex().gap(4).items_center().text_size(11)
-        .child(div().text_color(c.faint).child("to"))
-        .children((e.to ?? []).map((n, i) => div().id(`bh-e-to-${e.id}-${i}`).font_medium().text_color(agentHue(n, c.accent)).child(String(n))))
+      .child(h_flex().gap(SPACE[1]).items_center().text_size(TYPE.xs)
+        .children((e.to ?? []).map((n, i) => div().id(`bh-e-to-${e.id}-${i}`).font_medium().text_color(agentInk(c, n)).child(String(n))))
         .child(div().text_color(c.faint).child(`· ${clock(e.at)}`)));
   }
 
@@ -771,33 +804,40 @@ export class Chat {
     // Markdown, with any ```mockup block drawn as a picture.
     const parts = segments(e.text);
     const pics = parts.filter((p) => p.kind === "mockup");
+    const show = this.hovered === e.id;
     return v_flex()
       .id(`bh-e-${e.id}`)
       .flex_none()
-      .gap(4)
+      .gap(SPACE[2])
+      .on_hover((hovered, cx) => {
+        const next = hovered ? e.id : null;
+        if (this.hovered !== next) {
+          this.hovered = next;
+          cx.notify();
+        }
+      })
       .child(
         h_flex()
-          .gap(8)
+          .gap(SPACE[3])
           .items_center()
           // Agents are named in their own colour, no icon and no dot.
-          .child(div().text_size(12.5).font_semibold().text_color(e.from?.tile ? readable(c, e.from.tile, c.ground) : c.accent).child(e.from?.name ?? "Agent"))
-          .child(div().text_size(11).text_color(c.faint).child(clock(e.at)))
+          .child(div().text_size(TYPE.sm).font_semibold().text_color(e.from?.tile ? readable(e.from.tile, c.ground, 4.5, c.ink) : agentInk(c, e.from?.name ?? "Agent")).child(e.from?.name ?? "Agent"))
+          .child(div().text_size(TYPE.xs).text_color(c.faint).child(clock(e.at)))
           .child(div().flex_1())
-          .child(this.link(c, `bh-open-${e.id}`, "Open terminal", () => openTerminal(e.from.address))),
+          .child(this.link(c, `bh-open-${e.id}`, "Open terminal", () => openTerminal(e.from.address), show)),
       )
       .child(
         v_flex()
           .id(`bh-body-${e.id}`)
-          .max_h(pics.length ? 900 : 460)
-          .overflow_y_scroll()
-          .gap(10)
-          .text_size(14)
-          .line_height(`${SIZE.line}px`)
+          .max_w(600)
+          .gap(SPACE[3])
+          .text_size(TYPE.md)
+          .line_height(`${LINE.md}px`)
           .children(parts.map((p, i) => (p.kind === "md"
             ? TextView.markdown(`bh-md-${e.id}-${i}`, linkFiles(p.text)).selectable(true).on_link_click((url) => this.openLink(url))
             : this.picture(c, e, p, pics.indexOf(p), pics, width)))),
       )
-      .child(this.replyComments(c, e));
+      .child(this.replyComments(c, e, show));
   }
 
   /** A mockup in a reply: its picture (16:11), opened large on a click; drawing, or a way to the browser. */
@@ -816,45 +856,59 @@ export class Chat {
       .id(`bh-pic-${e.id}-${index}`)
       .flex_none()
       .w(w)
-      .gap(6)
+      .gap(SPACE[3])
       .child(
-        div()
-          .id(`bh-pic-box-${e.id}-${index}`)
-          .relative()
-          .flex_none()
-          .w(w)
-          .h(h)
-          .rounded(SIZE.radius)
-          .bg(c.well)
-          .border_1()
-          .border_color(c.edge)
-          .overflow_hidden()
-          .flex()
-          .items_center()
-          .justify_center()
-          .when(d.state === "ready", (el) => el
-            .cursor_pointer()
-            .hover((s) => s.border_color(c.faint))
-            .on_click(() => open())
-            .child(image(d.image).w(w - 2).h(h - 2))
-            .child(
-              div().absolute().top(8).right(8).size(26).flex().items_center().justify_center().rounded(SIZE.nested)
-                .bg(c.fill).border_1().border_color(c.edge).text_color(c.muted).child(svg(ICON("expand")).size(12)),
-            ))
-          .when(d.state === "drawing", (el) => el.child(div().text_size(12.5).text_color(c.faint).child("Drawing the mockup…")))
-          .when(d.state === "failed", (el) => el.child(
-            v_flex().items_center().gap(6).px(24)
-              .child(div().text_size(13).text_color(c.muted).child("This mockup couldn't be drawn here."))
-              .child(div().max_w(w - 48).text_size(11.5).text_color(c.faint).child(String(d.error ?? "").split("\n")[0]))
-              .child(this.link(c, `bh-pic-open-${e.id}-${index}`, "Open in browser", (_ev, cx) => openInBrowser(d.html, cx))),
-          )),
+        (d.state === "ready"
+          ? clickable(
+            div()
+              .relative()
+              .flex_none()
+              .w(w)
+              .h(h)
+              .rounded(SIZE.radius)
+              .bg(c.well)
+              .border_1()
+              .border_color(c.edge)
+              .overflow_hidden()
+              .flex()
+              .items_center()
+              .justify_center()
+              .on_click(() => open())
+              .child(image(d.image).w(w - 2).h(h - 2))
+              .child(
+                div().absolute().top(SPACE[3]).right(SPACE[3]).size(TARGET).flex().items_center().justify_center().rounded(SIZE.nested)
+                  .bg(c.fill).border_1().border_color(c.edge).text_color(c.muted).child(svg(ICON("expand")).size(GLYPH.sm)),
+              ),
+            c,
+            `bh-pic-box-${e.id}-${index}`,
+          )
+          : div()
+            .relative()
+            .flex_none()
+            .w(w)
+            .h(h)
+            .rounded(SIZE.radius)
+            .bg(c.well)
+            .border_1()
+            .border_color(c.edge)
+            .overflow_hidden()
+            .flex()
+            .items_center()
+            .justify_center()
+            .when(d.state === "drawing", (el) => el.child(div().text_size(TYPE.sm).text_color(c.faint).child("Drawing the mockup…")))
+            .when(d.state === "failed", (el) => el.child(
+              v_flex().items_center().gap(SPACE[3]).px(SPACE[4])
+                .child(div().text_size(TYPE.md).text_color(c.muted).child("This mockup couldn't be drawn here."))
+                .child(div().max_w(w - SPACE[4] * 4).text_size(TYPE.xs).text_color(c.faint).child(String(d.error ?? "").split("\n")[0]))
+                .child(this.link(c, `bh-pic-open-${e.id}-${index}`, "Open in browser", (_ev, cx) => openInBrowser(d.html, cx))),
+            ))),
       )
       .child(
         h_flex()
-          .gap(8)
+          .gap(SPACE[3])
           .items_center()
-          .child(svg(ICON("image")).size(13).text_color(c.faint))
-          .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(c.muted).child(p.title))
+          .child(svg(ICON("image")).size(GLYPH.md).text_color(c.faint))
+          .child(div().flex_1().min_w(0).truncate().text_size(TYPE.sm).text_color(c.muted).child(p.title))
           .child(this.link(c, `bh-pic-web-${e.id}-${index}`, "Open in browser", (_ev, cx) => openInBrowser(d.html, cx))),
       );
   }
@@ -863,29 +917,32 @@ export class Chat {
     return h_flex()
       .id(`bh-e-${e.id}`)
       .flex_none()
-      .gap(8)
+      .gap(SPACE[3])
       .items_center()
-      .text_size(12.5)
+      .text_size(TYPE.sm)
       .text_color(c.muted)
       .child(div().child(e.text))
       .when(Boolean(e.address), (el) => el.child(this.link(c, `bh-open-${e.id}`, "Open terminal", () => openTerminal(e.address))));
   }
 
-  link(c, id, label, onClick) {
-    return div()
-      .id(id)
-      .flex_none()
-      .h(22)
-      .px(7)
-      .flex()
-      .items_center()
-      .rounded(6)
-      .text_size(11.5)
-      .text_color(c.muted)
-      .cursor_pointer()
-      .hover((s) => s.bg(c.hover).text_color(c.ink))
-      .on_click(onClick)
-      .child(label);
+  link(c, id, label, onClick, show = true) {
+    return clickable(
+      div()
+        .flex_none()
+        .h(CHIP)
+        .px(SPACE[3])
+        .flex()
+        .items_center()
+        .rounded(SIZE.nested)
+        .text_size(TYPE.xs)
+        .text_color(c.muted)
+        .opacity(show ? 1 : 0)
+        .transition("opacity", MOTION.hover)
+        .on_click(onClick)
+        .child(label),
+      c,
+      id,
+    );
   }
 
   /**
@@ -897,7 +954,7 @@ export class Chat {
     const now = onTurn(list, this.turn, 0);
     this.turn = now.agent.address;
     const a = now.agent;
-    const tone = a.tile ? readable(c, a.tile, c.ground) : c.accent;
+    const tone = a.tile ? readable(a.tile, c.ground, 4.5, c.ink) : c.accent;
     const fx = indicatorFor(roleOf(a.role)).fx;
     if (fx !== this.drawnFx) {
       // A new verb: drawn clear for one frame, then faded in.
@@ -913,39 +970,40 @@ export class Chat {
       .absolute()
       .left(0)
       .right(0)
-      .top(this.turnShown ? 4 : 14)
-      .transition("top", { duration: 260, easing: "ease-out" })
+      .top(this.turnShown ? SPACE[2] : SPACE[4])
+      .transition("top", MOTION.turn)
       .opacity(this.turnShown ? 1 : 0)
-      .transition("opacity", { duration: 220, easing: "ease-out" })
-      .gap(8)
+      .transition("opacity", MOTION.turn)
+      .gap(SPACE[3])
       .items_start()
-      .text_size(12.5)
+      .text_size(TYPE.sm)
       .child(div()
         .id("bh-working-verb")
         .flex_none()
         .opacity(this.verbShown === false ? 0 : 1)
-        .transition("opacity", { duration: 420, easing: "ease-out" })
+        .transition("opacity", MOTION.verb)
         .child(roleWord(c, { role: a.role, tone, id: `bh-rw-${a.address}` })))
       .child(div().flex_1())
       .when(now.count > 1, (el) => el.child(
-        div()
-          .id("bh-working-next")
-          .flex_none()
-          .h(18)
-          .px(6)
-          .flex()
-          .items_center()
-          .rounded(6)
-          .text_size(11.5)
-          .line_height("18px")
-          .text_color(c.faint)
-          .cursor_pointer()
-          .hover((s) => s.bg(c.hover).text_color(c.ink))
-          .on_click((_e, cx) => this.nextTurn(cx))
-          .child(`${now.index + 1} of ${now.count}`),
+        clickable(
+          div()
+            .flex_none()
+            .h(CHIP)
+            .px(SPACE[3])
+            .flex()
+            .items_center()
+            .rounded(SIZE.nested)
+            .text_size(TYPE.xs)
+            .line_height(`${LINE.sm}px`)
+            .text_color(c.faint)
+            .on_click((_e, cx) => this.nextTurn(cx))
+            .child(`${now.index + 1} of ${now.count}`),
+          c,
+          "bh-working-next",
+        ),
       ));
     // Not clipped: some motions reach a little past the word.
-    return div().id("bh-working").relative().flex_none().w(width).h(28).child(line);
+    return div().id("bh-working").relative().flex_none().w(width).h(ROW).child(line);
   }
 
   newer(c, back) {
@@ -953,27 +1011,28 @@ export class Chat {
       .absolute()
       .left(0)
       .right(0)
-      .bottom(8)
+      .bottom(SPACE[3])
       .justify_center()
       .child(
-        div()
-          .id("bh-newest")
-          .h(24)
-          .px(10)
-          .flex()
-          .items_center()
-          .rounded_full()
-          .bg(c.well)
-          .text_size(11.5)
-          .text_color(c.muted)
-          .cursor_pointer()
-          .hover((s) => s.text_color(c.ink))
-          .on_click((_e, cx) => {
-            this.back = 0;
-            this.px = 0;
-            cx.notify();
-          })
-          .child(back > 0 ? `${back} newer · jump to latest` : "Jump to latest"),
+        clickable(
+          div()
+            .h(CHIP)
+            .px(SPACE[3])
+            .flex()
+            .items_center()
+            .rounded_full()
+            .bg(c.well)
+            .text_size(TYPE.xs)
+            .text_color(c.muted)
+            .on_click((_e, cx) => {
+              this.back = 0;
+              this.px = 0;
+              cx.notify();
+            })
+            .child(back > 0 ? `${back} newer · jump to latest` : "Jump to latest"),
+          c,
+          "bh-newest",
+        ),
       );
   }
 }

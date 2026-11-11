@@ -1,0 +1,61 @@
+{
+  "models": [
+    {
+      "provider": "deepseek",
+      "kind": "chat",
+      "id": "deepseek-flash",
+      "selector": "deepseek/deepseek-flash",
+      "name": "DeepSeek-V4.1-Flash",
+      "contextWindow": 1000000,
+      "maxTokens": 384000,
+      "reasoning": true,
+      "thinking": [
+        "low",
+        "high",
+        "max"
+      ],
+      "input": [
+        "text",
+        "image"
+      ]
+    },
+    {
+      "provider": "deepseek",
+      "kind": "chat",
+      "id": "deepseek-v4-flash",
+      "selector": "deepseek/deepseek-v4-flash",
+      "name": "DeepSeek V4 Flash",
+      "contextWindow": 1048576,
+      "maxTokens": 393216,
+      "reasoning": true,
+      "thinking": [
+        "low",
+        "high",
+        "max"
+      ],
+      "input": [
+        "text",
+        "image"
+      ]
+    },
+    {
+      "provider": "deepseek",
+      "kind": "chat",
+      "id": "deepseek-v4-flash-vision-exp",
+      "selector": "deepseek/deepseek-v4-flash-vision-exp",
+      "name": "DeepSeek V4 Flash Vision Exp",
+      "contextWindow": 1048576,
+      "maxTokens": 393216,
+      "reasoning": true,
+      "thinking": [
+        "low",
+        "high",
+        "max"
+      ],
+      "input": [
+        "text",
+        "image"
+      ]
+    }
+  ]
+}

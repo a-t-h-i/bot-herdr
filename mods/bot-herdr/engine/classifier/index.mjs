@@ -288,8 +288,20 @@ export async function qaRisk(c, input) {
 export async function pickScripts(c, step, candidates) {
   if (!c.enabled("scripts") || !candidates.length) return null;
   const list = candidates.slice(0, 24);
-  const questions = Object.fromEntries(list.map((s, i) => [`s${i}`, noul(`Would running the script \`scripts.${i}\` do part of \`step\`, or check it?`)]));
-  const r = await c.ask("scripts", { state: { step: clip(step, 4000), scripts: list.map((s) => `${s.name}: ${s.purpose}`) }, questions });
-  if (!r) return null;
-  return list.filter((_, i) => (yesOf(r.answers, `s${i}`) ?? 0) >= 0.6);
+  const criteria = Object.fromEntries(list.map((s, i) => [`scripts.${i}`, `${s.name}: ${s.purpose || "no purpose line"}`]));
+  criteria.none = "No script does part of this step or checks it.";
+  const r = await c.ask("scripts", {
+    state: { step: clip(step, 4000) },
+    questions: { fit: choice("Which script does part of `step` or checks it? Pick the best fit, or `none`.", criteria) },
+  });
+  const answer = r?.answers?.fit;
+  if (answer?.type !== "choice" || answer.choice === "none") return answer ? [] : null;
+  const probs = answer.probabilities ?? {};
+  const chosen = Object.entries(probs)
+    .filter(([key, p]) => key === answer.choice || (key.startsWith("scripts.") && Number(p) >= 0.6))
+    .sort((a, b) => (b[0] === answer.choice) - (a[0] === answer.choice) || Number(b[1]) - Number(a[1]))
+    .slice(0, 3)
+    .map(([key]) => list[Number(key.slice(8))])
+    .filter(Boolean);
+  return chosen.length ? chosen : [list[Number(answer.choice.slice(8))]].filter(Boolean);
 }
