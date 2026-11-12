@@ -28,7 +28,8 @@ import {
   shared, setShared, appHome,
 } from "herdr";
 import { showPage, hold } from "./pages.js";
-import { SIZE, MOTION, ICON, TYPE, LINE, SPACE, ROW, CHIP, CONTROL, TARGET, MARK, DOT, PIP, HAIR, GLYPH, tint, readable, textWidth, rowsFor, baseName, upFrom, filterEntries, togglePick, sizeText, clickable, accentFill, pressable, focusable } from "./look.js";
+import { SIZE, MOTION, ICON, TYPE, LINE, SPACE, ROW, CHIP, CONTROL, TARGET, MARK, DOT, PIP, HAIR, GLYPH, tint, readable, textWidth, rowsFor, baseName, upFrom, filterEntries, togglePick, sizeText, clickable, pressable, focusable } from "./look.js";
+import { actionButton } from "./button.js";
 import { stateView } from "./switch.js";
 import { colors } from "./theme.js";
 import {
@@ -134,8 +135,20 @@ async function listWithHerdr(path, hidden = false) {
 /** Each harness's models as `bh models` reported them, for the Orchestrator's chip. */
 const COMPOSER_MODELS = new Map();
 
+/** The Scout name `bh knowledge ask --json` answers with; null when the reply has none. */
+function askedName(stdout) {
+  try {
+    return JSON.parse(stdout)?.name || null;
+  } catch {
+    return null;
+  }
+}
+
 export class Composer {
-  /** `hooks.sent({ text, to, files })` is called for each message that went out. */
+  /**
+   * `hooks.sent({ text, to, files })` is called for each message that went out and returns its
+   * feed id; `hooks.relabel(id, from, name, cx)` renames one recipient of that message once known.
+   */
   constructor(hooks = {}) {
     this.hooks = hooks;
   }
@@ -357,12 +370,12 @@ export class Composer {
       .child(h_flex().flex_none().h(CONTROL).px(SPACE[3]).gap(SPACE[2]).items_center().rounded(SIZE.nested).bg(c.ground).border_1().border_color(c.edge)
         .child(svg(ICON("search")).flex_none().size(GLYPH.sm).text_color(c.faint))
         .child(div().flex_1().min_w(0).h_full().child(Input.new(this.modelSearch).w_full().h_full().text_size(TYPE.md).text_color(c.ink))))
-      .when(levels.length > 0, (el) => el.child(h_flex().flex_none().h(CHIP).gap(SPACE[2]).items_center()
+      .when(levels.length > 0, (el) => el.child(h_flex().flex_none().h(CONTROL).gap(SPACE[2]).items_center()
         .child(div().flex_none().w(52).text_size(TYPE.xs).font_medium().text_color(c.muted).child("Effort"))
         .children(["", ...levels].map((l) => {
           const on = (a.effort ?? "") === l;
           return clickable(
-            div().h(CHIP).px(SPACE[3]).flex().items_center().rounded(SIZE.nested).border_1()
+            div().h(CONTROL).px(SPACE[3]).flex().items_center().rounded(SIZE.nested).border_1()
               .border_color(on ? c.accent : c.edge).when(on, (x) => x.bg(c.well))
               .text_size(TYPE.sm).text_color(on ? c.ink : c.muted)
               .on_click((_e, cx) => {
@@ -523,7 +536,7 @@ export class Composer {
       .map((t) => ({ address: t.address, parent: t.parent, parentName: nameOf(t.parent), name: t.name ?? null, status: t.status ?? null, program: t.program }));
   }
 
-  /** What to call a terminal in a message to the person. */
+  /** What to call a terminal in a message to the user. */
   nameOf(address) {
     const named = this.names()[address];
     if (named) return named;
@@ -985,7 +998,7 @@ export class Composer {
     const listH = shown * ROW;
     const h = Math.min(360, CONTROL + SPACE[2] + CONTROL + SPACE[2] + listH + SPACE[2] + CONTROL + SPACE[3] * 2);
     const toggle = (id, label, on, onClick) => clickable(
-      div().flex_none().h(CHIP).px(SPACE[3]).flex().items_center().rounded(SIZE.nested).border_1()
+      div().flex_none().h(CONTROL).px(SPACE[3]).flex().items_center().rounded(SIZE.nested).border_1()
         .border_color(on ? c.accent : c.edge).text_size(TYPE.sm)
         .when(on, (el) => el.bg(c.well).text_color(c.ink).font_medium())
         .when(!on, (el) => el.text_color(c.muted))
@@ -994,14 +1007,7 @@ export class Composer {
       c,
       id,
     );
-    const primary = (id, label, onClick) => clickable(
-      div().flex_none().h(CONTROL).px(SPACE[4]).flex().items_center().rounded(SIZE.control)
-        .bg(c.accent).border_b(1).border_color(c.accentLip).text_size(TYPE.sm).font_medium().text_color(c.accentInk)
-        .on_click(onClick)
-        .child(label),
-      c,
-      id, { fill: accentFill(c) },
-    );
+    const primary = (id, label, onClick) => actionButton(c, id, label, onClick, { tone: "primary" });
     const list = v_flex()
       .id("bc-browse-list")
       .on_scroll_wheel((_e, cx) => cx.stop_propagation())
@@ -1189,17 +1195,21 @@ export class Composer {
     });
   }
 
-  /** /bh-info: the question goes in the feed as yours; Scout's answer arrives as a reply. */
+  /**
+   * /bh-info: the question goes in the feed as yours, to "knowledge-scout" until the call returns
+   * the project's Scout by its real name; Scout's answer arrives as a reply.
+   */
   askKnowledge(question, cx) {
     this.input.set_value("");
     this.text = "";
     this.trigger = null;
     this.mode = null;
-    this.hooks.sent?.({ text: question, files: [], paths: [], to: [{ address: null, name: "knowledge-scout" }] }, cx);
+    const id = this.hooks.sent?.({ text: question, files: [], paths: [], to: [{ address: null, name: "knowledge-scout" }] }, cx);
     cx.notify();
     cx.spawn(async (cx) => {
       const r = await bh(["knowledge", "ask", "--data", enc(question), "--json"], { cwd: projectDir() });
       if (r.code !== 0) this.say((r.stderr || r.stdout).trim().split("\n")[0] || "Couldn't ask Scout.", cx, "error");
+      else this.hooks.relabel?.(id, "knowledge-scout", askedName(r.stdout) ?? "knowledge-scout", cx);
       cx.notify();
     });
   }
@@ -1263,7 +1273,7 @@ export class Composer {
     // An agent's first message from here carries the brief; a harness's own /command goes bare.
     const body = messageText(step.text, paths);
     const brief = !body.startsWith("/") && this.needsBrief(step.address);
-    // A tab the person named "Orchestrator" themselves gets the Orchestrator's brief here.
+    // A tab the user named "Orchestrator" themselves gets the Orchestrator's brief here.
     const role = this.target()?.address === step.address ? "orchestrator" : null;
     const r = await hc(["send", step.address, brief ? `${await this.briefFor(this.entryAt(step.address), this.briefing({ self: step.address, role }))}\n\n${body}` : body]);
     if (r.code === 0 && brief) await this.markBriefed(step.address);
@@ -1557,23 +1567,11 @@ export class Composer {
 
   /** Attached files as thumbnails/chips above the composer box. */
   attachments(c, width) {
-    const remove = (i, id) => clickable(
-      div()
-        .size(CHIP)
-        .rounded(SIZE.nested)
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_color(c.muted)
-        .on_click((_e, cx) => {
-          cx.stop_propagation();
-          this.files.splice(i, 1);
-          cx.notify();
-        })
-        .child(svg(ICON("x")).size(GLYPH.sm)),
-      c,
-      id,
-    );
+    const remove = (i, id) => actionButton(c, id, null, (_e, cx) => {
+      cx.stop_propagation();
+      this.files.splice(i, 1);
+      cx.notify();
+    }, { icon: "x", tone: "quiet" });
     return h_flex()
       .id("bc-files")
       .flex_none()
@@ -1684,26 +1682,10 @@ export class Composer {
       .text_color(c.ink)
       .child(svg(ICON(TOAST_ICONS[item.kind] ?? "info")).flex_none().size(GLYPH.lg).text_color(tone))
       .child(div().flex_1().min_w(0).child(item.message))
-      .when(Boolean(item.action), (el) => el.child(clickable(
-        div()
-          .flex_none()
-          .h(CONTROL)
-          .px(SPACE[3])
-          .flex()
-          .items_center()
-          .rounded(SIZE.nested)
-          .border_1()
-          .border_color(c.edge)
-          .text_size(TYPE.sm)
-          .font_medium()
-          .on_click((_e, cx) => {
-            item.action.run?.(cx);
-            this.dropToast(item.id, cx);
-          })
-          .child(item.action.label),
-        c,
-        `bc-toast-act-${t.n}`,
-      )));
+      .when(Boolean(item.action), (el) => el.child(actionButton(c, `bc-toast-act-${t.n}`, item.action.label, (_e, cx) => {
+        item.action.run?.(cx);
+        this.dropToast(item.id, cx);
+      }, { tone: "secondary" })));
     // Leaving, the words stay where they are (no spring to a new place) and only fade.
     if (!leaving) body = body.spring("top", TOAST_SPRINGS.rise);
     return div().id("bc-toast").absolute().left(0).right(0).top(-slot).h(slot).child(shape).child(body);
@@ -1722,7 +1704,7 @@ export class Composer {
       .child(this.iconButton(c, "bc-attach", "paperclip", this.pane === "attach", (_e, cx) => this.toggle("attach", cx)))
       .child(clickable(
         h_flex()
-          .h(CHIP)
+          .h(CONTROL)
           .px(SPACE[3])
           .gap(SPACE[3])
           .items_center()
@@ -1741,7 +1723,7 @@ export class Composer {
       // The Orchestrator's model: picked here; every other agent's is set in Settings.
       .when(Boolean(this.leadEntry()), (el) => el.child(clickable(
         h_flex()
-          .h(CHIP)
+          .h(CONTROL)
           .px(SPACE[3])
           .gap(SPACE[3])
           .items_center()
@@ -1852,21 +1834,9 @@ export class Composer {
     });
   }
 
+  /** An icon button; `on` (its pane is open) keeps it in the well tone. */
   iconButton(c, id, icon, on, onClick) {
-    return clickable(
-      div()
-        .size(TARGET)
-        .rounded_full()
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_color(on ? c.ink : c.muted)
-        .when(on, (el) => el.bg(c.well))
-        .on_click(onClick)
-        .child(svg(ICON(icon)).size(GLYPH.lg)),
-      c,
-      id,
-    );
+    return actionButton(c, id, null, onClick, { icon, tone: "quiet" }).when(on, (el) => el.bg(c.well));
   }
 
   // ── The pane that grows out of the top ─────────────────────────────────────────────────────
@@ -2046,21 +2016,7 @@ export class Composer {
       .font_semibold()
       .text_color(tone)
       .child(String(n));
-    const link = (id, label, onClick, color = c.muted) => clickable(
-      div()
-        .flex_none()
-        .h(CHIP)
-        .px(SPACE[3])
-        .flex()
-        .items_center()
-        .rounded(SIZE.nested)
-        .text_size(TYPE.sm)
-        .text_color(color)
-        .on_click(onClick)
-        .child(label),
-      c,
-      id,
-    );
+    const link = (id, label, onClick, tone = "quiet") => actionButton(c, id, label, onClick, { tone });
 
     // The head row.
     const asking = this.dismissing === q.id;
@@ -2082,25 +2038,12 @@ export class Composer {
       })))
       .when(asking, (el) => el
         .child(div().flex_none().text_size(TYPE.sm).text_color(c.ink).child("Dismiss it? The agent decides."))
-        .child(link("bc-ask-yes", "Dismiss", (_e, cx) => this.dismissAsk(q, cx), c.danger))
+        .child(link("bc-ask-yes", "Dismiss", (_e, cx) => this.dismissAsk(q, cx), "danger"))
         .child(link("bc-ask-no", "Keep", (_e, cx) => {
           this.dismissing = null;
           cx.notify();
         })))
-      .child(clickable(
-        div()
-          .flex_none()
-          .size(CHIP)
-          .flex()
-          .items_center()
-          .justify_center()
-          .rounded(SIZE.nested)
-          .tooltip("Minimise: the agent keeps waiting")
-          .on_click((_e, cx) => this.minimiseAsk(cx))
-          .child(svg(ICON("chevron-down")).size(GLYPH.sm).text_color(c.muted)),
-        c,
-        "bc-ask-min",
-      ));
+      .child(actionButton(c, "bc-ask-min", null, (_e, cx) => this.minimiseAsk(cx), { icon: "chevron-down", tone: "quiet", tooltip: "Minimise: the agent keeps waiting" }));
     let h = CONTROL + SPACE[3];
 
     // The intro (first question only) and the question.
@@ -2171,31 +2114,18 @@ export class Composer {
                     .when(d?.state === "failed" || !d, (el) => el.child(
                       v_flex().items_center().gap(SPACE[2]).px(SPACE[3])
                         .child(div().text_size(TYPE.sm).text_color(c.muted).child("Couldn't draw it here"))
+                        .when(Boolean(d?.error), (col) => col.child(div().text_center().text_size(TYPE.xs).line_height(`${LINE.xs}px`).text_color(c.muted).max_h(LINE.xs * 2).overflow_hidden()
+                          .child(String(d.error).split("\n")[0].trim())))
                         .when(Boolean(o.mockupFile), (col) => col.child(link(`bc-ask-open-${i}`, "Open in browser", (_e, cx) => {
                           cx.stop_propagation();
                           openInBrowser(o.mockupFile, cx);
                         }))),
                     ))
                     // Placed by its own absolute box; the clickable inside (clickable makes its element relative).
-                    .when(d?.state === "ready", (el) => el.child(div().absolute().top(SPACE[3]).right(SPACE[3]).size(CHIP).child(clickable(
-                      div()
-                        .size_full()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(SIZE.nested)
-                        .bg(c.fill)
-                        .border_1()
-                        .border_color(c.edge)
-                        .text_color(c.muted)
-                        .on_click((_e, cx) => {
-                          cx.stop_propagation();
-                          open(i);
-                        })
-                        .child(svg(ICON("expand")).size(GLYPH.xs)),
-                      c,
-                      `bc-ask-zoom-${i}`,
-                    )))),
+                    .when(d?.state === "ready", (el) => el.child(div().absolute().top(SPACE[3]).right(SPACE[3]).child(actionButton(c, `bc-ask-zoom-${i}`, null, (_e, cx) => {
+                      cx.stop_propagation();
+                      open(i);
+                    }, { icon: "expand", tone: "secondary" })))),
                 )
                 .child(h_flex().h(CHIP).gap(SPACE[3]).items_center().child(glyph(i + 1, CHIP)).child(div().flex_1().min_w(0).truncate().text_size(TYPE.md).font_medium().child(o.label)))
                 .when(Boolean(o.meaning), (el) => el.child(div().max_h(LINE.sm * 3).overflow_hidden().text_size(TYPE.sm).line_height(`${LINE.sm}px`).text_color(c.muted).child(o.meaning))),

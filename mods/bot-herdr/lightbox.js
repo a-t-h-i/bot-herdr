@@ -4,10 +4,11 @@
 // mockups), "Choose this" (or Enter) posts { key: choose, index, at } in shared state for the
 // opener and closes.
 
-import { div, svg, image } from "gpui-kit";
+import { div, image } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { props, settings, setShared, closeOverlay, openOverlay } from "herdr";
-import { SIZE, ICON, TYPE, SPACE, ROW, CONTROL, CHIP, GLYPH, clickable, accentFill } from "./look.js";
+import { SIZE, TYPE, SPACE, ROW, CHIP } from "./look.js";
+import { actionButton } from "./button.js";
 import { colors } from "./theme.js";
 import { alpha } from "./working.js";
 import { openInBrowser } from "./media.js";
@@ -67,20 +68,7 @@ export class Lightbox {
     const many = items.length > 1;
     const imgW = Math.max(120, this.size.width - SPACE[5] * 2);
     const imgH = Math.max(120, this.size.height - HEAD - FOOT - SPACE[5]);
-    const round = (id, icon, onClick) => clickable(
-      div()
-        .flex_none()
-        .size(CONTROL)
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded_full()
-        .text_color(c.muted)
-        .on_click(onClick)
-        .child(svg(ICON(icon)).size(GLYPH.lg)),
-      c,
-      id,
-    );
+    const round = (id, icon, onClick) => actionButton(c, id, null, onClick, { icon, tone: "quiet" });
     return v_flex()
       .id("bh-lightbox")
       .track_focus(this.handle)
@@ -151,43 +139,12 @@ export class Lightbox {
             .child(round("bh-lb-prev", "chevron-left", (_e, cx) => this.move(-1, cx)))
             .child(round("bh-lb-next", "chevron-right", (_e, cx) => this.move(1, cx))))
           .when(Boolean(item.html), (el) => el.child(
-            clickable(
-              h_flex()
-                .h(CONTROL)
-                .px(SPACE[3])
-                .gap(SPACE[3])
-                .items_center()
-                .rounded(SIZE.nested)
-                .text_size(TYPE.sm)
-                .text_color(c.muted)
-                .on_click((_e, cx) => openInBrowser(item.html, cx))
-                .child(svg(ICON("external-link")).size(GLYPH.md))
-                .child("Open in browser"),
-              c,
-              "bh-lb-open",
-            ),
+            actionButton(c, "bh-lb-open", "Open in browser", (_e, cx) => openInBrowser(item.html, cx), { icon: "external-link", tone: "quiet" }),
           ))
           .child(div().flex_1())
           .child(div().text_size(TYPE.xs).text_color(c.faint).child(many ? "← → to move · Esc to close" : "Esc to close"))
           .when(Boolean(this.p.choose), (el) => el.child(
-            clickable(
-              div()
-                .h(CONTROL)
-                .px(SPACE[4])
-                .flex()
-                .items_center()
-                .rounded(SIZE.control)
-                .bg(c.accent)
-                .border_b(1)
-                .border_color(c.accentLip)
-                .text_size(TYPE.md)
-                .font_medium()
-                .text_color(c.accentInk)
-                .on_click(() => this.choose())
-                .child("Choose this"),
-              c,
-              "bh-lb-choose", { fill: accentFill(c) },
-            ),
+            actionButton(c, "bh-lb-choose", "Choose this", () => this.choose(), { tone: "primary" }),
           )),
       );
   }

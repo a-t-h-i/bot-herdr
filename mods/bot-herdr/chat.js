@@ -8,9 +8,10 @@
 
 import { div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextView, InputState, Input } from "gpui-base";
-import { terminals, spaces, focused, settings, shared, setShared, readTextFile } from "herdr";
+import { terminals, spaces, focused, settings, shared, setShared, readTextFile, appHome } from "herdr";
 import * as fs from "fs/promises";
 import { SIZE, ICON, TYPE, LINE, SPACE, ROW, CHIP, CONTROL, TARGET, HAIR, MARK, DOT, PIP, GLYPH, MOTION, SCRIM, readable, textWidth, agentInk, clickable, isLight } from "./look.js";
+import { actionButton } from "./button.js";
 import { stateView } from "./switch.js";
 import { colors } from "./theme.js";
 import { Composer, outboxDir, liveAgents } from "./composer.js";
@@ -23,11 +24,11 @@ import { roleWord, roleTone, mentionTone, alpha } from "./indicators.js";
 import { indicatorFor, roleOf, onTurn, TURN_MS } from "./working.js";
 import { findAgent, roster, ROSTER_KEY } from "./roster.js";
 import { summary } from "./drawer.js";
-import { mockup, openInBrowser } from "./media.js";
+import { mockup, openInBrowser, previews, isImage } from "./media.js";
 import { commentRow } from "./plandoc.js";
 import { openLightbox } from "./lightbox.js";
 
-/** Where agents' questions for the person wait (bh ask writes them; answered ones move aside). */
+/** Where agents' questions for the user wait (bh ask writes them; answered ones move aside). */
 const questionsDir = () => `${outboxDir().replace(/\/replies$/, "")}/questions`;
 /** What an agent run headless is doing right now (agent.mjs writes it on each tool call). */
 const activityDir = () => `${outboxDir().replace(/\/replies$/, "")}/activity`;
@@ -50,6 +51,26 @@ const save = (key, value) => {
     // the feed still works for this session
   }
 };
+
+/** A path under the app home, from there as image() shows it (bh clip and bh preview name them so); else null. */
+function underHome(path) {
+  const home = `${appHome().replace(/\\/g, "/")}/`;
+  const p = String(path ?? "").replace(/\\/g, "/");
+  return p.toLowerCase().startsWith(home.toLowerCase()) ? p.slice(home.length) : null;
+}
+
+/**
+ * Each picture that still exists, as image() shows it: one under the app home from there, any
+ * other from herdr's preview (its own path when that fails). A picture that is gone is left out.
+ */
+async function shownImages(paths) {
+  const here = [];
+  for (const path of paths) {
+    if (await fs.exists(path)) here.push(path);
+  }
+  const got = await previews(here.filter((path) => !underHome(path)));
+  return new Map(here.map((path) => [path, underHome(path) ?? got.find((g) => g.file === path)?.image ?? path]));
+}
 
 /** Plain text as Markdown that shows it verbatim: every mark escaped, every line break kept. */
 export function plainMarkdown(text) {
@@ -94,6 +115,7 @@ export class Chat {
     this.commentBoxes = new Map(); // agent name → its comment box (a placeholder is fixed when made)
     this.composer = new Composer({
       sent: (message, cx) => this.sent(message, cx),
+      relabel: (id, from, name, cx) => this.relabel(id, from, name, cx),
       born: (address, name) => this.expect(address, name),
       answered: (q, answers, cx, opts) => this.submit(q, answers, cx, opts),
     });
@@ -220,22 +242,10 @@ export class Chat {
         ? v_flex().flex_none().gap(SPACE[2]).child(commentRow(c, x, this.replyCommentActions(e, x))).child(this.commentInput(c, e))
         : commentRow(c, x, this.replyCommentActions(e, x)))))
       .child(
-        clickable(
-          h_flex()
-            .flex_none()
-            .self_start()
-            .gap(SPACE[2])
-            .items_center()
-            .text_size(TYPE.xs)
-            .text_color(c.faint)
-            .opacity(show ? 1 : 0)
-            .transition("opacity", MOTION.hover)
-            .on_click((_ev, cx) => this.startComment(e, null, cx))
-            .child(svg(ICON("comment")).size(GLYPH.sm))
-            .child("Comment"),
-          c,
-          `bh-e-c-${e.id}`,
-        ),
+        actionButton(c, `bh-e-c-${e.id}`, "Comment", (_ev, cx) => this.startComment(e, null, cx), { icon: "comment", tone: "quiet" })
+          .self_start()
+          .opacity(show ? 1 : 0)
+          .transition("opacity", MOTION.hover),
       )
       .when(Boolean(w && !w.edit), (el) => el.child(this.commentInput(c, e)));
   }
@@ -267,9 +277,17 @@ export class Chat {
 
   // ── Out ────────────────────────────────────────────────────────────────────────────────────
 
+  /** Adds a message we sent; returns its feed id, so a recipient can be named later (`relabel`). */
   sent({ text, files, paths, to }, cx) {
     for (const t of to) if (t.address) this.expect(t.address, t.name);
     this.add({ kind: "me", text, files, paths, to: to.map((t) => t.name) }, cx);
+    return this.entries[this.entries.length - 1].id;
+  }
+
+  /** A message's recipient, once its real name is known: `from` in its `to` becomes `name`. */
+  relabel(id, from, name, cx) {
+    this.setFeed(this.entries.map((e) => (e.id === id ? { ...e, to: (e.to ?? []).map((n) => (n === from ? name : n)) } : e)));
+    cx.notify();
   }
 
   /** We wrote to this agent: watch for its reply, or for it stopping without one. */
@@ -474,34 +492,14 @@ export class Chat {
                   .when(s.status === "active", (el) => el.child(div().relative().h(SPACE[1]).mt(SPACE[1]).rounded(PIP).bg(alpha(c.accent, 0.15)).overflow_hidden()
                     .child(div().absolute().top(0).w(SPACE[4]).h(SPACE[1]).rounded(PIP).bg(c.accent).loop("left", { from: -SPACE[4], to: 200, period: 2400, easing: "linear" })))))))
               .child(h_flex().mt(SPACE[2]).gap(SPACE[3]).items_center()
-                .child(clickable(
-                  h_flex()
-                    .gap(SPACE[2])
-                    .items_center()
-                    .text_size(TYPE.sm)
-                    .text_color(c.accent)
-                    .on_click(() => {
-                      setShared(OPEN_TASK, { id: t.id, at: Date.now() });
-                      showPage("tasks");
-                    })
-                    .child("Open in Tasks")
-                    .child(svg(ICON("external-link")).size(GLYPH.xs)),
-                  c,
-                  `bh-tw-open-${t.id}`,
-                ))
-                .child(clickable(
-                  div()
-                    .text_size(TYPE.sm)
-                    .font_medium()
-                    .text_color(t.status === "paused" ? c.accent : c.warning)
-                    .on_click((_e, cx) => {
-                      if (t.status === "paused") sendFromChat(`Resume task ${t.id}`);
-                      else this.actTask(t.id, "paused", cx);
-                    })
-                    .child(t.status === "paused" ? "Resume" : "Pause"),
-                  c,
-                  `bh-tw-toggle-${t.id}`,
-                )))));
+                .child(actionButton(c, `bh-tw-open-${t.id}`, "Open in Tasks", () => {
+                  setShared(OPEN_TASK, { id: t.id, at: Date.now() });
+                  showPage("tasks");
+                }, { icon: "external-link", tone: "quiet" }))
+                .child(actionButton(c, `bh-tw-toggle-${t.id}`, t.status === "paused" ? "Resume" : "Pause", (_e, cx) => {
+                  if (t.status === "paused") sendFromChat(`Resume task ${t.id}`);
+                  else this.actTask(t.id, "paused", cx);
+                }, { tone: "secondary" })))));
         })));
   }
 
@@ -787,13 +785,7 @@ export class Chat {
     const folded = fold(e.text, inner, (line) => textWidth(line, TYPE.md));
     const open = this.unfolded.has(e.id);
     const text = folded.folded && !open ? folded.text : String(e.text ?? "");
-    const chips = (e.files ?? []).map((name, i) => {
-      const chip = h_flex().h(CHIP).px(SPACE[3]).gap(SPACE[2]).items_center().rounded(SIZE.nested).bg(c.hover).text_size(TYPE.xs).text_color(c.muted)
-        .child(svg(ICON("file")).size(GLYPH.sm)).child(name);
-      return e.paths?.[i]
-        ? clickable(chip.on_click(() => openFile({ path: e.paths[i] })), c, `bh-mine-file-${e.id}-${i}`)
-        : chip;
-    });
+    const chips = (e.files ?? []).map((name, i) => this.sentChip(c, e, name, i));
     return v_flex()
       .id(`bh-e-${e.id}`)
       .flex_none()
@@ -834,6 +826,28 @@ export class Chat {
       .child(h_flex().gap(SPACE[1]).items_center().text_size(TYPE.xs)
         .children((e.to ?? []).map((n, i) => div().id(`bh-e-to-${e.id}-${i}`).font_medium().text_color(mentionTone(c, n, this.composer.roster())).child(String(n))))
         .child(div().text_color(c.faint).child(`· ${clock(e.at)}`)));
+  }
+
+  /** A file on a sent message: a picture opens large, any other file in the viewer. */
+  sentChip(c, e, name, i) {
+    const path = e.paths?.[i];
+    const picture = isImage(path);
+    const chip = h_flex().h(path ? CONTROL : CHIP).px(SPACE[3]).gap(SPACE[2]).items_center().rounded(SIZE.nested).bg(c.hover).text_size(TYPE.xs).text_color(c.muted)
+      .child(svg(ICON(picture ? "image" : "file")).size(GLYPH.sm)).child(name);
+    if (!path) return chip;
+    return clickable(chip.on_click((_ev, cx) => (picture ? this.openSent(e, i, cx) : openFile({ path }))), c, `bh-mine-file-${e.id}-${i}`);
+  }
+
+  /** A picture sent with a message, opened large from the one clicked; the message's others step beside it. */
+  openSent(e, i, cx) {
+    const sent = (e.paths ?? []).map((path, j) => ({ path, j, title: e.files?.[j] ?? path })).filter((x) => isImage(x.path));
+    cx.spawn(async (cx) => {
+      const images = await shownImages(sent.map((x) => x.path));
+      const items = sent.filter((x) => images.has(x.path));
+      const at = items.findIndex((x) => x.j === i);
+      if (at < 0) return this.composer.say(`Couldn't open ${e.files?.[i] ?? "the picture"}: it is no longer there.`, cx, "error");
+      openLightbox({ items: items.map((x) => ({ image: images.get(x.path), title: x.title, note: `Sent ${clock(e.at)}` })), at });
+    });
   }
 
   /** A link in a reply: a file it names opens over the chat; any other link opens in the browser. */
@@ -971,23 +985,9 @@ export class Chat {
   }
 
   link(c, id, label, onClick, show = true) {
-    return clickable(
-      div()
-        .flex_none()
-        .h(CHIP)
-        .px(SPACE[3])
-        .flex()
-        .items_center()
-        .rounded(SIZE.nested)
-        .text_size(TYPE.xs)
-        .text_color(c.muted)
-        .opacity(show ? 1 : 0)
-        .transition("opacity", MOTION.hover)
-        .on_click(onClick)
-        .child(label),
-      c,
-      id,
-    );
+    return actionButton(c, id, label, onClick, { tone: "quiet" })
+      .opacity(show ? 1 : 0)
+      .transition("opacity", MOTION.hover);
   }
 
   /**
@@ -1034,22 +1034,7 @@ export class Chat {
         .child(roleWord(c, { role: a.role, tone, id: `bh-rw-${a.address}` })))
       .child(div().flex_1())
       .when(now.count > 1, (el) => el.child(
-        clickable(
-          div()
-            .flex_none()
-            .h(CHIP)
-            .px(SPACE[3])
-            .flex()
-            .items_center()
-            .rounded(SIZE.nested)
-            .text_size(TYPE.xs)
-            .line_height(`${LINE.sm}px`)
-            .text_color(c.faint)
-            .on_click((_e, cx) => this.nextTurn(cx))
-            .child(`${now.index + 1} of ${now.count}`),
-          c,
-          "bh-working-next",
-        ),
+        actionButton(c, "bh-working-next", `${now.index + 1} of ${now.count}`, (_e, cx) => this.nextTurn(cx), { tone: "quiet" }),
       ));
     // Not clipped: some motions reach a little past the word.
     return div().id("bh-working").relative().flex_none().w(width).h(ROW).child(line);
@@ -1063,25 +1048,11 @@ export class Chat {
       .bottom(SPACE[3])
       .justify_center()
       .child(
-        clickable(
-          div()
-            .h(CHIP)
-            .px(SPACE[3])
-            .flex()
-            .items_center()
-            .rounded_full()
-            .bg(c.well)
-            .text_size(TYPE.xs)
-            .text_color(c.muted)
-            .on_click((_e, cx) => {
-              this.back = 0;
-              this.px = 0;
-              cx.notify();
-            })
-            .child(back > 0 ? `${back} newer · jump to latest` : "Jump to latest"),
-          c,
-          "bh-newest",
-        ),
+        actionButton(c, "bh-newest", back > 0 ? `${back} newer · jump to latest` : "Jump to latest", (_e, cx) => {
+          this.back = 0;
+          this.px = 0;
+          cx.notify();
+        }, { tone: "secondary" }),
       );
   }
 }

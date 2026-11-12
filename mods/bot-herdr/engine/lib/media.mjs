@@ -1,4 +1,4 @@
-// Pictures for the chat: mockups drawn by a browser the person already has (Chrome, Edge,
+// Pictures for the chat: mockups drawn by a browser the user already has (Chrome, Edge,
 // Chromium or Brave, headless), images pasted from the clipboard, and copies of image files so
 // herdr can show them (it shows images from its own folder only).
 //
@@ -26,25 +26,66 @@ export function page(html, title = "Mockup") {
   return `<!doctype html><html><head><meta charset="utf-8"><title>${title.replace(/</g, "&lt;")}</title><style>html,body{margin:0;background:#fff}body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif}</style></head><body>${html}</body></html>`;
 }
 
+const WIN_BROWSERS = [
+  "Microsoft\\Edge\\Application\\msedge.exe", "Google\\Chrome\\Application\\chrome.exe", "BraveSoftware\\Brave-Browser\\Application\\brave.exe", "Chromium\\Application\\chrome.exe",
+  "Google\\Chrome Beta\\Application\\chrome.exe", "Google\\Chrome Dev\\Application\\chrome.exe", "Google\\Chrome SxS\\Application\\chrome.exe",
+  "Microsoft\\Edge Beta\\Application\\msedge.exe", "Microsoft\\Edge Dev\\Application\\msedge.exe",
+];
+/** Scoop's installs: [app folder, program]. */
+const SCOOP = [["googlechrome", "chrome.exe"], ["chromium", "chrome.exe"], ["brave", "brave.exe"]];
+const APP_PATHS = ["msedge.exe", "chrome.exe"];
+const MAC_BROWSERS = [
+  "Google Chrome.app/Contents/MacOS/Google Chrome", "Microsoft Edge.app/Contents/MacOS/Microsoft Edge", "Chromium.app/Contents/MacOS/Chromium", "Brave Browser.app/Contents/MacOS/Brave Browser",
+  "Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary", "Microsoft Edge Beta.app/Contents/MacOS/Microsoft Edge Beta",
+];
+const LINUX_NAMES = ["chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "microsoft-edge", "brave-browser", "chrome-headless-shell"];
+const LINUX_FILES = ["/opt/google/chrome/chrome", "/opt/microsoft/msedge/msedge", "/snap/bin/chromium"];
+
 /** A browser that can draw a page headless, or null. BH_BROWSER picks one. */
-export function findBrowser({ env = process.env, platform = process.platform, exists = existsSync, which = whichOnPath } = {}) {
+export function findBrowser({ env = process.env, platform = process.platform, exists = existsSync, which = whichOnPath, reg = queryAppPath } = {}) {
   if (env.BH_BROWSER) return exists(env.BH_BROWSER) ? env.BH_BROWSER : which(env.BH_BROWSER, env);
-  if (platform === "win32") {
-    const roots = [env.PROGRAMFILES, env["PROGRAMFILES(X86)"], env.LOCALAPPDATA].filter(Boolean);
-    const apps = ["Microsoft\\Edge\\Application\\msedge.exe", "Google\\Chrome\\Application\\chrome.exe", "BraveSoftware\\Brave-Browser\\Application\\brave.exe", "Chromium\\Application\\chrome.exe"];
-    for (const app of apps) for (const root of roots) if (exists(join(root, app))) return join(root, app);
-    return null;
+  if (platform === "win32") return windowsBrowser({ env, exists, which, reg });
+  if (platform === "darwin") return macBrowser({ env, exists });
+  return linuxBrowser({ env, exists, which });
+}
+
+function windowsBrowser({ env, exists, which, reg }) {
+  const roots = [env.PROGRAMFILES, env["PROGRAMFILES(X86)"], env.LOCALAPPDATA].filter(Boolean);
+  const installed = WIN_BROWSERS.flatMap((app) => roots.map((root) => join(root, app)));
+  const scoop = env.USERPROFILE ? SCOOP.map(([app, exe]) => join(env.USERPROFILE, "scoop", "apps", app, "current", exe)) : [];
+  return [...installed, ...scoop].find((file) => exists(file)) ?? registryBrowser(exists, reg) ?? which("msedge", env) ?? which("chrome", env);
+}
+
+/** The program Windows registers for msedge.exe or chrome.exe (App Paths), current user first. */
+function registryBrowser(exists, reg) {
+  for (const exe of APP_PATHS) for (const hive of ["HKCU", "HKLM"]) {
+    const file = appPathOf(reg(`${hive}\\Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\${exe}`));
+    if (file && exists(file)) return file;
   }
-  if (platform === "darwin") {
-    const apps = ["Google Chrome.app/Contents/MacOS/Google Chrome", "Microsoft Edge.app/Contents/MacOS/Microsoft Edge", "Chromium.app/Contents/MacOS/Chromium", "Brave Browser.app/Contents/MacOS/Brave Browser"];
-    for (const app of apps) for (const root of ["/Applications", join(env.HOME ?? "", "Applications")]) if (exists(join(root, app))) return join(root, app);
-    return null;
-  }
-  for (const name of ["chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "microsoft-edge", "brave-browser"]) {
+  return null;
+}
+
+/** The file in `reg query … /ve`'s output (the key's default value), its quotes taken off; "" when there is none. */
+export function appPathOf(out) {
+  const m = /REG_(?:EXPAND_)?SZ\s+(.+?)\s*$/m.exec(String(out));
+  return m ? m[1].replace(/^"(.*)"$/, "$1") : "";
+}
+
+function queryAppPath(key) {
+  return spawnSync("reg", ["query", key, "/ve"], { encoding: "utf8", timeout: 5000, windowsHide: true }).stdout ?? "";
+}
+
+function macBrowser({ env, exists }) {
+  const roots = ["/Applications", join(env.HOME ?? "", "Applications")];
+  return MAC_BROWSERS.flatMap((app) => roots.map((root) => join(root, app))).find((file) => exists(file)) ?? null;
+}
+
+function linuxBrowser({ env, exists, which }) {
+  for (const name of LINUX_NAMES) {
     const found = which(name, env);
     if (found) return found;
   }
-  return null;
+  return LINUX_FILES.find((file) => exists(file)) ?? null;
 }
 
 function whichOnPath(name, env = process.env) {
@@ -77,7 +118,7 @@ export function drawMockup(htmlFile, { force = false } = {}) {
   const png = htmlFile.replace(/\.html?$/i, "") + ".png";
   if (!force && existsSync(png) && statSync(png).mtimeMs >= statSync(htmlFile).mtimeMs) return { png, image: appPath(png) };
   const browser = findBrowser();
-  if (!browser) return { error: "No Chrome, Edge, Chromium or Brave found to draw mockups with. Install one, or set BH_BROWSER to one." };
+  if (!browser) return { error: "No Chrome, Edge, Chromium or Brave found to draw mockups with. Install one. Set BH_BROWSER to its path." };
   // A fragment is drawn from a whole page next to it.
   const source = readFileSync(htmlFile, "utf8");
   let file = htmlFile;

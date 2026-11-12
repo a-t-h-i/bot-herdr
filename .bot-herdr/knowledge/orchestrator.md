@@ -11,6 +11,6 @@
 ## Decisions
 - Commits must never include the trailer 'Co-authored-by: Claude <noreply@anthropic.com>'
 - Headless ask handling ends the turn only after the bh ask tool call has finished (its result event, or ACP tool_call_update completed), never at its start or permission request.
-- Every finished task ends with a git commit and push to origin/main, then a rebuild and install into the herdr app (node install.mjs; herdr-app check must pass). From the person, 2026-11-11.
+- Every finished task ends with a git commit and push to origin/main, then a rebuild and install into the herdr app (node install.mjs; herdr-app check must pass). From the user, 2026-11-11.
 
 ## History

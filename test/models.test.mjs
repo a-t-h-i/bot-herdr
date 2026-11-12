@@ -76,7 +76,7 @@ test("an unknown harness is the caller's mistake", async () => {
   await assert.rejects(() => M.modelsFor("nope"), /No harness nope/);
 });
 
-// A stand-in harness: whatever the person's --command names, so no real harness runs in the tests.
+// A stand-in harness: whatever the user's --command names, so no real harness runs in the tests.
 function fake(harness, text, { exit = 0, toStderr = false } = {}) {
   const script = join(tmp, `${harness}.mjs`);
   writeFileSync(script, `process.${toStderr ? "stderr" : "stdout"}.write(${JSON.stringify(text)});\nprocess.exit(${exit});\n`);

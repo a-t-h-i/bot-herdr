@@ -2,7 +2,7 @@
 //
 // Each message (typed here, pasted by `hc send`, or the first one on the command line) is one
 // turn of the agent's harness in its non-interactive mode (runner.mjs). What the agent does is
-// printed as it happens; its final answer is printed, and for an agent the person talks to
+// printed as it happens; its final answer is printed, and for an agent the user talks to
 // (`--mode lead`) also saved as its reply in the chat. The terminal reports its status to herdr
 // (OSC 7501), so herdr, `hc wait` and the chat see it working and done like any agent.
 //
@@ -157,7 +157,31 @@ export function statusReport(state, { app, title, msg } = {}) {
   return `\x1b]7501;${fields.join(":")}\x1b\\`;
 }
 
-/** Runs the agent until the person quits. `first`: a message to start with. */
+/**
+ * The saved conversation to resume, for this harness and project. A conversation belongs to one
+ * project: one saved for another starts over (`moved`). One saved before roots were kept keeps its
+ * session and takes this project's root.
+ */
+export function resumeState(saved, { harness, root }) {
+  if (saved?.harness !== harness) return { state: { harness, session: null, root }, moved: false };
+  if (!saved.root) return { state: { ...saved, root }, moved: false };
+  if (saved.root !== root) return { state: { harness, session: null, root }, moved: true };
+  return { state: saved, moved: false };
+}
+
+/** The harness's question tool as a card, as bh ask makes it, with its mockups drawn now. */
+function askCard(e, { address, who, cwd, say }) {
+  try {
+    const q = Q.ask({ title: e.title ?? "Questions", questions: e.questions, from: address, fromName: who, cwd });
+    const { failed } = Q.drawMockups(q);
+    say(`${DIM}  · Asked the user (${q.questions.length} question${q.questions.length === 1 ? "" : "s"}); the answers come as the next message.${OFF}`);
+    for (const f of failed) say(`${DIM}  · Couldn't draw question ${f.question}, option "${f.option}": ${f.error}${OFF}`);
+  } catch (err) {
+    say(`${DIM}  · Couldn't ask: ${err.message}${OFF}`);
+  }
+}
+
+/** Runs the agent until the user quits. `first`: a message to start with. */
 export async function runAgent({ word, mode = "lead", name = null, parent = null, task = null, model = null, effort = null, first = "" }) {
   const root = projectRoot();
   const cwd = process.cwd();
@@ -182,8 +206,8 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
   const key = `${slug(who)}${address ? `-${fileKey(address)}` : ""}`;
   const stateFile = join(DATA, "sessions", `${key}.json`);
   const briefFile = join(DATA, "briefs", `${key}.md`);
-  let state = readJson(stateFile, null) ?? {};
-  if (state.harness !== agent.harness) state = { harness: agent.harness, session: null };
+  const resumed = resumeState(readJson(stateFile, null), { harness: agent.harness, root });
+  let state = resumed.state;
   const acp = { current: null };
   const app = () => HEADLESS[agent.harness]?.app ?? agent.harness;
   const status = (word2, msg) => tty && write(statusReport(word2, { app: app(), title: who, msg }));
@@ -214,7 +238,7 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
     if (state.harness !== agent.harness) {
       acp.current?.close();
       acp.current = null;
-      state = { harness: agent.harness, session: null };
+      state = { harness: agent.harness, session: null, root };
       say(`${DIM}${who} now runs on ${agent.harness}: a new conversation.${OFF}`);
     }
     if (!headless(agent.harness)) {
@@ -232,12 +256,7 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
         activity(e.line);
       } else if (e.kind === "ask" && address) {
         // The harness's own question tool: the same card as bh ask; the answers come back as a message.
-        try {
-          const q = Q.ask({ title: e.title ?? "Questions", questions: e.questions, from: address, fromName: who, cwd });
-          say(`${DIM}  · Asked the person (${q.questions.length} question${q.questions.length === 1 ? "" : "s"}); the answers come as the next message.${OFF}`);
-        } catch (err) {
-          say(`${DIM}  · Couldn't ask: ${err.message}${OFF}`);
-        }
+        askCard(e, { address, who, cwd, say });
       } else if (e.kind === "text" && e.text.trim() && e.text !== shown) {
         shown = e.text;
         say(`\n${e.text.trim()}\n`);
@@ -300,7 +319,7 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
     if (words === "/new") {
       acp.current?.close();
       acp.current = null;
-      state = { harness: agent.harness, session: null };
+      state = { harness: agent.harness, session: null, root };
       save();
       say(`${DIM}A new conversation: the next message starts it.${OFF}`);
       return;
@@ -390,13 +409,15 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
     process.stdin.pause();
   }
 
-  // Everything the harness runs knows it is an agent: bh then refuses the person's settings.
+  // Everything the harness runs knows it is an agent: bh then refuses the user's settings.
   process.env.BH_AGENT = who;
   for (const sig of ["SIGTERM", "SIGHUP"]) process.on(sig, quit);
   if (tty) write(`\x1b]2;${who}\x07`);
   if (address) team.hc(["label", address, "bot-herdr.briefed3=1", "bot-herdr.headless=1"]);
   ensureDir(join(DATA, "replies"));
   header();
+  if (resumed.moved) say(`${DIM}${who} is in another project now: a new conversation.${OFF}`);
+  save(); // the saved conversation now names its project
   keysOn();
   if (first.trim()) {
     say(`${BOLD}›${OFF} ${first.trim()}\n`);

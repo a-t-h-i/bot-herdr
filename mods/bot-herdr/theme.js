@@ -1,5 +1,5 @@
 // The colours to draw with now: ours (look.js) on the layout's own theme, else the herdr theme
-// the person picked, turned into our tokens.
+// the user picked, turned into our tokens.
 
 import { settings, theme, themes } from "herdr";
 import { palette } from "./look.js";

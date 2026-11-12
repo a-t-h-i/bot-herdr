@@ -1,0 +1,126 @@
+<!doctype html><html><head><meta charset="utf-8"></head><body style="margin:0"><style>
+html,body{margin:0;padding:0;background:#faf9f5}
+.frame{position:relative;width:1200px;height:825px;overflow:hidden;background:#f4f3ef;color:#141413;font-family:"Segoe UI",system-ui,sans-serif;font-size:14px;line-height:1.4}
+.frame *{box-sizing:border-box;margin:0;padding:0}
+.i{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.top{height:60px;display:flex;align-items:center;gap:10px;padding:0 24px;background:#faf9f5}
+.pt{height:34px;padding:0 14px;border-radius:17px;display:flex;align-items:center;gap:8px;color:#6a6964;background:#faf9f5;border:1px solid #e3e0d7}
+.pt.on{background:#ffffff;color:#141413;font-weight:600;border-color:#d6d2c6}
+.grow{flex:1}
+.ib{width:34px;height:34px;border-radius:17px;display:flex;align-items:center;justify-content:center;color:#6a6964;background:#ffffff;border:1px solid #e3e0d7}
+.sh{box-shadow:0 1px 2px rgba(20,20,19,.06)}
+.card{background:#ffffff;border:1px solid #e3e0d7;border-radius:14px;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.hd{margin:0 24px;height:96px;display:flex;flex-direction:column;gap:10px;padding:12px 20px}
+.hrow{display:flex;align-items:center;gap:12px}
+.tile-ic{width:38px;height:38px;border-radius:11px;background:rgba(29,78,216,.1);border:1px solid rgba(29,78,216,.28);color:#1d4ed8;display:flex;align-items:center;justify-content:center;flex:none}
+.tile-ic .i{width:20px;height:20px}
+h1{flex:1;font-size:18px;font-weight:600;line-height:1.3;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pill{height:26px;padding:0 12px;border-radius:13px;display:flex;align-items:center;font-size:13px;font-weight:600;color:#1d4ed8;background:rgba(29,78,216,.1);border:1px solid rgba(29,78,216,.28);white-space:nowrap}
+.track{display:flex;gap:10px;align-items:flex-end}
+.stp{flex:1;display:flex;flex-direction:column;gap:6px}
+.stp b{height:8px;border-radius:4px;background:#a25338;display:block}
+.stp span{font-size:13px;color:#6a6964}
+.stp span.now{color:#a25338;font-weight:600}
+.rail{margin:12px 24px 0;display:flex;gap:10px;height:64px}
+.rd{width:112px;flex:none;justify-content:center;padding:10px 14px}
+.rd b{font-size:22px;font-weight:600;line-height:1}
+.rd span{font-size:13px;color:#6a6964}
+.seat{flex:1;padding:10px 12px;flex-direction:row;align-items:center;gap:10px;min-width:0}
+.seat .ic{width:32px;height:32px;border-radius:10px;display:flex;align-items:center;justify-content:center;border:1px solid;flex:none}
+.seat .ic .i{width:16px;height:16px}
+.seat .nm{font-size:14px;font-weight:600;line-height:1.2}
+.seat .st{font-size:13px;color:#6a6964}
+.bodyg{margin:12px 24px 0;display:flex;gap:14px;height:296px}
+.left{flex:1;min-width:0;display:flex;flex-direction:column;gap:12px}
+.right{width:400px;flex:none;display:flex;flex-direction:column;gap:12px}
+.idea{align-self:flex-end;max-width:86%;background:#efede5;border:1px solid #dcd8cc;border-radius:14px;padding:10px 14px;font-size:14px;line-height:1.45}
+.pan{flex:1;min-height:0}
+.lab{font-size:13px;font-weight:600;color:#6a6964;display:flex;align-items:center;gap:8px}
+.av{width:22px;height:22px;border-radius:11px;background:rgba(162,83,56,.16);border:1px solid rgba(162,83,56,.45);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;color:#a25338}
+.q{display:flex;flex-direction:column;gap:6px;background:#faf9f5;border:1px solid #e3e0d7;border-radius:11px;padding:8px 12px}
+.q .qt{font-size:14px;line-height:1.4;display:flex;gap:8px;align-items:flex-start}
+.sp{height:20px;padding:0 7px;border-radius:10px;display:inline-flex;align-items:center;font-size:13px;font-weight:600;flex:none;margin-top:1px}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.ch{height:28px;padding:0 10px;border-radius:14px;border:1px solid #e3e0d7;display:flex;align-items:center;gap:6px;font-size:13px;color:#6a6964;background:#ffffff}
+.ch.on{background:rgba(162,83,56,.12);border-color:#a25338;color:#141413;font-weight:600}
+.ch.on .i{width:13px;height:13px;stroke:#a25338;stroke-width:2.6}
+.ans{font-size:13px;color:#6a6964}
+.ansc{display:flex;flex-direction:column;gap:8px;flex:1}
+.at{background:#faf9f5;border:1px solid #e3e0d7;border-radius:11px;padding:7px 12px;display:flex;flex-direction:column;gap:2px}
+.at .k{font-size:13px;color:#6a6964}
+.at .v{font-size:14px;font-weight:500}
+.cwrap{margin:0 24px;display:flex;flex-direction:column;align-items:flex-start;margin-top:10px}
+.vtab{height:30px;padding:0 14px;border-radius:12px 12px 0 0;background:#ffffff;border:1px solid #e3e0d7;border-bottom:none;display:flex;align-items:center;gap:8px;font-size:14px;font-weight:500}
+.comp{width:100%;background:#ffffff;border:1px solid #e3e0d7;border-radius:14px;padding:14px 16px 10px;display:flex;flex-direction:column;gap:8px;box-shadow:0 1px 2px rgba(20,20,19,.06)}
+.ph{font-size:14px;color:#6a6964;height:30px}
+.tools{display:flex;align-items:center;gap:10px;font-size:13px;color:#6a6964}
+.send{width:32px;height:32px;border-radius:10px;background:#a25338;display:flex;align-items:center;justify-content:center;color:#ffffff}
+</style>
+<div class="frame">
+  <div class="top">
+    <span class="pt"><svg class="i" viewBox="0 0 24 24"><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></svg>Tasks</span>
+    <span class="pt on"><svg class="i" viewBox="0 0 24 24"><path d="M14.106 5.553a2 2 0 0 0 1.788 0l3.659-1.83A1 1 0 0 1 21 4.619v12.764a1 1 0 0 1-.553.894l-4.553 2.277a2 2 0 0 1-1.788 0l-4.212-2.106a2 2 0 0 0-1.788 0l-3.659 1.83A1 1 0 0 1 3 19.381V6.618a1 1 0 0 1 .553-.894l4.553-2.277a2 2 0 0 1 1.788 0z"/><path d="M15 5.764v15"/><path d="M9 3.236v15"/></svg>Plans</span>
+    <span class="pt"><svg class="i" viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>Knowledge</span>
+    <div class="grow"></div>
+    <span class="ib"><svg class="i" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg></span>
+  </div>
+  <div class="hd card sh">
+    <div class="hrow">
+      <span class="tile-ic"><svg class="i" viewBox="0 0 24 24"><path d="M14.106 5.553a2 2 0 0 0 1.788 0l3.659-1.83A1 1 0 0 1 21 4.619v12.764a1 1 0 0 1-.553.894l-4.553 2.277a2 2 0 0 1-1.788 0l-4.212-2.106a2 2 0 0 0-1.788 0l-3.659 1.83A1 1 0 0 1 3 19.381V6.618a1 1 0 0 1 .553-.894l4.553-2.277a2 2 0 0 1 1.788 0z"/><path d="M15 5.764v15"/><path d="M9 3.236v15"/></svg></span>
+      <h1>Theme contrast, in-app file browser, visual refresh and measured engine wins</h1>
+      <span class="pill">Became a task</span>
+    </div>
+    <div class="track">
+      <div class="stp"><b></b><span>Idea</span></div>
+      <div class="stp"><b></b><span>Questions</span></div>
+      <div class="stp"><b></b><span>Draft</span></div>
+      <div class="stp"><b></b><span>Ready</span></div>
+      <div class="stp"><b></b><span>Task</span></div>
+    </div>
+  </div>
+  <div class="rail">
+    <div class="rd card"><b>11</b><span>round</span></div>
+    <div class="seat card sh"><span class="ic" style="border-color:rgba(162,83,56,.45);background:rgba(162,83,56,.14);color:#a25338"><svg class="i" viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/><path d="M9.6 9.5a2.5 2.5 0 0 1 4.8.9c0 1.6-2.4 2-2.4 3.4"/><path d="M12 16.5h.01"/></svg></span><span><div class="nm">Orchestrator</div><div class="st">on</div></span></div>
+    <div class="seat card sh"><span class="ic" style="border-color:rgba(91,141,239,.45);background:rgba(91,141,239,.14);color:#4b71bd"><svg class="i" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></svg></span><span><div class="nm">Dev</div><div class="st">on</div></span></div>
+    <div class="seat card sh"><span class="ic" style="border-color:rgba(214,130,90,.45);background:rgba(214,130,90,.14);color:#a16447"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></svg></span><span><div class="nm">Design</div><div class="st">on</div></span></div>
+    <div class="seat card sh"><span class="ic" style="border-color:rgba(63,168,119,.45);background:rgba(63,168,119,.14);color:#33805c"><svg class="i" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></span><span><div class="nm">QA</div><div class="st">on</div></span></div>
+    <div class="seat card sh"><span class="ic" style="border-color:rgba(164,123,214,.45);background:rgba(164,123,214,.14);color:#8564ab"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg></span><span><div class="nm">Research</div><div class="st">on</div></span></div>
+    <div class="seat card sh" style="flex:none;width:112px;justify-content:center"><svg class="i" viewBox="0 0 24 24" style="color:#6a6964"><path d="m15 18-6-6 6-6"/></svg><span class="st" style="color:#141413;font-weight:500">Previous</span></div>
+    <div class="seat card sh" style="flex:none;width:124px;justify-content:center;color:#a25338;white-space:nowrap"><svg class="i" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5v14"/></svg><span style="font-weight:500">New plan</span></div>
+  </div>
+  <div class="idea" style="margin:12px 24px 0 auto;width:880px;max-width:none">Three parts. (1) Fix the contrast issue seen with herdr's built-in themes: with other themes the contrast is off (screenshots show low-contrast secondary text like timestamps, 'Comment', 'Open terminal', agent names, inline code chips and user bubbles). (2) Attaching a document fails to open a file explorer. (3) Review the current features: what could be improved, what can be removed, what visual layout would be best, performance improvements, token efficiency, cache hit rates, etc.</div>
+  <div class="bodyg">
+    <div class="left">
+      <div class="card sh pan">
+        <div class="lab"><span class="av">T</span>The panel asked · round 11</div>
+        <div class="q"><div class="qt"><span class="sp" style="background:rgba(214,130,90,.16);color:#a16447">DESIGN</span>How far should the contrast fix go? (Measured today: timestamps and "Comment" at 2.2–3.4:1 on win98 and atom-one-dark, agent names at 1.6:1 on win98, and our own send button at 3.1:1; AA needs 4.5:1.)</div>
+          <div class="chips"><span class="ch">Failing text only</span><span class="ch">AA everywhere, theme kept</span><span class="ch">Always our palette</span></div>
+          <div class="ans">You: The borders are also too sharp on the text bubbles compared to bot-herdr's theme.</div></div>
+        <div class="q"><div class="qt"><span class="sp" style="background:rgba(91,141,239,.16);color:#4b71bd">DEV</span>How should "Attach document…" pick files? (herdr gives mods a folder picker but no file picker; ours runs a PowerShell dialog that opens fine outside the app, so inside herdr it most likely appears behind the window, and every failure is silent today.)</div>
+          <div class="chips"><span class="ch">Repair the system dialog</span><span class="ch on"><svg class="i" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Browse inside the app</span><span class="ch">Both</span></div></div>
+      </div>
+    </div>
+    <div class="right">
+      <div class="card sh ansc">
+        <div class="at"><span class="k">DESIGN · Which layout should the app settle on?</span><span class="v">Keep it, tidy details</span></div>
+        <div class="at"><span class="k">ORCHESTRATOR · What should this plan build from the features review?</span><span class="v">Measured wins</span></div>
+        <div class="at"><span class="k">Visual design · direction, density, motion</span><span class="v">Keep the paper, tighten it · Compact · Alive</span></div>
+        <div class="at"><span class="k">Contrast scope</span><span class="v">AA everywhere, theme kept</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="cwrap">
+    <span class="vtab"><svg class="i" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></svg>View plan<svg class="i" viewBox="0 0 24 24" style="width:13px;height:13px;color:#6a6964"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></span>
+  </div>
+  <div style="margin:0 24px;position:absolute;left:0;right:0;top:692px">
+    <div class="comp">
+      <div class="ph">Describe what to plan, or how to change the plan</div>
+      <div class="tools">
+        <svg class="i" viewBox="0 0 24 24"><path d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"/></svg>
+        <span>bot-herdr</span><span>main</span><span>Claude Opus 5.5 xhigh</span>
+        <span style="flex:1"></span>
+        <span class="send"><svg class="i" viewBox="0 0 24 24"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></svg></span>
+      </div>
+    </div>
+  </div>
+</div></body></html>

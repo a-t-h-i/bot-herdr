@@ -82,7 +82,7 @@ export function outline(markdown) {
   return { title, sections };
 }
 
-/** The person's notes on an entry: those whose entry words it holds (as the brief places them). */
+/** The user's notes on an entry: those whose entry words it holds (as the brief places them). */
 export function notesOn(notes, text) {
   const body = String(text ?? "");
   return (notes ?? []).filter((n) => n?.entry && body.includes(n.entry));

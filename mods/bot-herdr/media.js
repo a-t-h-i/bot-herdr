@@ -1,5 +1,5 @@
 // Pictures for the chat, kept once per content: mockups (HTML an agent wrote, drawn by a browser
-// the person already has: `bh mockup`), and images pasted or attached (copied where herdr can
+// the user already has: `bh mockup`), and images pasted or attached (copied where herdr can
 // show them: `bh clip`, `bh preview`). Each comes back as a path for image().
 
 import * as fs from "fs/promises";
@@ -55,7 +55,7 @@ export function mockupFile(file, cx) {
   return draw(`file:${file}`, file, null, cx);
 }
 
-/** Opens a mockup's page in the person's browser. */
+/** Opens a mockup's page in the user's browser. */
 export function openInBrowser(file, cx) {
   cx.spawn(async () => {
     await bh(["open", file]);

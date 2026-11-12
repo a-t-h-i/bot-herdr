@@ -9,5 +9,6 @@
 - team.hc never runs hc through a shell (a brief is one argument); tests stand in for hc with a script named by BH_HC
 
 ## Decisions
+- Agent conversation state files under DATA keep their names; a root field in the state resets the session when the project changes (resumeState), so pre-change sessions survive.
 
 ## History

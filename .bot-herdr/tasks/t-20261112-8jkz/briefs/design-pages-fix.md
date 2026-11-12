@@ -1,0 +1,7 @@
+Fix step from the Orchestrator (t-20261112-8jkz, your files work.js and plandoc.js only). Three gaps from your report:
+
+1. Item 12 is not blocked: no round number is needed. The question sets for a plan come oldest first (created order). Show only the newest set in full; every older set collapses to one line per question (check, seat name in its colour, the question, the answer in semibold, "You: ..." under it when the user typed text), as planning-light-000.png's auto-answered line. A plan with one set shows it in full.
+2. Delete's toast: after `bh task delete` succeeds, open the task that was below it in the list (else the one above), so the detail and its composer stay, and say "Deleted <title>" through that task's composer. With no task left, show the empty state with no toast.
+3. Step 8 of the task, in your two files: the user wants agents and messages to call them "the user", never "the person". Replace every "the person" / "The person" / "the person's" / "The person's" in work.js and plandoc.js (strings sent to the Orchestrator such as "The person commented on task ...", text shown on the pages, and code comments) with "the user" / "The user" / "the user's" / "The user's". Keep the sentences otherwise as they are. Every other file is already done.
+
+Done when: those three hold; `grep -n -i "person" mods/bot-herdr/work.js mods/bot-herdr/plandoc.js` prints nothing; herdr-app check mods/bot-herdr passes; bh check passes; `node --test test/*.test.mjs` passes. Report as before (short). Do not install or commit.

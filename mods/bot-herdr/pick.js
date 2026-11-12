@@ -14,6 +14,7 @@ import { div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { props, settings, setShared, closeOverlay, openOverlay } from "herdr";
 import { SIZE, ICON, TYPE, SPACE, CONTROL, ROW, CHIP, DOT, HAIR, GLYPH, clickable } from "./look.js";
+import { actionButton } from "./button.js";
 import { colors } from "./theme.js";
 
 export const PICKED = "bot-herdr.picked";
@@ -173,7 +174,7 @@ export class Pick {
             const on = e.value === (this.effort ?? "");
             return clickable(
               div()
-                .h(CHIP)
+                .h(CONTROL)
                 .px(SPACE[3])
                 .flex()
                 .items_center()
@@ -198,20 +199,7 @@ export class Pick {
           .gap(SPACE[3])
           .items_center()
           .child(div().flex_1().min_w(0).truncate().text_size(TYPE.xs).font_medium().text_color(c.muted).child(this.p.header))
-          .when(this.p.refreshable, (el) => el.child(clickable(
-            div()
-              .size(CHIP)
-              .flex_none()
-              .flex()
-              .items_center()
-              .justify_center()
-              .rounded(SIZE.nested)
-              .text_color(c.muted)
-              .on_click(() => this.refresh())
-              .child(svg(ICON("refresh-cw")).size(GLYPH.sm)),
-            c,
-            "bh-pick-refresh",
-          ))),
+          .when(this.p.refreshable, (el) => el.child(actionButton(c, "bh-pick-refresh", null, () => this.refresh(), { icon: "refresh-cw", tone: "quiet" }))),
       ))
       .when(Boolean(this.p.error), (el) => el.child(
         div().flex_none().px(SPACE[3]).pb(SPACE[2]).text_size(TYPE.xs).text_color(c.faint).child(this.p.error),

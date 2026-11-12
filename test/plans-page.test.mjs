@@ -1,4 +1,4 @@
-// The Plans page's data: questions asked for a plan, and seats the person leaves out.
+// The Plans page's data: questions asked for a plan, and seats the user leaves out.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

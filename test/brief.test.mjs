@@ -26,7 +26,7 @@ test("no installed agents: it says how to find out", () => {
   assert.match(teamBrief(), /\$HC_TERMINAL_ID/);
 });
 
-test("the brief goes before the person's words, once", () => {
+test("the brief goes before the user's words, once", () => {
   const m = withBrief("fix the bug", { known });
   assert.ok(m.startsWith("[bot-herdr team brief"));
   assert.ok(m.endsWith("\n\nfix the bug"));

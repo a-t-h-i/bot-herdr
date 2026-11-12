@@ -9,12 +9,13 @@
 //
 // How agents run: headless (the default: each message runs the harness non-interactively and
 // the answer comes back to the chat) or as their CLI; and what they may do without asking,
-// standard (edits, reading, the team's tools) unless the person picks full access.
+// standard (edits, reading, the team's tools) unless the user picks full access.
 
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, TextareaState, Textarea } from "gpui-base";
 import { agents, panes, spaces, settings, shared, setShared, knownAgents, notify } from "herdr";
-import { SIZE, ICON, TYPE, LINE, SPACE, CONTROL, CHIP, MARK, PIP, HAIR, GLYPH, clickable, accentFill, pressable, focusable, textWidth } from "./look.js";
+import { SIZE, ICON, TYPE, LINE, SPACE, CONTROL, CHIP, MARK, PIP, HAIR, GLYPH, clickable, pressable, focusable, textWidth } from "./look.js";
+import { actionButton } from "./button.js";
 import { stateView, pill, avatar, segmented } from "./switch.js";
 import { mentionTone, alpha } from "./indicators.js";
 import { colors } from "./theme.js";
@@ -560,19 +561,11 @@ export class Settings {
   /** "More" / "Less": opens a part past its essentials. */
   disclosure(c, key, label = "More") {
     const open = this.more.has(key);
-    return clickable(
-      h_flex().flex_none().h(CHIP).px(SPACE[2]).gap(SPACE[2]).items_center().rounded(SIZE.nested)
-        .text_size(TYPE.xs).font_medium().text_color(c.muted)
-        .on_click((_e, cx) => {
-          if (open) this.more.delete(key);
-          else this.more.add(key);
-          cx.notify();
-        })
-        .child(open ? "Less" : label)
-        .child(svg(ICON(open ? "chevron-down" : "chevron-right")).size(GLYPH.xs)),
-      c,
-      `bh-more-${key}`,
-    );
+    return actionButton(c, `bh-more-${key}`, open ? "Less" : label, (_e, cx) => {
+      if (open) this.more.delete(key);
+      else this.more.add(key);
+      cx.notify();
+    }, { icon: open ? "chevron-down" : "chevron-right", tone: "quiet" });
   }
 
   /** One setting on one line: its name (and a short hint under it) on the left, its control on the right. */
@@ -996,7 +989,7 @@ export class Settings {
     return clickable(
       div()
         .flex_none()
-        .h(CHIP)
+        .h(CONTROL)
         .px(SPACE[3])
         .flex()
         .items_center()
@@ -1013,46 +1006,11 @@ export class Settings {
   }
 
   iconButton(c, id, icon, onClick, danger = false) {
-    return focusable(
-      pressable(
-        div()
-          .size(CONTROL)
-          .flex_none()
-          .flex()
-          .items_center()
-          .justify_center()
-          .rounded(SIZE.nested)
-          .text_color(c.muted)
-          .hover((s) => s.bg(c.hover).text_color(danger ? c.danger : c.ink))
-          .on_click(onClick)
-          .child(svg(ICON(icon)).size(MARK)),
-      ),
-      id,
-      c,
-    );
+    return actionButton(c, id, null, onClick, { icon, tone: danger ? "danger" : "quiet" });
   }
 
   button(c, id, icon, label, onClick) {
-    return clickable(
-      h_flex()
-        .flex_none()
-        .h(CONTROL)
-        .px(SPACE[4])
-        .gap(SPACE[3])
-        .items_center()
-        .rounded(SIZE.control)
-        .bg(c.accent)
-        .border_b(1)
-        .border_color(c.accentLip)
-        .text_size(TYPE.md)
-        .font_medium()
-        .text_color(c.accentInk)
-        .on_click(onClick)
-        .when(Boolean(icon), (el) => el.child(svg(ICON(icon)).size(MARK).text_color(c.accentInk)))
-        .child(label),
-      c,
-      id, { fill: accentFill(c) },
-    );
+    return actionButton(c, id, label, onClick, { icon, tone: "primary" });
   }
 }
 

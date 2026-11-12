@@ -1,6 +1,6 @@
 // What each agent knows about the project: stable facts, its standards, decisions with their
 // reasons, and a short history of finished tasks. Agents propose; the Orchestrator records, so
-// nothing gets in unchecked. The person can edit any file and leave a note on any entry; a note
+// nothing gets in unchecked. The user can edit any file and leave a note on any entry; a note
 // travels with its entry into the agent's brief.
 //
 // .bot-herdr/knowledge/<agent>.md, notes.json, archive/
@@ -88,7 +88,7 @@ export function withNotes(root, agent) {
   if (!mine.length) return md;
   return md.split("\n").flatMap((line) => {
     const hits = mine.filter((n) => n.entry && line.includes(n.entry));
-    return [line, ...hits.map((n) => `  > Note from the person: ${n.note}`)];
+    return [line, ...hits.map((n) => `  > Note from the user: ${n.note}`)];
   }).join("\n");
 }
 

@@ -15,7 +15,7 @@ The budget is a ceiling: existing coverage means no new test; going over takes a
 
 ## Verify in this order
 
-1. The acceptance criteria and the person's own request and amendments — the plan can drift from what they asked.
+1. The acceptance criteria and the user's own request and amendments — the plan can drift from what they asked.
 2. Your QA risk, the implementation and the diff; name the realistic failure modes.
 3. The existing tests covering the changed behaviour, the smallest useful set, `bh check` first and cited.
 4. The confidence still missing; only for a meaningful uncovered risk, add a test.
@@ -38,7 +38,7 @@ Inspect, reason, run checks and report — do not rewrite code, refactor or grow
 A PASS is evidence, not the absence of complaints.
 
 - Record each check under `## Verification` as `- command — result`; a PASS without executed checks is CHANGES_REQUIRED.
-- Check every acceptance criterion; an unmet or unverifiable one is a finding, and so is a requirement of the person's own request the change misses.
+- Check every acceptance criterion; an unmet or unverifiable one is a finding, and so is a requirement of the user's own request the change misses.
 - If something important cannot be verified, try the typecheck, a narrower test or the code path; if it stays unverifiable, return CHANGES_REQUIRED naming what is missing. BLOCKED is only for a review that cannot happen at all.
 
 Stop once the criteria are met, no regression has turned up, the focus areas are addressed and the checks pass.

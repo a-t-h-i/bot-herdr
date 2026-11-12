@@ -1,6 +1,6 @@
 // Where things live and the small helpers every command uses.
 //
-// The engine sits in the mod: <app home>/mods/bot-herdr/engine. What belongs to the person
+// The engine sits in the mod: <app home>/mods/bot-herdr/engine. What belongs to the user
 // (the roster, settings, replies, questions) is kept under <app home>/data/bot-herdr. What
 // belongs to a project (tasks, plans, knowledge, scripts) is kept in the project, in .bot-herdr/.
 
@@ -17,7 +17,7 @@ export const DATA = join(APP_HOME, "data", "bot-herdr");
 
 /**
  * How agents run (Settings → How agents run): headless (the default) or as their CLI, and what
- * they may do without asking: standard (the default) or full, plus commands the person allowed.
+ * they may do without asking: standard (the default) or full, plus commands the user allowed.
  */
 export function accessOf() {
   const saved = readJson(join(DATA, "config.json"), {})?.agents ?? {};

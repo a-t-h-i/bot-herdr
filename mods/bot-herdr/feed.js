@@ -113,7 +113,7 @@ export function isNew(text, seen) {
 
 /**
  * What became of an agent we wrote to and are waiting on. "reply" is decided by the caller (a
- * new file); here: "blocked" when it needs the person, "silent" when it worked and stopped
+ * new file); here: "blocked" when it needs the user, "silent" when it worked and stopped
  * without writing a reply (after `grace` ms), else "wait".
  */
 export function outcome(wait, status, now, grace = 8000) {

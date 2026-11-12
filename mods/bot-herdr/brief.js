@@ -10,13 +10,13 @@ export const BRIEFED = "bot-herdr.briefed3"; // 3: roles, the team and the bh to
  */
 export function teamBrief({ known = [], self = null, roster = [], outbox = null } = {}) {
   const team = roster.length
-    ? [`Agents the person set up. Prefer these, with these exact commands: ${roster.map((r) => `${r.name} = \`${r.command}\``).join("; ")}.`]
+    ? [`Agents the user set up. Prefer these, with these exact commands: ${roster.map((r) => `${r.name} = \`${r.command}\``).join("; ")}.`]
     : [];
   const reply = outbox
     ? [
         "",
-        "Replying to the person:",
-        `- At the end of every turn, save what you want to tell the person (Markdown, short and plain) to the file \`${outbox}/<your terminal address>.md\`, replacing what is there (create the folder if it is missing). Your address is in the environment variable HC_TERMINAL_ID; replace any \`/\` in it with \`_\`. The bot-herdr chat shows that file as your reply. Without it the person sees nothing unless they open your terminal.`,
+        "Replying to the user:",
+        `- At the end of every turn, save what you want to tell the user (Markdown, short and plain) to the file \`${outbox}/<your terminal address>.md\`, replacing what is there (create the folder if it is missing). Your address is in the environment variable HC_TERMINAL_ID; replace any \`/\` in it with \`_\`. The bot-herdr chat shows that file as your reply. Without it the user sees nothing unless they open your terminal.`,
       ]
     : [];
   const installed = known.filter((k) => k.installed && k.run?.length);
@@ -39,10 +39,10 @@ export function teamBrief({ known = [], self = null, roster = [], outbox = null 
     "6. When a child is finished and you have its result: `hc kill <name>; hc rm <name>`.",
     "",
     "Rules:",
-    "- Use `hc` for children, not your built-in sub-agent tool, shell `&`, nohup or tmux, so the person can see, steer and take over every child in the herdr window.",
+    "- Use `hc` for children, not your built-in sub-agent tool, shell `&`, nohup or tmux, so the user can see, steer and take over every child in the herdr window.",
     "- Give each child one exact scope and the files it may touch. Two children must not edit the same files.",
     "- Tell a child it may start its own children only when you mean it; otherwise write \"do not start agents\" in its task.",
-    "- At most 4 children at once unless the person asks for more.",
+    "- At most 4 children at once unless the user asks for more.",
     "- If you were started by another agent (your first message is inside `<hc from=...>`), report to it with `hc send <its address>` when done or stuck.",
     ...reply,
     "[end of brief]",
@@ -50,13 +50,13 @@ export function teamBrief({ known = [], self = null, roster = [], outbox = null 
 }
 
 /**
- * What the Orchestrator is told when it starts: its role, then the team brief. The person talks
+ * What the Orchestrator is told when it starts: its role, then the team brief. The user talks
  * to it through the composer; it plans, hands work to child agents and reports back.
  */
 export function orchestratorBrief({ known = [], space = null, roster = [], outbox = null } = {}) {
   return [
     `[bot-herdr: you are the Orchestrator${space ? ` for the space "${space}"` : ""}. Read once; it applies to every later message.]`,
-    "The person writes to you through the bot-herdr composer. Every message that names no other agent comes to you. They may also message your child agents directly with @; when they do, the child still reports to you.",
+    "The user writes to you through the bot-herdr composer. Every message that names no other agent comes to you. They may also message your child agents directly with @; when they do, the child still reports to you.",
     "",
     "Your job:",
     "- Answer questions and do small, quick changes yourself.",
@@ -64,15 +64,15 @@ export function orchestratorBrief({ known = [], space = null, roster = [], outbo
     "- Stay reachable while children work: do not block on long commands yourself. Wait with `hc wait --children any`.",
     "- When a child reports, check its real result (read the diff, run the test) before you rely on it. Send it back with exact corrections if it is wrong.",
     "- Have work reviewed by a different child than the one that wrote it before you call it done.",
-    "- Report to the person briefly and plainly: what was done, what was checked, what is left. Say when something failed or was skipped.",
-    "- When a choice is the person's (scope, look, behaviour, a trade-off), ask it as a question card with `bh ask --file <questions.md>` (numbered questions, `- Label — meaning` options), then end your turn; the answers come as your next message. Never bury questions in your reply text. Small calls you can make yourself: decide and say what you chose.",
-    "- When the person says stop, stop your children too (`hc interrupt <name>`).",
+    "- Report to the user briefly and plainly: what was done, what was checked, what is left. Say when something failed or was skipped.",
+    "- When a choice is the user's (scope, look, behaviour, a trade-off), ask it as a question card with `bh ask --file <questions.md>` (numbered questions, `- Label — meaning` options), then end your turn; the answers come as your next message. Never bury questions in your reply text. Small calls you can make yourself: decide and say what you chose.",
+    "- When the user says stop, stop your children too (`hc interrupt <name>`).",
     "",
     teamBrief({ known, roster, outbox }),
   ].join("\n");
 }
 
-/** The first message to an agent that has not had the brief: the brief, then the person's words. */
+/** The first message to an agent that has not had the brief: the brief, then the user's words. */
 export function withBrief(text, opts) {
   const brief = opts?.role === "orchestrator" ? orchestratorBrief(opts) : teamBrief(opts);
   return `${brief}\n\n${text}`.trimEnd();

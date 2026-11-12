@@ -1,0 +1,114 @@
+<!doctype html><html><head><meta charset="utf-8"></head><body style="margin:0"><style>
+html,body{margin:0;padding:0;background:#faf9f5}
+.frame{position:relative;width:1200px;height:825px;overflow:hidden;background:#faf9f5;color:#141413;font-family:"Segoe UI",system-ui,sans-serif;font-size:14px;line-height:1.45}
+.frame *{box-sizing:border-box;margin:0;padding:0}
+.i{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.top{height:56px;display:flex;align-items:center;gap:20px;padding:0 24px;border-bottom:1px solid #e3e0d7}
+.tabs{display:flex;gap:4px}
+.tab{display:flex;align-items:center;gap:8px;height:32px;padding:0 12px;border-radius:10px;color:#6a6964;border:1px solid transparent}
+.tab.on{color:#141413;font-weight:600;background:#ffffff;border-color:#e3e0d7}
+.grow{flex:1}
+.ib{width:32px;height:32px;border-radius:10px;display:flex;align-items:center;justify-content:center;color:#6a6964;border:1px solid #e3e0d7;background:#ffffff}
+.col{width:800px;margin:0 auto;padding:18px 0 14px;height:769px;display:flex;flex-direction:column;gap:12px}
+.lnk{font-size:14px;color:#6a6964;display:flex;align-items:center;gap:6px}
+.lnk.acc{color:#a25338;font-weight:500}
+.head{display:flex;flex-direction:column;gap:10px}
+h1{font-size:22px;font-weight:600;line-height:1.3}
+.status{display:flex;align-items:center;gap:10px;font-size:14px;color:#1d4ed8;font-weight:500}
+.dot{width:8px;height:8px;border-radius:4px;background:#1d4ed8}
+.stages{display:flex;gap:14px;font-size:13px;color:#6a6964;align-items:center}
+.stages span{display:flex;align-items:center;gap:5px}
+.stages .i{width:13px;height:13px;stroke:#a25338;stroke-width:2.6}
+.stages .sep{width:16px;height:1px;background:#d6d2c6}
+.panel{display:flex;align-items:center;gap:8px;padding:8px 0;border-top:1px solid #e3e0d7;border-bottom:1px solid #e3e0d7;flex-wrap:wrap}
+.panel .lab{font-size:13px;color:#6a6964;margin-right:6px}
+.seat{height:28px;padding:0 11px;border-radius:14px;border:1px solid #e3e0d7;display:flex;align-items:center;gap:7px;font-size:13px;color:#141413;background:#ffffff}
+.seat i{width:8px;height:8px;border-radius:4px}
+.round{margin-left:auto;font-size:13px;color:#6a6964}
+.round b{font-size:16px;color:#141413;font-weight:600}
+.idea{align-self:flex-end;max-width:700px;background:#efede5;border:1px solid #dcd8cc;border-radius:12px;padding:10px 16px;font-size:14px;line-height:1.45}
+.label{font-size:13px;font-weight:600;color:#6a6964}
+.qs{display:flex;flex-direction:column;gap:10px}
+.q{display:flex;flex-direction:column;gap:6px;border-left:2px solid #d6825a;padding-left:14px}
+.q .qt{font-size:15px;line-height:1.45}
+.q .who{font-size:13px;font-weight:600;color:#a16447;margin-right:6px}
+.chips{display:flex;gap:8px;flex-wrap:wrap}
+.ch{height:28px;padding:0 12px;border-radius:14px;border:1px solid #e3e0d7;display:flex;align-items:center;gap:6px;font-size:14px;color:#6a6964;background:#ffffff}
+.ch.on{background:rgba(162,83,56,.12);border-color:#a25338;color:#141413;font-weight:600}
+.ch.on .i{width:13px;height:13px;stroke:#a25338;stroke-width:2.6}
+.ch.rec{}
+.ans{font-size:14px;color:#6a6964}
+.also{display:flex;flex-direction:column;gap:4px;font-size:14px}
+.also div{display:flex;gap:8px}
+.also .k{color:#6a6964;width:130px;flex:none}
+.also .v{color:#141413}
+.viewrow{display:flex;justify-content:flex-end;margin-top:auto}
+.vp{height:30px;padding:0 12px;border-radius:10px;border:1px solid #e3e0d7;display:flex;align-items:center;gap:8px;font-size:14px;color:#141413;background:#ffffff}
+.comp{border:1px solid #e3e0d7;border-radius:12px;background:#ffffff;padding:12px 16px 8px;display:flex;flex-direction:column;gap:8px}
+.ph{font-size:15px;color:#6a6964;height:34px}
+.tools{display:flex;align-items:center;gap:12px;font-size:13px;color:#6a6964}
+.tools .grow{flex:1}
+.send{width:32px;height:32px;border-radius:10px;background:#a25338;display:flex;align-items:center;justify-content:center;color:#ffffff}
+</style>
+<div class="frame">
+  <div class="top">
+    <div class="tabs">
+      <span class="tab"><svg class="i" viewBox="0 0 24 24"><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></svg>Tasks</span>
+      <span class="tab on"><svg class="i" viewBox="0 0 24 24"><path d="M14.106 5.553a2 2 0 0 0 1.788 0l3.659-1.83A1 1 0 0 1 21 4.619v12.764a1 1 0 0 1-.553.894l-4.553 2.277a2 2 0 0 1-1.788 0l-4.212-2.106a2 2 0 0 0-1.788 0l-3.659 1.83A1 1 0 0 1 3 19.381V6.618a1 1 0 0 1 .553-.894l4.553-2.277a2 2 0 0 1 1.788 0z"/><path d="M15 5.764v15"/><path d="M9 3.236v15"/></svg>Plans</span>
+      <span class="tab"><svg class="i" viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>Knowledge</span>
+    </div>
+    <div class="grow"></div>
+    <span class="ib"><svg class="i" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg></span>
+  </div>
+  <div class="col">
+    <div class="head">
+      <h1>Theme contrast, in-app file browser, visual refresh and measured engine wins</h1>
+      <div class="status"><span class="dot"></span>Became a task<span style="flex:1"></span><span class="lnk">Other plans · 2</span><span class="lnk acc"><svg class="i" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5v14"/></svg>New plan</span></div>
+      <div class="stages">
+        <span><svg class="i" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Idea</span><span class="sep"></span>
+        <span><svg class="i" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Questions</span><span class="sep"></span>
+        <span><svg class="i" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Draft</span><span class="sep"></span>
+        <span><svg class="i" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Ready</span><span class="sep"></span>
+        <span><svg class="i" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Task</span>
+      </div>
+    </div>
+    <div class="panel">
+      <span class="lab">Panel</span>
+      <span class="seat"><i style="background:#a25338"></i>Orchestrator</span>
+      <span class="seat"><i style="background:#5b8def"></i>Dev</span>
+      <span class="seat"><i style="background:#d6825a"></i>Design</span>
+      <span class="seat"><i style="background:#3fa877"></i>QA</span>
+      <span class="seat"><i style="background:#a47bd6"></i>Research</span>
+      <span class="round">Round <b>11</b></span>
+    </div>
+    <div class="idea">Three parts. (1) Fix the contrast issue seen with herdr's built-in themes: with other themes the contrast is off (screenshots show low-contrast secondary text like timestamps, 'Comment', 'Open terminal', agent names, inline code chips and user bubbles). (2) Attaching a document fails to open a file explorer. (3) Review the current features: what could be improved, what can be removed, what visual layout would be best, performance improvements, token efficiency, cache hit rates, etc.</div>
+    <div class="label">The panel asked</div>
+    <div class="qs">
+      <div class="q">
+        <div class="qt"><span class="who">DESIGN</span>How far should the contrast fix go? (Measured today: timestamps and "Comment" at 2.2–3.4:1 on win98 and atom-one-dark, agent names at 1.6:1 on win98, and our own send button at 3.1:1; AA needs 4.5:1.)</div>
+        <div class="chips"><span class="ch">Failing text only</span><span class="ch">AA everywhere, theme kept</span><span class="ch">Always our palette</span></div>
+        <div class="ans">You: The borders are also too sharp on the text bubbles compared to bot-herdr's theme.</div>
+      </div>
+      <div class="q">
+        <div class="qt"><span class="who">DEV</span>How should "Attach document…" pick files? (herdr gives mods a folder picker but no file picker; ours runs a PowerShell dialog that opens fine outside the app, so inside herdr it most likely appears behind the window, and every failure is silent today.)</div>
+        <div class="chips"><span class="ch">Repair the system dialog</span><span class="ch on"><svg class="i" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Browse inside the app</span><span class="ch">Both</span></div>
+      </div>
+    </div>
+    <div class="also">
+      <div><span class="k">DESIGN</span><span class="v">Which layout should the app settle on? Keep it, tidy details</span></div>
+      <div><span class="k">ORCHESTRATOR</span><span class="v">What should this plan build from the features review? Measured wins</span></div>
+      <div><span class="k">Visual design</span><span class="v">Keep the paper, tighten it · Compact · Alive</span></div>
+      <div><span class="k">Contrast scope</span><span class="v">AA everywhere, theme kept</span></div>
+    </div>
+    <div class="comp">
+      <div class="ph">Describe what to plan, or how to change the plan</div>
+      <div class="tools">
+        <svg class="i" viewBox="0 0 24 24"><path d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"/></svg>
+        <span>bot-herdr</span><span>main</span><span>Claude Opus 5.5 xhigh</span>
+        <span class="grow"></span>
+        <span class="vp"><svg class="i" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></svg>View plan<svg class="i" viewBox="0 0 24 24" style="width:14px;height:14px"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></span>
+        <span class="send"><svg class="i" viewBox="0 0 24 24"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></svg></span>
+      </div>
+    </div>
+  </div>
+</div></body></html>

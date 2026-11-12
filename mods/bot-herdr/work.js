@@ -2,19 +2,21 @@
 // looking at. One view; the layout gives each page its own block (props.tab).
 //   Tasks      a list (under way, then finished; or the archived ones) beside the chosen task:
 //              its steps, each with who did it and for how long, and your comments on any step.
-//              Resume hands it back to the Orchestrator.
-//   Plans      the panel's drafts: read one, comment on any line of it, start it as a task.
+//              Resume hands it back to the Orchestrator; Delete takes a stopped one away.
+//   Plans      the panel's drafts: the questions and answers, the rail of seats and actions, and
+//              the draft itself in a sheet to comment on line by line; a plan starts as a task.
 //   Knowledge  what each agent knows about the project, drawn by section; a note on any entry
 //              goes with it into the agent's brief; Edit opens the file itself.
 // Everything comes from the bh tool (tasks, plans and knowledge live in the project's
 // .bot-herdr folder); messages for the team go through the chat's composer.
 
-import { div, svg } from "gpui-kit";
+import { div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextView, InputState, Input } from "gpui-base";
 import { settings, shared } from "herdr";
-import { SIZE, ICON, TYPE, LINE, SPACE, ROW, CHIP, CONTROL, MARK, DOT, PIP, HAIR, GLYPH, MOTION, mix, agentHue, agentInk, agentInkOn, isLight, clickable, accentFill, pressable, focusable } from "./look.js";
-import { segmented, stateView, pill, avatar, sectionHead } from "./switch.js";
-import { commentRow, openFirst, openPlan } from "./plandoc.js";
+import { SIZE, ICON, TYPE, LINE, SPACE, CONTROL, CHIP, GLYPH, MARK, DOT, PIP, HAIR, MOTION, mix, agentHue, agentInk, agentInkOn, isLight, clickable, pressable, focusable } from "./look.js";
+import { actionButton } from "./button.js";
+import { segmented, stateView, pill } from "./switch.js";
+import { commentRow, openFirst, openPlan, sectionLabel, COMMENT_LINKS, arm, armed } from "./plandoc.js";
 import { colors } from "./theme.js";
 import { activePage, sendFromChat, OPEN_TASK } from "./pages.js";
 import { ROSTER_KEY, roster, slug } from "./roster.js";
@@ -22,10 +24,12 @@ import { bh, bhJson, enc, projectDir } from "./bh.js";
 import { outline, notesOn } from "./doc.js";
 import { hash } from "./feed.js";
 import { alpha } from "./working.js";
-import { roleTone, mentionTone } from "./indicators.js";
+import { mentionTone } from "./indicators.js";
 import { MarkdownEditor } from "./mdedit.js";
 import { openNoteForm, NOTE_ADDED } from "./noteform.js";
 import { Composer } from "./composer.js";
+import { mockupFile, openInBrowser } from "./media.js";
+import { openLightbox } from "./lightbox.js";
 
 const TABS = [
   { id: "tasks", icon: "page-tasks", label: "Tasks" },
@@ -37,6 +41,13 @@ const SECTIONS = [
   { id: "done", label: "Finished", has: ["done", "abandoned"] },
 ];
 const LIST_W = 340;
+const NARROW = 720; // under this window width a page shows its list or its detail, not both
+const RAIL_W = 52;
+const PLAN_COL = 810; // the Plans column is at most this wide
+const PLAN_LIST_W = 250; // the other plans, beside the column
+const MOCK_W = 120; // a question's mockup thumbnail
+const MOCK_H = 82;
+const STEP_TEXT = SPACE[2] + MARK + SPACE[3] + (SPACE[5] + SPACE[3]) + SPACE[3]; // where a step's text starts
 
 /** How each plan status reads, and its colour token. */
 const PLAN_STATUS = {
@@ -47,9 +58,17 @@ const PLAN_STATUS = {
 };
 const planTone = (c, status) => c[PLAN_STATUS[status]?.tone] ?? c.muted;
 
-/** The panel that plans with you, in the order it sits. */
-const PANEL = ["orchestrator", "dev", "design", "qa", "research"];
+/** The panel that plans with you, in the order it sits, with the names and the rail's three letters. */
+const SEATS = [
+  { id: "orchestrator", short: "Orc", name: "Orchestrator", fixed: true },
+  { id: "dev", short: "Dev", name: "Dev" },
+  { id: "design", short: "Des", name: "Design" },
+  { id: "qa", short: "QA", name: "QA" },
+  { id: "research", short: "Res", name: "Research" },
+];
 
+/** Which status circle a task or step gets: each word of the status maps to one mark. */
+const MARK_KIND = { done: "done", active: "active", now: "active", paused: "paused", blocked: "blocked", abandoned: "cross", skipped: "cross" };
 
 /** The agents a step names: "dev", "dev, qa", "design-toast & qa" or a list. */
 export function stepAgents(s) {
@@ -57,10 +76,6 @@ export function stepAgents(s) {
   return [...new Set(raw.map((a) => String(a ?? "").trim()).filter(Boolean))];
 }
 
-/** An agent's type from its name: "design-toast" is a Design agent, "qa-2" QA. */
-export function roleOfAgent(name) {
-  return String(name ?? "").toLowerCase().split(/[-_\s.]/)[0];
-}
 const GAP = 14;
 const MAX = 1140;
 const REFRESH_MS = 4000;
@@ -106,6 +121,189 @@ const day = (iso) => {
   return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 };
 
+const firstLine = (r) => (r.stderr || r.stdout || "").trim().split("\n")[0];
+
+/** A composer for a page's box: `onSend(text, cx)` gets what was written, after the box is cleared. */
+function pageComposer(given, cx, { minRows, placeholder, onSend }) {
+  const comp = new Composer({});
+  comp.init(given, cx);
+  comp.minRows = minRows;
+  comp.placeholder = placeholder;
+  comp.send = (cx) => {
+    const text = comp.input.value().trim();
+    if (comp.sending || !text) return;
+    resetComposer(comp);
+    cx.notify();
+    onSend(text, cx);
+  };
+  return comp;
+}
+
+/** Clears a composer's draft: its text, its files and the pane it had open. */
+function resetComposer(comp) {
+  comp.files = [];
+  comp.input.set_value("");
+  comp.text = "";
+  comp.pane = null;
+}
+
+/** The status circle: done a filled tick, active an accent ring with a dot, paused a muted ring with pause bars, blocked an amber "!", abandoned or skipped a muted cross, open an empty ring. */
+function statusMark(c, status, size = GLYPH.lg) {
+  const kind = MARK_KIND[status] ?? "open";
+  const box = div().flex_none().size(size).flex().items_center().justify_center().rounded_full();
+  if (kind === "done") return box.bg(c.success).child(svg(ICON("check")).size(size - SPACE[2]).text_color(c.fill));
+  const ring = { active: c.accent, blocked: c.warning }[kind] ?? c.faint;
+  const inside = markInside(c, kind);
+  return box.border_1().border_color(ring).when(Boolean(inside), (el) => el.child(inside));
+}
+
+/** What sits inside a status ring, if anything. */
+function markInside(c, kind) {
+  if (kind === "active") return div().size(DOT).rounded_full().bg(c.accent);
+  if (kind === "paused") return h_flex().gap(SPACE[1]).items_center()
+    .child(div().w(SPACE[1]).h(SPACE[3]).rounded(PIP).bg(c.muted))
+    .child(div().w(SPACE[1]).h(SPACE[3]).rounded(PIP).bg(c.muted));
+  if (kind === "blocked") return div().text_size(TYPE.xs).font_bold().text_color(c.warning).child("!");
+  if (kind === "cross") return svg(ICON("x")).size(GLYPH.xs).text_color(c.muted);
+  return null;
+}
+
+/** The steps as pill-shaped segments: done ones accent, the running one half lit, blocked amber. */
+function pips(c, steps) {
+  return h_flex().flex_none().gap(SPACE[1]).items_center().children(steps.slice(0, 12).map((s) =>
+    div().flex_none().w(SPACE[4]).h(SPACE[2]).rounded(PIP).bg(pipTone(c, s.status))));
+}
+
+function pipTone(c, status) {
+  if (status === "done" || status === "skipped") return c.accent;
+  if (status === "active") return alpha(c.accent, 0.5);
+  return status === "blocked" ? c.warning : c.edge;
+}
+
+/** A status's word in a pill: active the accent, done the success tone, blocked amber, the rest muted. */
+function statusTone(c, status) {
+  return { active: c.accent, done: c.success, blocked: c.warning, abandoned: c.faint }[status] ?? c.muted;
+}
+
+/** An agent's initial in a ring of its colour: the mark its name is drawn with on a step. */
+function agentDot(c, name, size = 18) {
+  const tone = agentInk(c, name);
+  return div()
+    .flex_none()
+    .size(size)
+    .rounded_full()
+    .flex()
+    .items_center()
+    .justify_center()
+    .bg(alpha(tone, 0.16))
+    .border_1()
+    .border_color(alpha(tone, 0.45))
+    .text_size(TYPE.xs)
+    .font_semibold()
+    .text_color(tone)
+    .child(String(name ?? "?").charAt(0).toUpperCase());
+}
+
+/** A group's label in the list: small uppercase muted text, and its count in a small pill. */
+function groupLabel(c, label, count) {
+  return h_flex().flex_none().gap(SPACE[2]).items_center().px(SPACE[2]).pt(SPACE[3])
+    .child(div().text_size(TYPE.xs).font_semibold().text_color(c.muted).child(label.toUpperCase()))
+    .child(div().px(SPACE[2]).rounded_full().bg(c.well).text_size(TYPE.xs).text_color(c.muted).child(String(count)));
+}
+
+/** A row's second line: the status (blocked when a step is) and the track, or, once finished, the time worked. */
+function taskMeta(t, blocked, finished) {
+  if (finished) return `${t.status} · worked ${duration(workedOf(t))}`;
+  return [blocked ? "blocked" : t.status ?? "backlog", t.track ? `${t.track} track` : ""].filter(Boolean).join(" · ");
+}
+
+/** How many of a step's comments are still open, in accent with the comment glyph. */
+function commentCount(c, n) {
+  return h_flex().flex_none().gap(SPACE[1]).items_center().text_size(TYPE.xs).text_color(c.accent)
+    .child(svg(ICON("comment")).size(GLYPH.sm))
+    .child(String(n));
+}
+
+/** A list row's words: the title, then the meta line (in amber when something is blocked). */
+function taskRowText(c, t) {
+  const finished = t.status === "done" || t.status === "abandoned";
+  const blocked = t.status === "blocked" || (t.steps ?? []).some((s) => s.status === "blocked");
+  const tone = t.status === "abandoned" ? c.faint : finished ? c.muted : c.ink;
+  return v_flex()
+    .flex_1()
+    .min_w(0)
+    .gap(SPACE[1])
+    .child(div().truncate().text_size(TYPE.md).font_medium().text_color(tone).child(t.title ?? t.id))
+    .child(div().truncate().text_size(TYPE.sm).text_color(blocked ? c.warning : c.muted).child(taskMeta(t, blocked, finished)));
+}
+
+/** A small text link: its label in `tone`, ink on hover, reachable by the keyboard. */
+function textLink(c, id, label, onClick, tone = c.muted) {
+  return focusable(
+    div().cursor_pointer().text_size(TYPE.sm).font_medium().text_color(tone).hover((s) => s.text_color(c.ink)).on_click(onClick).child(label),
+    id,
+    c,
+  );
+}
+
+/** The way back to a list, on a narrow window: a chevron and its label. */
+function backLink(c, id, label, onClick) {
+  return focusable(
+    h_flex().cursor_pointer().gap(SPACE[2]).items_center().text_size(TYPE.sm).font_medium().text_color(c.muted).hover((s) => s.text_color(c.ink)).on_click(onClick)
+      .child(svg(ICON("chevron-left")).size(GLYPH.sm))
+      .child(label),
+    id,
+    c,
+  );
+}
+
+const mutedLine = (c, text) => div().text_size(TYPE.sm).text_color(c.muted).child(text);
+
+/** A plan's status in the list: a dot in its tone, and the status's word. */
+function previousMeta(c, x) {
+  return h_flex().gap(SPACE[2]).items_center()
+    .child(div().flex_none().size(DOT).rounded_full().bg(planTone(c, x.status)))
+    .child(div().text_size(TYPE.sm).text_color(c.muted).child(PLAN_STATUS[x.status]?.label ?? x.status));
+}
+
+/** A seat's count of its open questions, at the corner of its pill. */
+function seatBadge(c, n) {
+  return div()
+    .absolute()
+    .top(0)
+    .right(0)
+    .h(GLYPH.md)
+    .min_w(GLYPH.md)
+    .px(SPACE[1])
+    .flex()
+    .items_center()
+    .justify_center()
+    .rounded_full()
+    .bg(c.accent)
+    .text_size(TYPE.xs)
+    .font_semibold()
+    .text_color(c.accentInk)
+    .child(String(n));
+}
+
+/** How many of a plan's questions still wait for the user, asked by this seat. */
+function waitingFor(p, seat) {
+  return (Array.isArray(p.asked) ? p.asked : []).filter((q) => q.status === "open")
+    .reduce((n, q) => n + (q.questions ?? []).filter((x) => String(x.seat ?? "").toLowerCase() === seat).length, 0);
+}
+
+/** What the user answered to question `i` of a set: the options picked, and the words typed. */
+function answerOf(q, i) {
+  const a = q.answers?.[i] ?? {};
+  return { picked: [...(a.picks ?? [])], typed: String(a.text ?? "").trim() };
+}
+
+/** A seat's name as the page writes it: "Orchestrator", "QA", or the word itself capitalised. */
+function seatName(seat) {
+  const key = String(seat ?? "").toLowerCase();
+  return SEATS.find((s) => s.id === key)?.name ?? key.charAt(0).toUpperCase() + key.slice(1);
+}
+
 export class Work {
   init(given, cx) {
     // Each page is its own block (props.tab); without one, a tab row switches between them.
@@ -119,20 +317,23 @@ export class Work {
     this.kinds = null; // knowledge files: [{ agent, entries, chars, over }]
     this.archived = false;
     this.opened = null; // task id shown open
+    this.stayClosed = false; // no task opens on its own: one was just deleted, or the list was picked
     this.plan = null; // the plan shown: its full record
     this.planId = load("plan", null);
     this.agent = load("agent", null); // the knowledge file shown
     this.knownText = null; // the file as loaded, to tell an edit from it
     this.editing = false; // the knowledge file open as text, to rewrite it
     this.confirmDelete = null; // "agent:line" of the record whose Delete asks first
+    this.armed = null; // a two-step action waiting for its second click (see arm)
     this.notes = [];
     this.busy = false;
     this.problem = null;
-    this.descOpen = new Set();
+    this.descOpen = new Set(); // details and steps the user opened
     this.comment = InputState.new({ placeholder: "Comment" });
     this.idea = InputState.new({ placeholder: "What should the team plan?" });
     this.idea.on("submit", (_e, cx) => this.startPlan(cx));
     this.showPrevious = false; // the Plans page's list of plans, from the rail
+    this.tucking = false; // the View plan tab has tucked into the composer (its sheet opens next)
     this.pageKey = null; // the page/tab drawn last: rows stagger when it changes
     this.rowsIn = true; // false for the one frame a freshly opened list is still hidden
     this.comment.on("submit", (_e, cx) => this.sendComment(cx));
@@ -140,36 +341,20 @@ export class Work {
     this.commenting = null;
     this.inline = InputState.new({ placeholder: "Comment" });
     this.inline.on("submit", (_e, cx) => this.sendInline(cx));
-    this.taskComment = InputState.new({ placeholder: "Comment" });
-    this.taskComment.on("submit", (_e, cx) => this.sendTaskComment(cx));
     this.editor = new MarkdownEditor({ value: "", placeholder: "The file itself, as Markdown" });
     this.editor.on("change", (_value, cx) => cx.notify());
     this.knowSearch = InputState.new({ placeholder: "Search notes" });
     this.knowSearch.on("change", (_e, cx) => cx.notify());
     this.knowFilter = new Set();
     this.noteAddedAt = shared(NOTE_ADDED)?.at ?? 0;
-    this.planComposer = new Composer({});
-    this.planComposer.init(given, cx);
     // Plans are written at length: the Plans page's box starts taller than the chat's.
-    this.planComposer.minRows = 8;
-    this.planComposer.placeholder = "Describe what to plan, or how to change the plan";
-    const self = this;
-    this.planComposer.send = (cx) => {
-      if (self.planComposer.sending) return;
-      const text = self.planComposer.input.value().trim();
-      const plan = self.plan;
-      if (!text) return;
-      self.planComposer.files = [];
-      self.planComposer.input.set_value("");
-      self.planComposer.text = "";
-      self.planComposer.pane = null;
-      cx.notify();
-      // With no plan open, what's written starts one.
-      if (!plan) return sendFromChat(`/plan ${text}`);
-      self.act(["plan", "comment", plan.id, "--data", enc(text)], cx, (r) => {
-        if (r.code === 0) sendFromChat(`The person commented on plan ${plan.id} ("${plan.title}"): ${text}\n\nRevise the draft (bh plan show ${plan.id}) or say why it needs no change.`);
-      });
-    };
+    this.planComposer = pageComposer(given, cx, {
+      minRows: 2,
+      placeholder: "Describe what to plan, or answer the panel…",
+      onSend: (text, cx) => this.sendPlanText(text, cx),
+    });
+    // The task's box at the foot of its detail: a comment on the task, its placeholder names it.
+    this.taskComposer = pageComposer(given, cx, { minRows: 1, placeholder: "Comment on the task…", onSend: (text, cx) => this.sendTaskComment(cx, text) });
     this.reload(cx);
     cx.timer.every(REFRESH_MS, (cx) => {
       if (activePage() === (this.fixed ?? "work")) this.reload(cx);
@@ -184,48 +369,73 @@ export class Work {
     const dir = projectDir();
     cx.spawn(async (cx) => {
       try {
-        if (dir !== this.dir) {
-          this.dir = dir;
-          this.opened = null;
-          this.plan = null;
-          this.knownText = null;
-        }
-        if (this.tab === "tasks") {
-          const got = await bhJson(["task", "list", "--all"], { cwd: dir });
-          this.tasks = got ?? [];
-          this.problem = got ? null : "Couldn't read the tasks. Is node on your PATH?";
-        }
-        if (this.tab === "plans") {
-          this.plans = (await bhJson(["plan", "list", "--all"], { cwd: dir })) ?? [];
-          const id = this.planId === "__new" ? null : this.planId ?? this.plans.find((p) => p.status !== "archived")?.id ?? null;
-          this.plan = id ? await bhJson(["plan", "show", id], { cwd: dir }) : null;
-        }
-        if (this.tab === "knowledge") {
-          const kinds = (await bhJson(["knowledge", "list"], { cwd: dir })) ?? [];
-          this.kinds = kinds;
-          const team = roster(shared(ROSTER_KEY), []).map((a) => (a.role === "custom" ? slug(a.name) : a.role));
-          const names = [...new Set([...team, ...kinds.map((k) => k.agent)])];
-          const all = await Promise.all(names.map(async (agent) => {
-            const got = await bhJson(["knowledge", agent], { cwd: dir });
-            return { agent, text: got?.text ?? "", notes: Array.isArray(got?.notes) ? got.notes : [] };
-          }));
-          this.knowAll = all;
-          const agent = this.agent ?? all[0]?.agent ?? "orchestrator";
-          this.agent = agent;
-          const cur = all.find((x) => x.agent === agent) ?? { agent, text: "", notes: [] };
-          if (this.knownText === null || this.editor.value() === this.knownText) {
-            if (cur.text !== this.knownText) {
-              this.knownText = cur.text;
-              this.editor.set_value(cur.text);
-            }
-            this.notes = cur.notes;
-          }
-        }
+        this.switchTo(dir);
+        if (this.tab === "tasks") await this.loadTasks(dir);
+        if (this.tab === "plans") await this.loadPlans(dir);
+        if (this.tab === "knowledge") await this.loadKnowledge(dir);
       } finally {
         this.busy = false;
         cx.notify();
       }
     });
+  }
+
+  /** A new project folder: what was shown from the old one goes, and each load below drops its answer if the folder changed. */
+  switchTo(dir) {
+    if (dir === this.dir) return;
+    this.dir = dir;
+    this.opened = null;
+    this.stayClosed = false;
+    this.tasks = null;
+    this.plans = null;
+    this.knowAll = null;
+    this.plan = null;
+    this.knownText = null;
+  }
+
+  async loadTasks(dir) {
+    const got = await bhJson(["task", "list", "--all"], { cwd: dir });
+    if (dir !== projectDir()) return;
+    this.tasks = got ?? [];
+    this.problem = got ? null : "Couldn't read the tasks. Is node on your PATH?";
+  }
+
+  async loadPlans(dir) {
+    const plans = (await bhJson(["plan", "list", "--all"], { cwd: dir })) ?? [];
+    if (dir !== projectDir()) return;
+    this.plans = plans;
+    const id = this.planId === "__new" ? null : this.planId ?? plans.find((p) => p.status !== "archived")?.id ?? null;
+    const plan = id ? await bhJson(["plan", "show", id], { cwd: dir }) : null;
+    if (dir !== projectDir()) return;
+    this.plan = plan;
+  }
+
+  async loadKnowledge(dir) {
+    const kinds = (await bhJson(["knowledge", "list"], { cwd: dir })) ?? [];
+    if (dir !== projectDir()) return;
+    const team = roster(shared(ROSTER_KEY), []).map((a) => (a.role === "custom" ? slug(a.name) : a.role));
+    const names = [...new Set([...team, ...kinds.map((k) => k.agent)])];
+    const all = await Promise.all(names.map(async (agent) => {
+      const got = await bhJson(["knowledge", agent], { cwd: dir });
+      return { agent, text: got?.text ?? "", notes: Array.isArray(got?.notes) ? got.notes : [] };
+    }));
+    if (dir !== projectDir()) return;
+    this.kinds = kinds;
+    this.knowAll = all;
+    this.adoptKnowledge(all);
+  }
+
+  /** The knowledge file shown: the one picked (else the first), kept as it is while it has an unsaved edit. */
+  adoptKnowledge(all) {
+    const agent = this.agent ?? all[0]?.agent ?? "orchestrator";
+    this.agent = agent;
+    const cur = all.find((x) => x.agent === agent) ?? { agent, text: "", notes: [] };
+    if (this.knownText !== null && this.editor.value() !== this.knownText) return;
+    if (cur.text !== this.knownText) {
+      this.knownText = cur.text;
+      this.editor.set_value(cur.text);
+    }
+    this.notes = cur.notes;
   }
 
   show(tab, cx) {
@@ -235,13 +445,30 @@ export class Work {
     cx.notify();
   }
 
-  act(args, cx, done) {
+  /** Runs bh in the project the page is on; `done(r, cx)` gets the answer, unless the project changed meanwhile. */
+  run(args, cx, done) {
+    if (this.dir !== projectDir()) return this.reload(cx);
+    const dir = this.dir;
     cx.spawn(async (cx) => {
-      const r = await bh(args, { cwd: this.dir ?? projectDir() });
-      this.problem = r.code === 0 ? null : (r.stderr || r.stdout).trim().split("\n")[0];
-      done?.(r);
+      const r = await bh(args, { cwd: dir });
+      if (dir === projectDir()) done(r, cx);
       this.reload(cx);
       cx.notify();
+    });
+  }
+
+  act(args, cx, done) {
+    this.run(args, cx, (r) => {
+      this.problem = r.code === 0 ? null : firstLine(r);
+      done?.(r);
+    });
+  }
+
+  /** `bh task delete` or `bh plan delete`: `after` runs on success; a failure is said in `composer`. */
+  remove(args, composer, cx, after) {
+    this.run(args, cx, (r, cx) => {
+      if (r.code === 0) return after();
+      composer.say(firstLine(r) || "Couldn't delete it.", cx, "error");
     });
   }
 
@@ -251,7 +478,16 @@ export class Work {
     if (!text || !plan) return;
     this.comment.set_value("");
     this.act(["plan", "comment", plan.id, "--data", enc(text)], cx, (r) => {
-      if (r.code === 0) sendFromChat(`The person commented on plan ${plan.id} ("${plan.title}"): ${text}\n\nRevise the draft (bh plan show ${plan.id}) or say why it needs no change.`);
+      if (r.code === 0) sendFromChat(`The user commented on plan ${plan.id} ("${plan.title}"): ${text}\n\nRevise the draft (bh plan show ${plan.id}) or say why it needs no change.`);
+    });
+  }
+
+  /** Plan text from the plans box: with no plan open it starts one; with one, the Orchestrator revises it. */
+  sendPlanText(text, cx) {
+    const plan = this.plan;
+    if (!plan) return sendFromChat(`/plan ${text}`);
+    this.act(["plan", "comment", plan.id, "--data", enc(text)], cx, (r) => {
+      if (r.code === 0) sendFromChat(`The user commented on plan ${plan.id} ("${plan.title}"): ${text}\n\nRevise the draft (bh plan show ${plan.id}) or say why it needs no change.`);
     });
   }
 
@@ -303,7 +539,7 @@ export class Work {
       if (!plan) return;
       const quote = String(plan.markdown ?? "").split("\n")[where.at - 1]?.trim() ?? "";
       this.act(["plan", "comment", plan.id, "--line", String(where.at), "--data", enc(text)], cx, (r) => {
-        if (r.code === 0) sendFromChat(`The person commented on line ${where.at} of plan ${plan.id} ("${plan.title}")${quote ? `, which reads "${quote.slice(0, 160)}"` : ""}: ${text}\n\nRevise the draft (bh plan show ${plan.id}) or say why it needs no change.`);
+        if (r.code === 0) sendFromChat(`The user commented on line ${where.at} of plan ${plan.id} ("${plan.title}")${quote ? `, which reads "${quote.slice(0, 160)}"` : ""}: ${text}\n\nRevise the draft (bh plan show ${plan.id}) or say why it needs no change.`);
       });
       return;
     }
@@ -313,14 +549,16 @@ export class Work {
       const who = where.id.charAt(0).toUpperCase() + where.id.slice(1);
       if (where.edit) return this.editNote(where.id, who, entry, where.edit, text, cx);
       this.act(["knowledge", "note", where.id, entry.key, "--data", enc(text)], cx, (r) => {
-        if (r.code === 0) sendFromChat(`The person left a note on ${who}'s knowledge entry "${entry.key.slice(0, 200)}": ${text}\n\nThe note now goes with that entry into ${who}'s brief. If the entry itself is wrong or out of date, correct it (bh knowledge ${where.id}, then bh knowledge write ${where.id} --file <file>); otherwise say it needs no change.`);
+        if (r.code === 0) sendFromChat(`The user left a note on ${who}'s knowledge entry "${entry.key.slice(0, 200)}": ${text}\n\nThe note now goes with that entry into ${who}'s brief. If the entry itself is wrong or out of date, correct it (bh knowledge ${where.id}, then bh knowledge write ${where.id} --file <file>); otherwise say it needs no change.`);
       });
       return;
     }
+    // A task's comment: on a step when one is named, else on the task itself.
+    if (where.at == null) return this.sendTaskComment(cx, text, where.id);
     const task = (this.tasks ?? []).find((t) => t.id === where.id);
     const step = task?.steps?.find((x) => x.n === where.at);
     this.act(["task", "comment", where.id, "--step", String(where.at), "--data", enc(text)], cx, (r) => {
-      if (r.code === 0) sendFromChat(`The person commented on step ${where.at}${step ? ` ("${step.title}")` : ""} of task ${where.id}: ${text}\n\nTake it into account (bh task show ${where.id}) or say why it needs no change.`);
+      if (r.code === 0) sendFromChat(`The user commented on step ${where.at}${step ? ` ("${step.title}")` : ""} of task ${where.id}: ${text}\n\nTake it into account (bh task show ${where.id}) or say why it needs no change.`);
     });
   }
 
@@ -329,19 +567,25 @@ export class Work {
     this.act(["knowledge", "unnote", agent, "--at", at], cx, (r) => {
       if (r.code !== 0) return;
       this.act(["knowledge", "note", agent, entry.key, "--data", enc(text)], cx, (r2) => {
-        if (r2.code === 0) sendFromChat(`The person commented on ${who}'s knowledge entry "${entry.key.slice(0, 200)}": ${text}\n\nTake it into account or say why it needs no change.`);
+        if (r2.code === 0) sendFromChat(`The user commented on ${who}'s knowledge entry "${entry.key.slice(0, 200)}": ${text}\n\nTake it into account or say why it needs no change.`);
       });
     });
   }
 
-  sendTaskComment(cx) {
-    const text = this.taskComment.value().trim();
-    const id = this.opened;
+  /** A comment on the task itself, from the box at its foot or the box under Comments. */
+  sendTaskComment(cx, text, id = this.opened) {
     if (!text || !id) return;
-    this.taskComment.set_value("");
     this.act(["task", "comment", id, "--data", enc(text)], cx, (r) => {
-      if (r.code === 0) sendFromChat(`The person commented on task ${id}: ${text}\n\nTake it into account (bh task show ${id}) or say why it needs no change.`);
+      if (r.code === 0) sendFromChat(`The user commented on task ${id}: ${text}\n\nTake it into account (bh task show ${id}) or say why it needs no change.`);
     });
+  }
+
+  /** Shows or hides a detail the page keeps open or shut: a task's details, its request, a step's agents. */
+  toggleDesc(key, cx) {
+    if (!this.descOpen) this.descOpen = new Set();
+    if (this.descOpen.has(key)) this.descOpen.delete(key);
+    else this.descOpen.add(key);
+    cx.notify();
   }
 
   pickAgent(agent, cx) {
@@ -412,6 +656,7 @@ export class Work {
       this.openAt = want.at;
       this.opened = want.id;
       this.archived = false;
+      this.stayClosed = false;
     }
     const c = colors();
     const content = Math.max(320, Math.min(MAX, this.width - SIZE.gutter * 2));
@@ -425,7 +670,12 @@ export class Work {
         cx.notify();
       });
     }
-    const body = this.tab === "plans" ? this.plansView(c, content) : this.tab === "knowledge" ? this.knowledgeView(c, content) : this.tasksView(c, content);
+    // Until the project's data is read, nothing of another project is drawn.
+    const stale = this.dir !== projectDir();
+    if (stale && !this.busy) cx.timer.after(1, (cx) => this.reload(cx));
+    const body = stale
+      ? stateView(c, { id: "bh-work-switching", title: "Loading…", loading: true })
+      : this.tab === "plans" ? this.plansView(c, content) : this.tab === "knowledge" ? this.knowledgeView(c, content) : this.tasksView(c, content);
     return div()
       .id("bh-work")
       .relative()
@@ -459,7 +709,7 @@ export class Work {
                   // The page names itself in the tab bar; only the tabs (when this block has several) and refresh here.
                   .when(!this.fixed, (el) => el.child(this.tabs(c)))
                   .child(div().flex_1())
-                  .child(this.iconButton(c, "bh-work-refresh", "refresh-cw", (_e, cx) => this.reload(cx))),
+                  .child(actionButton(c, "bh-work-refresh", null, (_e, cx) => this.reload(cx), { icon: "refresh-cw", tone: "quiet", tooltip: "Refresh" })),
               )
               .when(Boolean(this.problem), (el) => el.child(stateView(c, {
                 id: "bh-work-error",
@@ -486,319 +736,487 @@ export class Work {
 
   // Tasks
 
+  /** The Tasks page: the list and the chosen task side by side; under NARROW, one of them with a link back. */
   tasksView(c, width) {
     if (this.tasks === null) return stateView(c, { id: "bh-tasks-loading", title: "Loading tasks…", loading: true });
     if (!this.tasks.length) return this.hero(c, width, "page-tasks", "No tasks yet", "Type /task in the chat to start one.");
+    const narrow = this.width < NARROW;
     const archived = this.tasks.filter((t) => t.archived);
     const current = this.tasks.filter((t) => !t.archived);
     const list = this.archived ? archived : current;
-    if (!list.some((t) => t.id === this.opened)) this.opened = (list.find((t) => t.status === "active") ?? list[0])?.id ?? null;
+    if (!narrow && !this.stayClosed && !list.some((t) => t.id === this.opened)) this.opened = (list.find((t) => t.status === "active") ?? list[0])?.id ?? null;
     const open = list.find((t) => t.id === this.opened) ?? null;
     const paneH = Math.max(320, this.height - 96);
-    const groups = this.archived ? [{ id: "archived", label: "Archived", rows: list }] : SECTIONS.map((sec) => ({ ...sec, rows: list.filter((t) => sec.has.includes(t.status ?? "backlog")) })).filter((g) => g.rows.length);
+    const listW = narrow ? width : Math.min(LIST_W, Math.floor(width * 0.45));
+    const paneW = narrow ? width : Math.max(0, width - listW - HAIR);
     return h_flex()
+      .w(width)
       .h(paneH)
       .items_start()
-      .child(
-        v_flex()
-          .flex_none()
-          .w(LIST_W)
-          .h(paneH)
-          .gap(SPACE[3])
-          .pr(SPACE[4])
-          .child(segmented(c, {
-            id: "bh-task-filter",
-            items: [
-              { id: "tasks", label: "Tasks", count: current.length, on: !this.archived, grow: true },
-              { id: "archived", label: "Archived", count: archived.length, on: this.archived, grow: true },
-            ],
-            onPick: (id, cx) => {
-              this.archived = id === "archived";
-              this.opened = null;
-              cx.notify();
-            },
-          }))
-          .child(
-            v_flex()
-              .id("bh-task-list")
-              .flex_1()
-              .min_h(0)
-              .overflow_y_scroll()
-              .gap(SPACE[1])
-              .when(!list.length, (el) => el.child(div().pt(SPACE[4]).text_size(TYPE.sm).text_color(c.muted).child(this.archived ? "Nothing archived. Archive a finished task from its detail to keep this list short." : "Every task is archived.")))
-              .children(groups.flatMap((g) => [
-                ...(groups.length > 1 || this.archived ? [h_flex().flex_none().h(CONTROL).pt(SPACE[3]).px(SPACE[3]).gap(SPACE[3]).items_center()
-                  .child(div().text_size(TYPE.xs).font_semibold().text_color(c.muted).child(g.label.toUpperCase()))
-                  .child(div().text_size(TYPE.xs).text_color(c.faint).child(String(g.rows.length)))] : []),
-                ...g.rows.map((t, i) => this.taskRow(c, t, i)),
-              ])),
-          ),
-      )
-      .child(div().flex_none().w(HAIR).h(paneH).bg(c.edge))
-      .child(
-        v_flex()
-          .id("bh-task-detail")
-          .flex_1()
-          .min_w(0)
-          .h(paneH)
-          .overflow_y_scroll()
-          .pl(SPACE[4])
-          .child(open
-            ? this.taskDetail(c, open, width - LIST_W - 37)
-            : v_flex().w_full().pt(SPACE[5]).items_center().gap(SPACE[3]).child(div().max_w(360).text_center().text_size(TYPE.md).text_color(c.muted).child("Choose a task"))),
-      );
+      .when(!narrow || !open, (el) => el.child(this.taskList(c, { list, current, archived, width: listW, height: paneH, narrow })))
+      .when(!narrow, (el) => el.child(div().flex_none().w(HAIR).h(paneH).bg(c.edge)))
+      .when(!narrow || Boolean(open), (el) => el.child(this.taskPane(c, open, { width: paneW, height: paneH, narrow })));
   }
 
-  /** A row of the list: its mark, the title and its age; under them the facts and the steps' pips. */
-  taskRow(c, t, i = 0) {
-    const steps = t.steps ?? [];
-    const done = steps.filter((s) => s.status === "done" || s.status === "skipped").length;
-    const on = this.opened === t.id;
-    const finished = t.status === "done" || t.status === "abandoned";
-    const blocked = steps.some((s) => s.status === "blocked");
-    const facts = finished
-      ? `${t.status === "done" ? "done" : "abandoned"} · worked ${duration(workedOf(t))}`
-      : [blocked ? "blocked" : t.status, t.track ? `${t.track} track` : "", t.git?.branch ? t.git.branch : ""].filter(Boolean).join(" · ");
-    return clickable(
-      v_flex()
-        .flex_none()
-        .px(SPACE[3])
-        .py(SPACE[3])
+  /** The list column: the "Tasks" heading with the Tasks / Archived switch on its right, then the groups. */
+  taskList(c, { list, current, archived, width, height, narrow }) {
+    const groups = this.taskGroups(list);
+    return v_flex()
+      .flex_none()
+      .w(width)
+      .h(height)
+      .gap(SPACE[3])
+      .pr(narrow ? 0 : SPACE[4])
+      .child(h_flex().items_center().justify_between().gap(SPACE[3])
+        .child(div().text_size(TYPE.xl).font_semibold().child("Tasks"))
+        .child(this.taskSwitch(c, current, archived)))
+      .child(v_flex()
+        .id("bh-task-list")
+        .flex_1()
+        .min_h(0)
+        .overflow_y_scroll()
         .gap(SPACE[1])
-        .rounded(SIZE.control)
-        .border_1()
-        .border_color(on ? c.edge : "#00000000")
-        .when(on, (el) => el.bg(c.fill))
-        .opacity(this.rowsIn === false ? 0 : 1)
-        .transition("opacity", { ...MOTION.row, delay: Math.min(i, 8) * MOTION.stagger })
-        .on_click((_e, cx) => {
-          this.opened = t.id;
-          this.commenting = null;
-          cx.notify();
-        })
-        .child(
-          h_flex()
-            .gap(SPACE[3])
-            .items_center()
-            .child(this.mark(c, t.status, { pulse: false }))
-            .child(div().flex_1().min_w(0).truncate().text_size(TYPE.md).font_medium().text_color(t.status === "abandoned" ? c.faint : finished ? c.muted : c.ink).child(t.title ?? t.id))
-            .child(div().flex_none().text_size(TYPE.xs).text_color(c.faint).child(age(t.updated ?? t.created))),
-        )
-        .child(
-          h_flex()
-            .pl(SPACE[4])
-            .gap(SPACE[3])
-            .items_center()
-            .child(div().flex_1().min_w(0).truncate().text_size(TYPE.sm).text_color(blocked ? c.warning : c.muted).child(facts))
-            .when(steps.length > 0 && !finished, (el) => el
-              .child(this.pips(c, steps))
-              .child(div().flex_none().text_size(TYPE.xs).text_color(c.faint).child(`${done}/${steps.length}`))),
-        ),
+        .when(!list.length, (el) => el.child(mutedLine(c, this.archived ? "Nothing archived. Archive a finished task from its detail to keep this list short." : "Every task is archived.")))
+        .children(groups.flatMap((g) => [groupLabel(c, g.label, g.rows.length), ...g.rows.map((t, i) => this.taskRow(c, t, i))])));
+  }
+
+  /** The list's groups: under way and finished (SECTIONS), or the one archived group. */
+  taskGroups(list) {
+    if (this.archived) return [{ id: "archived", label: "Archived", rows: list }];
+    return SECTIONS.map((sec) => ({ ...sec, rows: list.filter((t) => sec.has.includes(t.status ?? "backlog")) })).filter((g) => g.rows.length);
+  }
+
+  taskSwitch(c, current, archived) {
+    return segmented(c, {
+      id: "bh-task-filter",
+      items: [
+        { id: "tasks", label: "Tasks", count: current.length, on: !this.archived },
+        { id: "archived", label: "Archived", count: archived.length, on: this.archived },
+      ],
+      onPick: (id, cx) => {
+        this.archived = id === "archived";
+        this.opened = null;
+        this.stayClosed = false;
+        cx.notify();
+      },
+    });
+  }
+
+  /** A row of the list: its status circle, the title and its meta line; on the right, the steps' pips and count, or the age. */
+  taskRow(c, t, i = 0) {
+    const on = this.opened === t.id;
+    return clickable(
+      this.rowFrame(c, t, on, i)
+        .child(statusMark(c, t.status, GLYPH.lg))
+        .child(taskRowText(c, t))
+        .child(this.taskRowEnd(c, t, t.steps ?? [])),
       c,
       `bh-task-${t.id}`,
+      { fill: on ? alpha(c.accent, 0.14) : null },
     );
   }
 
-  /** A task's checkbox mark (read-only): done = accent+tick, active = pulsing inner, blocked/paused = amber !. */
-  mark(c, status, { pulse = false, small = false } = {}) {
-    const size = small ? MARK : GLYPH.lg;
-    const box = div().flex_none().size(size).flex().items_center().justify_center().rounded(PIP);
-    if (status === "done") return box.bg(c.accent).child(svg(ICON("check")).size(GLYPH.xs).text_color(c.accentInk));
-    if (status === "abandoned" || status === "skipped") return box.border_1().border_color(c.faint).child(div().w(size - SPACE[3]).h(HAIR).rounded(PIP).bg(c.faint));
-    if (status === "blocked" || status === "paused") return box.border_1().border_color(c.warning).child(div().text_size(TYPE.xs).font_bold().line_height(`${size}px`).text_color(c.warning).child("!"));
-    if (status === "active" || status === "now") {
-      const inner = div().size(small ? DOT : SPACE[3]).rounded(PIP).bg(c.accent);
-      return box.border_1().border_color(c.accent).child(pulse ? inner.opacity(0.45).loop("opacity", { from: 0.25, to: 0.9, period: 1600, easing: "ease-in-out" }) : inner.opacity(0.55));
-    }
-    return box.border_1().border_color(c.faint);
+  /** A list row's box: its padding, the accent edge and tint when chosen, and a click that opens the task. */
+  rowFrame(c, t, on, i) {
+    return h_flex()
+      .p(SPACE[3])
+      .gap(SPACE[3])
+      .items_start()
+      .rounded(SIZE.control)
+      .border_1()
+      .border_color(on ? alpha(c.accent, 0.4) : alpha(c.ground, 0))
+      .when(on, (el) => el.bg(alpha(c.accent, 0.1)))
+      .opacity(this.rowsIn === false ? 0 : 1)
+      .transition("opacity", { ...MOTION.row, delay: Math.min(i, 8) * MOTION.stagger })
+      .on_click((_e, cx) => {
+        this.opened = t.id;
+        this.commenting = null;
+        this.stayClosed = false;
+        cx.notify();
+      });
   }
 
-  /** A pip per step: done ones lit, the running one half lit. */
-  pips(c, steps) {
-    const shown = steps.slice(0, 12);
-    return h_flex().flex_none().gap(SPACE[1]).items_center().children(shown.map((s) =>
-      div().flex_none().w(DOT).h(DOT).rounded(PIP).bg(s.status === "done" || s.status === "skipped" ? c.accent : s.status === "active" ? alpha(c.accent, 0.5) : s.status === "blocked" ? c.warning : c.edge)));
+  /** The row's right end: the steps' pips with done of all, or with no steps, how old the task is. */
+  taskRowEnd(c, t, steps) {
+    if (!steps.length) return div().flex_none().text_size(TYPE.xs).text_color(c.muted).child(age(t.updated ?? t.created));
+    const done = steps.filter((s) => s.status === "done" || s.status === "skipped").length;
+    return h_flex().flex_none().gap(SPACE[2]).items_center()
+      .child(pips(c, steps))
+      .child(div().text_size(TYPE.xs).text_color(c.muted).child(`${done}/${steps.length}`));
   }
 
-  taskDetail(c, t, width) {
-    const steps = t.steps ?? [];
-    const comments = openFirst(t.comments);
-    const finished = t.status === "done" || t.status === "abandoned";
-    const facts = [t.status, t.track ? `${t.track} track` : "", `worked ${duration(workedOf(t))}`, `started ${day(t.created)}`].filter(Boolean).join(" · ");
-    const reqKey = `task-desc:${t.id}`;
-    const req = String(t.request ?? "");
-    const reqOpen = this.descOpen?.has(reqKey);
-    const reqLong = req.length > 220 || req.split("\n").length > 4;
-    const reqText = reqLong && !reqOpen ? req.slice(0, 200).replace(/\s+\S*$/, "") + "…" : req;
+  /** The pane beside the list: the chosen task, its comment box pinned at the foot; or, with none, the prompt. */
+  taskPane(c, t, { width, height, narrow }) {
+    if (!t) return this.pickPrompt(c, width, height);
+    const inner = narrow ? width : Math.max(0, width - SPACE[4]);
+    this.taskComposer.placeholder = `Comment on ${t.title ?? t.id}…`;
     return v_flex()
+      .id("bh-task-detail")
+      .flex_none()
       .w(width)
+      .h(height)
+      .pl(narrow ? 0 : SPACE[4])
+      .child(v_flex().id("bh-task-scroll").flex_1().min_h(0).overflow_y_scroll().pb(SPACE[4]).child(this.taskBody(c, t, narrow)))
+      .child(this.taskComposer.render(this.cx, inner + SIZE.gutter * 2, height));
+  }
+
+  /** With no task chosen (a wide window): a pointer and the line about choosing one, centred. */
+  pickPrompt(c, width, height) {
+    return v_flex()
+      .flex_none()
+      .w(width)
+      .h(height)
+      .pl(SPACE[4])
+      .justify_center()
+      .items_center()
+      .gap(SPACE[3])
+      .child(svg(ICON("pointer")).size(24).text_color(c.faint))
+      .child(div().max_w(320).text_center().text_size(TYPE.md).text_color(c.muted).child("Choose a task to see its steps, progress and comments."));
+  }
+
+  /** The scrolling part of a task's detail, top to bottom: its actions, title, facts, progress, steps and comments. */
+  taskBody(c, t, narrow) {
+    const comments = openFirst(t.comments);
+    return v_flex()
       .gap(SPACE[4])
       .pb(SPACE[4])
-      .child(
-        h_flex()
-          .gap(SPACE[3])
-          .items_start()
-          .child(
-            v_flex()
-              .flex_1()
-              .min_w(0)
-              .gap(SPACE[1])
-              .child(div().text_size(TYPE.lg).font_semibold().line_height(`${LINE.lg}px`).child(t.title ?? t.id))
-              .child(div().text_size(TYPE.sm).text_color(c.muted).child(`${t.id} · ${facts}`)),
-          )
-          .when(t.status === "paused", (el) => el.child(this.button(c, `bh-resume-${t.id}`, "Resume", () => sendFromChat(`Resume task ${t.id}`))))
-          .when(t.status === "active", (el) => el.child(this.button(c, `bh-pause-${t.id}`, "Pause", (_e, cx) => this.act(["task", "status", t.id, "paused"], cx))))
-          .when(!finished && t.status !== "active" && t.status !== "paused", (el) => el.child(this.button(c, `bh-resume-${t.id}`, "Resume", () => sendFromChat(`Resume task ${t.id}`))))
-          .child(this.chip(c, `bh-arch-${t.id}`, t.archived ? "Unarchive" : "Archive", false, (_e, cx) => this.act(["task", t.archived ? "unarchive" : "archive", t.id], cx))),
-      )
-      .when(Boolean(t.git?.branch), (el) => el.child(
-        h_flex().gap(SPACE[3]).items_center().text_size(TYPE.sm).text_color(c.muted)
-          .child(svg(ICON("folder")).size(GLYPH.md).text_color(c.faint))
-          .child(div().min_w(0).truncate().child(t.git.mode === "worktree" ? `Worktree ${t.git.path} · branch ${t.git.branch}` : `Branch ${t.git.branch}${t.git.from ? ` (from ${t.git.from})` : ""}`)),
-      ))
-      .when(Boolean(req), (el) => el.child(v_flex().gap(SPACE[2])
-        .child(div().text_size(TYPE.md).line_height(`${LINE.md}px`).child(TextView.markdown(`bh-task-req-${t.id}-${reqOpen ? "o" : "c"}`, reqText)))
-        .when(reqLong, (x) => x.child(focusable(
-          pressable(
-            div()
-              .text_size(TYPE.sm)
-              .font_medium()
-              .text_color(c.accent)
-              .hover((s) => s.opacity(0.85))
-              .on_click((_e, cx) => {
-                if (!this.descOpen) this.descOpen = new Set();
-                if (reqOpen) this.descOpen.delete(reqKey); else this.descOpen.add(reqKey);
-                cx.notify();
-              })
-              .child(reqOpen ? "Show less" : "Show more"),
-          ),
-          `bh-task-req-more-${t.id}`,
-          c,
-        )))))
-      .child(
-        v_flex()
-          .gap(SPACE[1])
-          .child(h_flex().h(CONTROL).gap(SPACE[3]).items_center()
-            .child(div().text_size(TYPE.sm).font_semibold().text_color(c.muted).child("STEPS"))
-            .when(!steps.length, (el) => el.child(div().text_size(TYPE.xs).text_color(c.faint).child("None yet"))))
-          .children(steps.map((s, i) => {
-            const on = this.addingAt("task", t.id, s.n);
-            const notes = comments.filter((x) => x.step === s.n);
-            const live = notes.filter((x) => x.open !== false).length;
-            const time = s.workedMs || s.status === "active" ? duration((s.workedMs ?? 0) + (s.status === "active" && s.started ? Date.now() - Date.parse(s.started) : 0)) : "";
-            const status = s.status === "active" ? "active" : s.status === "blocked" ? "blocked" : s.status === "done" ? "done" : s.status === "skipped" ? "skipped" : "open";
-            return v_flex()
-              .flex_none()
-              .child(
-                clickable(
-                  h_flex()
-                    .px(SPACE[3])
-                    .py(SPACE[3])
-                    .gap(SPACE[3])
-                    .items_start()
-                    .rounded(SIZE.nested)
-                    .when(on, (el) => el.bg(c.hover))
-                    .opacity(this.rowsIn === false ? 0 : 1)
-                    .transition("opacity", { ...MOTION.row, delay: Math.min(i, 8) * MOTION.stagger })
-                    .on_click((_e, cx) => this.startInline("task", t.id, s.n, cx))
-                    .child(this.mark(c, status, { pulse: s.status === "active", small: true }))
-                    .child(v_flex().flex_1().min_w(0)
-                      .child(div().text_size(TYPE.md).line_height(`${LINE.md}px`)
-                        .text_color(s.status === "done" || s.status === "skipped" ? c.faint : c.ink)
-                        .child(`${s.n}. ${s.title}`))
-                      // The step under way: each agent on it sends a dotted trail in its colour into it;
-                      // with no agent named, a short accent segment travels along a faint track.
-                      .when(s.status === "active" && stepAgents(s).length > 0, (el) => el.children(stepAgents(s).map((who, k) => this.trail(c, who, `${t.id}-${s.n}-${k}`, width, k))))
-                      .when(s.status === "active" && !stepAgents(s).length, (el) => el.child(div().relative().h(SPACE[1]).mt(SPACE[1]).rounded(PIP).bg(alpha(c.accent, 0.15)).overflow_hidden()
-                        .child(div().absolute().top(0).w(SPACE[4]).h(SPACE[1]).rounded(PIP).bg(c.accent).loop("left", { from: -SPACE[4], to: 200, period: 2400, easing: "linear" })))))
-                    // An active step names its agents on their trails; the time stays here.
-                    .child(div().flex_none().text_size(TYPE.xs).text_color(c.faint).child((s.status === "active" && stepAgents(s).length ? [time] : [s.agent, time]).filter(Boolean).join(" · ")))
-                    .when(live > 0, (el) => el.child(h_flex().flex_none().gap(SPACE[1]).items_center().text_size(TYPE.xs).text_color(c.accent)
-                      .child(svg(ICON("comment")).size(GLYPH.sm)).child(String(live)))),
-                  c,
-                  `bh-step-${t.id}-${s.n}`,
-                ),
-              )
-              .children(notes.map((x) => this.commentNote(c, x, this.commentActions("task", t.id, x))))
-              .when(on, (el) => el.child(this.inlineBox(c)));
-          })),
-      )
-      .when(comments.some((x) => !x.step), (el) => el.child(
-        v_flex()
-          .gap(SPACE[3])
-          .child(div().text_size(TYPE.sm).font_semibold().text_color(c.muted).child("YOUR COMMENTS"))
-          .children(comments.filter((x) => !x.step).map((x) => this.commentNote(c, x, this.commentActions("task", t.id, x)))),
-      ))
-      .child(
-        h_flex()
-          .gap(SPACE[3])
-          .items_center()
-          .child(this.inputBox(c, this.taskComment))
-          .child(this.button(c, "bh-task-comment", "Comment", (_e, cx) => this.sendTaskComment(cx))),
-      );
+      .when(narrow, (el) => el.child(backLink(c, "bh-task-back", "Back to tasks", (_e, cx) => {
+        this.opened = null;
+        cx.notify();
+      })))
+      .child(this.taskActions(c, t))
+      .child(this.taskTitle(c, t))
+      .child(this.taskFacts(c, t))
+      .child(this.taskProgress(c, t))
+      .child(this.taskSteps(c, t, comments))
+      .when(Boolean(t.plan), (el) => el.child(this.taskFullPlan(c, t)))
+      .child(this.taskComments(c, t, comments));
   }
 
-  /**
-   * One agent's trail into the step it works on: its dot and name at the far end, and dots in its
-   * colour streaming from it into the step, fading as they arrive. Each lane runs at its own pace,
-   * so several agents on one step read as separate flows.
-   */
-  trail(c, who, id, width, lane = 0) {
-    const tone = roleTone(c, roleOfAgent(who));
-    const step = 9; // one dot and the gap after it
-    const count = Math.ceil(Math.max(200, width) / step) + 2;
-    const period = 900 + (lane % 3) * 180;
+  /** Pause, Archive or Unarchive, and Delete once the task is not running; Resume waits in its own box. */
+  taskActions(c, t) {
+    const running = t.status === "active";
+    const finished = t.status === "done" || t.status === "abandoned";
     return h_flex()
-      .id(`bh-trail-${id}`)
-      .flex_none()
-      .h(LINE.sm)
-      .mt(SPACE[1])
+      .flex_wrap()
       .gap(SPACE[2])
       .items_center()
-      .child(div()
-        .relative()
-        .flex_1()
-        .min_w(0)
-        .h(4)
-        .overflow_hidden()
-        // Dots marching toward the step (leftward), one dot's width per beat, seamlessly.
-        .child(h_flex()
-          .absolute()
-          .top(0)
-          .h(4)
-          .gap(step - 3)
-          .loop("left", { from: 0, to: -step, period, easing: "linear" })
-          .children(Array.from({ length: count }, (_x, i) => div().flex_none().size(3).rounded_full()
-            .bg(alpha(tone, Math.min(0.95, 0.25 + (i / count) * 0.75))))))
-        // The leading edge: brighter dots pulsing where the flow meets the step.
-        .child(div().absolute().left(0).top(0).size(4).rounded_full().bg(tone).loop("opacity", { from: 0.35, to: 1, period: period * 2 })))
-      .child(h_flex().flex_none().gap(SPACE[2]).items_center()
-        .child(div().size(DOT).rounded_full().bg(tone))
-        .child(div().text_size(TYPE.xs).font_medium().text_color(tone).child(who)));
+      .when(running, (el) => el.child(this.pauseButton(c, t)))
+      .when(!running && !finished && t.status !== "paused", (el) => el.child(this.resumeButton(c, t)))
+      .child(this.archiveButton(c, t))
+      .when(!running, (el) => el.child(this.taskDelete(c, t)));
+  }
+
+  /** Pause: `bh task status paused`, and the composer says so. */
+  pauseButton(c, t) {
+    return actionButton(c, `bh-pause-${t.id}`, "Pause", (_e, cx) => this.act(["task", "status", t.id, "paused"], cx, (r) => {
+      if (r.code === 0) this.taskComposer.say(`Paused ${t.title ?? t.id}`, cx);
+    }), { icon: "pause" });
+  }
+
+  /** Resume asks the Orchestrator to pick the task up again; the toast says the ask went out. */
+  resumeButton(c, t) {
+    return actionButton(c, `bh-resume-${t.id}`, "Resume", (_e, cx) => {
+      sendFromChat(`Resume task ${t.id}`);
+      this.taskComposer.say(`Resumed ${t.title ?? t.id}`, cx);
+    }, { icon: "play" });
+  }
+
+  /** Archive or Unarchive: the list follows the task to the tab it now lives in, and the composer says which. */
+  archiveButton(c, t) {
+    const label = t.archived ? "Unarchive" : "Archive";
+    return actionButton(c, `bh-arch-${t.id}`, label, (_e, cx) => this.act(["task", t.archived ? "unarchive" : "archive", t.id], cx, (r) => {
+      if (r.code !== 0) return;
+      this.archived = !t.archived;
+      this.taskComposer.say(`${t.archived ? "Unarchived" : "Archived"} ${t.title ?? t.id}`, cx);
+    }), { icon: "archive" });
+  }
+
+  /** Delete a stopped task: `bh task delete`, then the task below it opens (else the one above), its composer saying "Deleted <title>". */
+  taskDelete(c, t) {
+    return this.twoStep(c, {
+      id: `bh-delete-${t.id}`,
+      label: "Delete",
+      ask: "Delete for good?",
+      icon: "trash",
+      run: (cx) => {
+        const next = this.neighbourOf(t);
+        this.remove(["task", "delete", t.id], this.taskComposer, cx, () => {
+          this.opened = next?.id ?? null;
+          this.stayClosed = !next;
+          if (next) this.taskComposer.say(`Deleted ${t.title ?? t.id}`, cx);
+        });
+      },
+    });
+  }
+
+  /** The row after `t` in the list as it is drawn, else the one before it, else none. */
+  neighbourOf(t) {
+    const list = (this.tasks ?? []).filter((x) => Boolean(x.archived) === this.archived);
+    const rows = this.taskGroups(list).flatMap((g) => g.rows);
+    const at = rows.findIndex((x) => x.id === t.id);
+    if (at < 0) return null;
+    return rows[at + 1] ?? rows[at - 1] ?? null;
+  }
+
+  /** A delete in two steps: the first click asks "for good?" for a few seconds; the second runs it. A label of null is an icon only: its tip says what is asked. */
+  twoStep(c, { id, label, ask, icon, tip = null, run }) {
+    const sure = armed(this, "armed", id);
+    return actionButton(c, id, label === null ? null : sure ? ask : label, (_e, cx) => {
+      if (!sure) return arm(this, "armed", id, cx);
+      this.armed = null;
+      run(cx);
+    }, { icon, tone: "danger", tooltip: label === null && sure ? ask : tip });
+  }
+
+  taskTitle(c, t) {
+    return h_flex().gap(SPACE[3]).items_center()
+      .child(statusMark(c, t.status, 18))
+      .child(div().flex_1().min_w(0).text_size(TYPE.xl).font_semibold().line_height(`${LINE.xl}px`).child(t.title ?? t.id));
+  }
+
+  /** The status pill, the track, and the Details link that opens what the task is made of. */
+  taskFacts(c, t) {
+    const open = this.descOpen?.has(`details:${t.id}`);
+    return v_flex()
+      .gap(SPACE[3])
+      .child(h_flex().flex_wrap().gap(SPACE[3]).items_center()
+        .child(pill(c, t.status ?? "backlog", statusTone(c, t.status)))
+        .when(Boolean(t.track), (el) => el.child(div().text_size(TYPE.sm).text_color(c.muted).child(`${t.track} track`)))
+        .child(textLink(c, `bh-task-details-${t.id}`, "Details", (_e, cx) => this.toggleDesc(`details:${t.id}`, cx), open ? c.ink : c.muted)))
+      .when(Boolean(open), (el) => el.child(this.taskDetails(c, t)));
+  }
+
+  /** The id, when it started, the branch or worktree, and the request without its [task] or [plan] tag. */
+  taskDetails(c, t) {
+    const req = String(t.request ?? "").replace(/^\s*\[(?:task|plan)\]\s*/i, "");
+    const started = day(t.created);
+    return v_flex()
+      .gap(SPACE[2])
+      .text_size(TYPE.sm)
+      .text_color(c.muted)
+      .child(div().child([t.id, started && `started ${started}`].filter(Boolean).join(" · ")))
+      .when(Boolean(t.git?.branch), (el) => el.child(h_flex().gap(SPACE[2]).items_center()
+        .child(svg(ICON("folder")).flex_none().size(GLYPH.md).text_color(c.faint))
+        .child(div().min_w(0).truncate().child(t.git.mode === "worktree" ? `Worktree ${t.git.path} · branch ${t.git.branch}` : `Branch ${t.git.branch}${t.git.from ? ` (from ${t.git.from})` : ""}`))))
+      .when(Boolean(req), (el) => el.child(this.requestText(c, t, req)));
+  }
+
+  /** The request as Markdown, shortened to a few lines with Show more. */
+  requestText(c, t, req) {
+    const key = `task-desc:${t.id}`;
+    const open = this.descOpen?.has(key);
+    const long = req.length > 220 || req.split("\n").length > 4;
+    const text = long && !open ? req.slice(0, 200).replace(/\s+\S*$/, "") + "…" : req;
+    return v_flex()
+      .gap(SPACE[2])
+      .child(div().text_size(TYPE.md).line_height(`${LINE.md}px`).child(TextView.markdown(`bh-task-req-${t.id}-${open ? "o" : "c"}`, text)))
+      .when(long, (el) => el.child(textLink(c, `bh-task-req-more-${t.id}`, open ? "Show less" : "Show more", (_e, cx) => this.toggleDesc(key, cx), c.accent)));
+  }
+
+  /** Pips with "k of n steps", the paused task's waiting box, and under them how long the task has been worked. */
+  taskProgress(c, t) {
+    const steps = t.steps ?? [];
+    const done = steps.filter((s) => s.status === "done" || s.status === "skipped").length;
+    return v_flex()
+      .gap(SPACE[2])
+      .when(steps.length > 0, (el) => el.child(h_flex().gap(SPACE[3]).items_center()
+        .child(pips(c, steps))
+        .child(mutedLine(c, `${done} of ${steps.length} steps`))))
+      .when(t.status === "paused", (el) => el.child(this.waitingBox(c, t)))
+      .child(mutedLine(c, `worked ${duration(workedOf(t))}`));
+  }
+
+  /** A paused task waits: a tinted box under the pips that says so and holds Resume. */
+  waitingBox(c, t) {
+    return v_flex()
+      .gap(SPACE[3])
+      .py(SPACE[2])
+      .child(sectionLabel(c, "Waiting on"))
+      .child(v_flex()
+        .gap(SPACE[3])
+        .p(SPACE[4])
+        .rounded(SIZE.control)
+        .bg(c.well)
+        .border_1()
+        .border_color(c.edge)
+        .child(div().text_size(TYPE.sm).text_color(c.muted).child("Paused"))
+        .child(this.resumeButton(c, t)));
+  }
+
+  taskSteps(c, t, comments) {
+    const steps = t.steps ?? [];
+    const next = steps.find((s) => !["done", "skipped", "active", "blocked"].includes(s.status));
+    return v_flex()
+      .gap(SPACE[1])
+      .child(sectionLabel(c, "Steps"))
+      .when(!steps.length, (el) => el.child(mutedLine(c, "No steps yet.")))
+      .children(steps.map((s) => this.stepRow(c, t, s, { next: s === next, comments })));
+  }
+
+  /** A step: its line, then (for several agents) one line per agent, its comments and the box being written. */
+  stepRow(c, t, s, { next, comments }) {
+    const notes = comments.filter((x) => x.step === s.n);
+    const on = this.addingAt("task", t.id, s.n);
+    const who = stepAgents(s);
+    return v_flex()
+      .flex_none()
+      .child(this.stepLine(c, t, s, { next, on, who, live: notes.filter((x) => x.open !== false).length }))
+      .when(who.length > 1 && this.descOpen?.has(`step:${t.id}:${s.n}`), (el) => el.children(who.map((name) => this.agentLine(c, name, s.status === "active"))))
+      .children(notes.map((x) => this.commentNote(c, x, this.commentActions("task", t.id, x), STEP_TEXT)))
+      .when(on, (el) => el.child(this.inlineBox(c).ml(STEP_TEXT)));
+  }
+
+  stepLine(c, t, s, { next, on, who, live }) {
+    const done = s.status === "done" || s.status === "skipped";
+    const time = this.stepTime(s);
+    return clickable(
+      this.stepFrame(c, t, s, on)
+        .child(statusMark(c, s.status, MARK))
+        .child(div().flex_none().w(SPACE[5] + SPACE[3]).text_size(TYPE.sm).text_color(c.muted).child(`${s.n}.`))
+        .child(div().flex_1().min_w(0).text_size(TYPE.md).line_height(`${LINE.md}px`).text_color(done ? c.muted : c.ink).child(s.title))
+        .when(next, (el) => el.child(pill(c, "next", c.accent)))
+        .when(who.length > 0 && (s.status === "active" || done), (el) => el.child(this.stepWho(c, t, s, who)))
+        .when(Boolean(time), (el) => el.child(div().flex_none().text_size(TYPE.sm).text_color(c.muted).child(time)))
+        .when(live > 0, (el) => el.child(commentCount(c, live))),
+      c,
+      `bh-step-${t.id}-${s.n}`,
+    );
+  }
+
+  /** A step's line box: its padding, the hover fill while its comment box is open, and a click that starts a comment. */
+  stepFrame(c, t, s, on) {
+    return h_flex()
+      .px(SPACE[2])
+      .py(SPACE[2])
+      .gap(SPACE[3])
+      .items_center()
+      .rounded(SIZE.nested)
+      .when(on, (el) => el.bg(c.hover))
+      .opacity(this.rowsIn === false ? 0 : 1)
+      .transition("opacity", { ...MOTION.row, delay: Math.min(s.n, 8) * MOTION.stagger })
+      .on_click((_e, cx) => this.startInline("task", t.id, s.n, cx));
+  }
+
+  /** How long a step has been worked (its record plus the running part); "" for one not started. */
+  stepTime(s) {
+    if (!s.workedMs && s.status !== "active") return "";
+    return duration((s.workedMs ?? 0) + (s.status === "active" && s.started ? Date.now() - Date.parse(s.started) : 0));
+  }
+
+  /** Who works on an active or done step: the first agent, or how many; a working dot while it runs; a chevron when several. */
+  stepWho(c, t, s, who) {
+    const active = s.status === "active";
+    const key = `step:${t.id}:${s.n}`;
+    const first = who[0];
+    return h_flex().flex_none().gap(SPACE[2]).items_center().text_size(TYPE.sm)
+      .child(agentDot(c, first))
+      .child(div().text_color(agentInk(c, first)).font_medium().child(who.length > 1 ? `${who.length} ${active ? "working" : "agents"}` : first))
+      .when(active && who.length === 1, (el) => el.child(h_flex().gap(SPACE[1]).items_center()
+        .child(div().size(DOT).rounded_full().bg(c.success))
+        .child(div().text_color(c.muted).child("working"))))
+      .when(who.length > 1, (el) => el.child(this.chevron(c, key)));
+  }
+
+  /** The disclosure for a step's several agents; its click does not open the step's comment box. */
+  chevron(c, key) {
+    const open = this.descOpen?.has(key);
+    return focusable(
+      pressable(div()
+        .size(CHIP)
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(SIZE.nested)
+        .text_color(c.muted)
+        .hover((s) => s.bg(c.hover).text_color(c.ink))
+        .on_click((_e, cx) => {
+          cx.stop_propagation();
+          this.toggleDesc(key, cx);
+        })
+        .child(svg(ICON(open ? "chevron-down" : "chevron-right")).size(GLYPH.sm))),
+      `bh-chevron-${key}`,
+      c,
+    );
+  }
+
+  /** One agent on a step: its initial, its name and, while it works, a dot and "working". */
+  agentLine(c, name, working) {
+    return h_flex().pl(STEP_TEXT).py(SPACE[1]).gap(SPACE[2]).items_center().text_size(TYPE.sm)
+      .child(agentDot(c, name))
+      .child(div().text_color(agentInk(c, name)).child(name))
+      .when(working, (el) => el.child(div().size(DOT).rounded_full().bg(c.success)).child(div().text_color(c.muted).child("working")));
+  }
+
+  /** A task made from a plan: a section whose row opens that plan's sheet. */
+  taskFullPlan(c, t) {
+    return v_flex()
+      .gap(SPACE[1])
+      .child(sectionLabel(c, "Full plan"))
+      .child(clickable(
+        h_flex()
+          .flex_none()
+          .px(SPACE[2])
+          .py(SPACE[2])
+          .gap(SPACE[3])
+          .items_center()
+          .rounded(SIZE.nested)
+          .on_click((_e, cx) => this.openFullPlan(t, cx))
+          .child(svg(ICON("chevron-right")).size(GLYPH.md).text_color(c.muted))
+          .child(div().text_size(TYPE.md).child("Read the details of each step")),
+        c,
+        `bh-task-plan-${t.id}`,
+      ));
+  }
+
+  /** Reads the plan the task came from, then opens it in the plan sheet. */
+  openFullPlan(t, cx) {
+    this.run(["plan", "show", t.plan, "--json"], cx, (r) => {
+      let plan = null;
+      try {
+        const got = JSON.parse(r.stdout);
+        if (got && !Array.isArray(got)) plan = got;
+      } catch {
+        // no plan: say why below
+      }
+      if (plan) return openPlan(plan);
+      this.taskComposer.say(firstLine(r) || "Couldn't open that plan.", cx, "error");
+    });
+  }
+
+  /** The task's own comments under Comments, with the add box or its button; the step's comments stay under their steps. */
+  taskComments(c, t, comments) {
+    const adding = this.addingAt("task", t.id, null);
+    return v_flex()
+      .gap(SPACE[3])
+      .child(sectionLabel(c, "Comments"))
+      .when(!comments.length, (el) => el.child(mutedLine(c, "No comments yet. Comment here or in the box below (Markdown and images work there); the Orchestrator takes it into account.")))
+      .children(comments.filter((x) => !x.step).map((x) => this.commentNote(c, x, this.commentActions("task", t.id, x), 0)))
+      .child(adding
+        ? this.inlineBox(c)
+        : actionButton(c, `bh-task-add-comment-${t.id}`, "Add comment", (_e, cx) => this.startInline("task", t.id, null, cx), { icon: "comment" }));
   }
 
   /**
-   * A comment of yours under what it is about, with Resolve, Edit and Delete (Reopen and Delete once
-   * resolved); the inline box opens under it while it is being edited.
+   * A comment of yours under what it is about, with Resolve, Edit and Delete (Reopen and Delete
+   * once resolved); the inline box opens under it while it is being edited. `indent` is where it starts.
    */
-  commentNote(c, comment, actions) {
-    const row = commentRow(c, comment, actions).ml(SPACE[5]).mr(SPACE[3]).mb(SPACE[2]);
-    return actions.editing ? v_flex().flex_none().child(row).child(this.inlineBox(c)) : row;
+  commentNote(c, comment, actions, indent = SPACE[5]) {
+    const row = commentRow(c, comment, actions, COMMENT_LINKS).ml(indent).mr(SPACE[3]).mb(SPACE[2]);
+    return actions.editing ? v_flex().flex_none().child(row).child(this.inlineBox(c).ml(indent).mr(SPACE[3])) : row;
   }
 
-  /** The text box for the comment being written under a line or step. */
+  /** The single-line box for a comment under a step, a task, or a knowledge entry, with Comment and Cancel. */
   inlineBox(c) {
     return h_flex()
       .flex_none()
-      .ml(SPACE[5])
-      .mr(SPACE[3])
       .mt(SPACE[2])
       .mb(SPACE[3])
       .gap(SPACE[3])
       .items_center()
       .child(this.inputBox(c, this.inline))
-      .child(this.button(c, "bh-inline-send", "Comment", (_e, cx) => this.sendInline(cx)))
-      .child(this.secondary(c, "bh-inline-cancel", "Cancel", (_e, cx) => {
+      .child(actionButton(c, "bh-inline-send", "Comment", (_e, cx) => this.sendInline(cx), { tone: "primary" }))
+      .child(actionButton(c, "bh-inline-cancel", "Cancel", (_e, cx) => {
         this.commenting = null;
         cx.notify();
       }));
@@ -822,71 +1240,114 @@ export class Work {
   // Plans
 
   /**
-   * The Plans page, as the planning session: your idea, then the panel's questions with your
-   * answers, then the draft to comment on line by line. A rail at the right has the round, the
-   * panel's seats (click one to leave it out) and the actions; Previous lists the other plans.
+   * The Plans page, as the planning session: a centred column of your idea, the panel's questions
+   * with your answers, and the View plan tab over the box. The rail at the right has the round,
+   * the seats (click one to leave it out) and the actions; under NARROW the rail moves above.
    */
   plansView(c, width) {
     if (this.plans === null) return stateView(c, { id: "bh-plans-loading", title: "Loading plans…", loading: true });
+    if (!this.plans.length) return this.hero(c, width, "page-plans", "No plans yet", "Type /plan in the chat to start one.");
     const p = this.plan;
-    if (!this.plans.length || !p) {
-      // No plans at all: the page says how to start one, with no box. "New plan" opens the box.
-      if (!this.plans.length) return this.hero(c, width, "page-plans", "No plans yet", "Type /plan in the chat to start one.");
-      return h_flex().gap(GAP).items_start().child(this.previousList(c, 250, p)).child(this.planIntro(c, width - 250 - GAP));
+    const narrow = this.width < NARROW;
+    if (!p) return this.noPlan(c, width, narrow);
+    if (narrow) return this.narrowPlan(c, width, p);
+    return this.widePlan(c, width, p);
+  }
+
+  /** No plan open: the box that starts one, with the other plans beside it (stacked when narrow). */
+  noPlan(c, width, narrow) {
+    if (narrow) return v_flex().w(width).gap(GAP).child(this.previousList(c, width, null)).child(this.planIntro(c, width));
+    return h_flex().w(width).gap(GAP).items_start()
+      .child(this.previousList(c, PLAN_LIST_W, null))
+      .child(this.planIntro(c, Math.max(0, width - PLAN_LIST_W - GAP)));
+  }
+
+  /** A narrow window shows the other plans or the plan, never both; the rail sits above the plan. */
+  narrowPlan(c, width, p) {
+    if (this.showPrevious) {
+      return v_flex().w(width).gap(GAP)
+        .child(backLink(c, "bh-plan-back", "Back to the plan", (_e, cx) => {
+          this.showPrevious = false;
+          cx.notify();
+        }))
+        .child(this.previousList(c, width, p));
     }
-    const railW = 52;
-    const listW = this.showPrevious ? 250 : 0;
-    const mainW = Math.min(900, width - railW - GAP - (listW ? listW + GAP : 0));
+    return this.planColumn(c, width, p, { rail: true });
+  }
+
+  /** A wide window: the other plans (when open), the column centred in the rest, and the rail at the right edge. */
+  widePlan(c, width, p) {
+    const listW = this.showPrevious ? PLAN_LIST_W : 0;
+    const colW = Math.max(0, width - RAIL_W - GAP - (listW ? listW + GAP : 0));
     return h_flex()
+      .w(width)
       .gap(GAP)
       .items_start()
       .when(listW > 0, (el) => el.child(this.previousList(c, listW, p)))
-      .child(div().flex_1())
-      .child(v_flex()
-        .id(`bh-plan-main-${p.id}`)
-        .flex_none()
-        .w(mainW)
-        .h(Math.max(300, this.height - 110))
-        .gap(SPACE[1])
-        .child(v_flex().flex_1().min_h(0).overflow_y_scroll().gap(SPACE[4]).pb(SPACE[4])
-          .child(this.planHead(c, p))
-          .child(this.planConversation(c, p, mainW)))
-        .child(
-          v_flex()
-            .flex_none()
-            .w_full()
-            .items_center()
-            .when(Boolean(p.markdown), (el) => el.child(this.viewPlanTab(c, p)))
-            .child(this.planComposer.render(this.cx || { notify() {}, spawn() {}, timer: { after() {}, every() {} } }, mainW, this.height)),
-        ))
-      .child(div().flex_1())
-      .child(this.planRail(c, p, railW));
+      .child(v_flex().flex_1().min_w(0).items_center().child(this.planColumn(c, Math.min(PLAN_COL, colW), p, { rail: false })))
+      .child(this.planRail(c, p, { horizontal: false }));
   }
 
-  /** The tab on the composer's top edge that opens the plan over everything. */
+  /**
+   * The conversation column: the rail across its top when narrow, the title and the conversation
+   * scrolling above the box, and the View plan tab on the box's top edge.
+   */
+  planColumn(c, w, p, { rail }) {
+    const planH = Math.max(300, this.height - 110);
+    return v_flex()
+      .id(`bh-plan-main-${p.id}`)
+      .flex_none()
+      .w(w)
+      .h(planH)
+      .gap(SPACE[2])
+      .when(rail, (el) => el.child(this.planRail(c, p, { horizontal: true })))
+      .child(v_flex().flex_1().min_h(0).overflow_y_scroll().gap(SPACE[4]).pb(SPACE[5])
+        .child(this.planTitle(c, p))
+        .child(this.planConversation(c, p, w)))
+      .child(v_flex()
+        .flex_none()
+        .w_full()
+        .items_center()
+        .when(Boolean(p.markdown), (el) => el.child(this.viewPlanTab(c, p)))
+        .child(this.planComposer.render(this.cx, w, this.height)));
+  }
+
+  /** The plan's title in the heading size, with its status pill on the same line. */
+  planTitle(c, p) {
+    const status = p.status ?? "grilling";
+    return h_flex().flex_none().gap(SPACE[3]).items_center()
+      .child(div().flex_1().min_w(0).truncate().text_size(TYPE.lg).font_semibold().child(p.title || p.idea || p.id))
+      .child(pill(c, PLAN_STATUS[status]?.label ?? status, planTone(c, status), { pulse: status === "grilling" }));
+  }
+
+  /** The tab on the box's top edge that opens the plan as a sheet: it tucks into the box, then the sheet slides in. */
   viewPlanTab(c, p) {
     return clickable(
       h_flex()
-        .flex_none()
-        .h(CHIP)
-        .px(SPACE[3])
-        .gap(SPACE[2])
-        .items_center()
-        .rounded_t(SIZE.radius)
-        .border_1()
-        .border_color(c.edge)
-        .bg(c.fill)
-        .text_size(TYPE.sm)
-        .font_medium()
-        .text_color(c.muted)
-        .hover((s) => s.text_color(c.ink))
-        .on_click(() => openPlan(p))
-        .child(svg(ICON("file")).size(GLYPH.sm))
-        .child("View plan")
-        .child(div().size(GLYPH.lg).rounded_full().bg(c.well).flex().items_center().justify_center().child(svg(ICON("expand")).size(GLYPH.xs))),
+        .relative()
+        .flex_none().h(CONTROL).px(SPACE[4]).gap(SPACE[2]).items_center()
+        .rounded_t(SIZE.radius).border_1().border_color(c.edge).bg(c.fill)
+        .text_size(TYPE.sm).font_medium().text_color(c.muted).hover((s) => s.text_color(c.ink))
+        .top(this.tucking ? CONTROL : 0)
+        .transition("top", MOTION.press)
+        .on_click((_e, cx) => this.tuckThenPlan(p, cx))
+        .child(svg(ICON("file")).size(GLYPH.md))
+        .child("View plan"),
       c,
       "bh-view-plan",
     );
+  }
+
+  /** The tab goes down behind the box, and a moment later the sheet opens over the page. */
+  tuckThenPlan(p, cx) {
+    if (this.tucking) return;
+    this.tucking = true;
+    cx.notify();
+    cx.timer.after(MOTION.press.duration + 60, (cx) => {
+      this.tucking = false;
+      cx.notify();
+      openPlan(p);
+    });
   }
 
   /** An empty page: its icon on a tinted tile, a title and one line, centred (Tasks and Plans). */
@@ -903,7 +1364,7 @@ export class Work {
   }
 
   /** Before any plan: one line asking what to plan, and a box that starts it. */
-  planIntro(c, width, { box = true } = {}) {
+  planIntro(c, width) {
     const w = Math.min(900, width);
     return v_flex()
       .w(width)
@@ -913,53 +1374,8 @@ export class Work {
       // The page's mark: the map on a tinted tile.
       .child(div().size(48).rounded(SIZE.radius).flex().items_center().justify_center().bg(alpha(c.accent, 0.14)).border_1().border_color(alpha(c.accent, 0.3)).text_color(c.accent)
         .child(svg(ICON("page-plans")).size(24)))
-      .child(div().text_size(TYPE.xl).font_semibold().child(box ? "What are we planning?" : "No plans yet"))
-      .when(!box, (el) => el.child(div().text_size(TYPE.md).text_color(c.muted).child("Type /plan in the chat to start one.")))
-      .when(box, (el) => el.child(div().mt(SPACE[3]).w(w).child(this.planComposer.render(this.cx || { notify() {}, spawn() {}, timer: { after() {}, every() {} } }, w, this.height))));
-  }
-
-  /**
-   * The plan's head: its title and status, the round, who sits on the panel, and where the plan
-   * is on its way from an idea to a task.
-   */
-  planHead(c, p) {
-    const status = p.status ?? "grilling";
-    const tone = planTone(c, status);
-    const asked = Array.isArray(p.asked) ? p.asked : [];
-    const stages = [
-      { label: "Idea", done: true },
-      { label: "Questions", done: asked.length > 0 },
-      { label: "Draft", done: Boolean(p.markdown) },
-      { label: "Ready", done: status === "ready" || status === "task" },
-      { label: "Task", done: status === "task" },
-    ];
-    const at = stages.findIndex((x) => !x.done);
-    return v_flex()
-      .flex_none()
-      .gap(SPACE[4])
-      .p(SPACE[4])
-      .rounded(SIZE.radius)
-      .bg(c.fill)
-      .border_1()
-      .border_color(c.edge)
-      .child(h_flex().gap(SPACE[3]).items_center()
-        .child(div().flex_none().size(36).rounded(SIZE.control).flex().items_center().justify_center()
-          .bg(alpha(tone, 0.12)).border_1().border_color(alpha(tone, 0.28)).text_color(tone)
-          .child(svg(ICON("page-plans")).size(GLYPH.lg)))
-        .child(div().flex_1().min_w(0).truncate().text_size(TYPE.lg).font_semibold().child(p.title || p.idea || p.id))
-        .child(pill(c, PLAN_STATUS[status]?.label ?? status, tone, { pulse: status === "grilling" })))
-      // The way from idea to task: done stages filled, the current one ringed, the rest faint.
-      .child(h_flex().gap(SPACE[2]).items_center().children(stages.flatMap((st, i) => {
-        const done = st.done;
-        const now = i === at;
-        const dot = div().flex_none().size(10).rounded_full()
-          .when(done, (x) => x.bg(c.accent))
-          .when(now, (x) => x.border_2().border_color(c.accent).bg(c.fill))
-          .when(!done && !now, (x) => x.bg(c.well));
-        const label = div().flex_none().text_size(TYPE.xs).font_medium().text_color(done ? c.ink : now ? c.accent : c.faint).child(st.label);
-        const step = h_flex().flex_none().gap(SPACE[2]).items_center().child(dot).child(label);
-        return i < stages.length - 1 ? [step, div().flex_1().min_w(SPACE[3]).h(2).rounded(PIP).bg(stages[i + 1].done ? c.accent : c.well)] : [step];
-      })));
+      .child(div().text_size(TYPE.xl).font_semibold().child("What are we planning?"))
+      .child(div().mt(SPACE[3]).w(w).child(this.planComposer.render(this.cx, w, this.height)));
   }
 
   startPlan(cx) {
@@ -970,53 +1386,94 @@ export class Work {
     cx.notify();
   }
 
+  /** The other plans as rows on the page (the selected one with an accent tint), then "New plan". */
   previousList(c, w, p) {
     return v_flex()
       .flex_none()
       .w(w)
-      .gap(SPACE[2])
-      .child(div().px(SPACE[3]).pb(SPACE[1]).text_size(TYPE.sm).font_semibold().text_color(c.muted).child("Plans"))
-      .children(this.plans.map((x, i) =>
-        clickable(
-          v_flex()
-            .px(SPACE[3])
-            .py(SPACE[3])
-            .gap(SPACE[1])
-            .rounded(SIZE.control)
-            .when(p?.id === x.id, (el) => el.bg(c.fill).border_1().border_color(c.edge))
-            .opacity(this.rowsIn === false ? 0 : 1)
-            .transition("opacity", { ...MOTION.row, delay: Math.min(i, 8) * MOTION.stagger })
-            .on_click((_e, cx) => {
-              this.planId = x.id;
-              keep("plan", x.id);
-              this.reload(cx);
-            })
-            .child(div().truncate().text_size(TYPE.md).font_medium().text_color(x.status === "archived" ? c.faint : c.ink).child(x.title ?? x.id))
-            .child(h_flex().gap(SPACE[2]).items_center()
-              .child(div().flex_none().size(DOT).rounded_full().bg(planTone(c, x.status)))
-              .child(div().text_size(TYPE.xs).text_color(c.faint).child(PLAN_STATUS[x.status]?.label ?? x.status))),
-          c,
-          `bh-plan-${x.id}`,
-        )))
-      .child(clickable(
-        div().mt(SPACE[2]).px(SPACE[3]).py(SPACE[3]).rounded(SIZE.control).text_size(TYPE.sm).text_color(c.accent)
-          .on_click((_e, cx) => {
-            this.planId = "__new";
-            this.plan = null;
-            cx.notify();
-          })
-          .child("New plan"),
-        c,
-        "bh-plan-new-row",
-      ));
+      .gap(SPACE[1])
+      .child(sectionLabel(c, "Plans"))
+      .children(this.plans.map((x, i) => this.previousRow(c, x, i, p?.id === x.id)))
+      .child(actionButton(c, "bh-plan-new-row", "New plan", (_e, cx) => this.startNewPlan(cx), { icon: "file-plus", tone: "quiet" }));
   }
 
-  /** Your idea in a bubble, then each set of the panel's questions with what you answered. */
+  previousRow(c, x, i, on) {
+    return clickable(
+      this.previousFrame(c, x.id, on, i)
+        .child(div().truncate().text_size(TYPE.md).font_medium().text_color(x.status === "archived" ? c.faint : c.ink).child(x.title ?? x.id))
+        .child(previousMeta(c, x)),
+      c,
+      `bh-plan-${x.id}`,
+      { fill: on ? alpha(c.accent, 0.14) : null },
+    );
+  }
+
+  /** A plan's row box: the accent tint and edge when it is the one open, and a click that opens it. */
+  previousFrame(c, id, on, i) {
+    return v_flex()
+      .px(SPACE[3])
+      .py(SPACE[2])
+      .gap(SPACE[1])
+      .rounded(SIZE.control)
+      .border_1()
+      .border_color(on ? alpha(c.accent, 0.4) : alpha(c.ground, 0))
+      .when(on, (el) => el.bg(alpha(c.accent, 0.1)))
+      .opacity(this.rowsIn === false ? 0 : 1)
+      .transition("opacity", { ...MOTION.row, delay: Math.min(i, 8) * MOTION.stagger })
+      .on_click((_e, cx) => this.pickPlan(id, cx));
+  }
+
+  /** Opens a plan from the list; on a narrow window the list steps aside for it. */
+  pickPlan(id, cx) {
+    this.planId = id;
+    keep("plan", id);
+    if (this.width < NARROW) this.showPrevious = false;
+    this.reload(cx);
+  }
+
+  /** Your idea as a bubble on the right (as the chat draws yours), then the panel's question sets: the newest in full, older ones one line per question. */
   planConversation(c, p, width) {
     const asked = Array.isArray(p.asked) ? p.asked : [];
-    const bubble = h_flex().justify_end().child(
+    const newest = asked.length - 1;
+    return v_flex()
+      .flex_none()
+      .gap(SPACE[4])
+      .child(this.ideaBubble(c, p, width))
+      .children(asked.map((q, i) => (i === newest ? this.questionSet(c, q) : this.answeredSet(c, q))))
+      .when(!asked.length && !p.markdown, (el) => el.child(h_flex().gap(SPACE[3]).items_center()
+        .child(div().size(DOT).rounded_full().bg(c.accent).loop("opacity", { from: 0.3, to: 1, period: 1200, easing: "ease-in-out" }))
+        .child(mutedLine(c, "Reading the code…"))));
+  }
+
+  /** An older round of questions: one line each, as the auto-answered line in the GIF. */
+  answeredSet(c, q) {
+    return v_flex()
+      .flex_none()
+      .gap(SPACE[2])
+      .children((q.questions ?? []).map((x, i) => this.answeredRow(c, q, x, i)));
+  }
+
+  /** A collapsed question: a check, its seat in the seat's colour, the question, the answer in semibold, and what the user typed under it. */
+  answeredRow(c, q, x, i) {
+    const { picked, typed } = answerOf(q, i);
+    const seat = x.seat ? String(x.seat) : "";
+    const tone = mentionTone(c, seat || q.fromName || "The panel");
+    return v_flex()
+      .flex_none()
+      .gap(SPACE[1])
+      .child(h_flex().flex_none().gap(SPACE[2]).items_baseline()
+        .child(svg(ICON("check")).flex_none().size(GLYPH.md).text_color(c.muted))
+        .when(Boolean(seat), (el) => el.child(div().flex_none().text_size(TYPE.sm).font_semibold().text_color(tone).child(seatName(seat))))
+        .child(h_flex().flex_1().min_w(0).flex_wrap().gap(SPACE[2]).items_baseline()
+          .child(div().text_size(TYPE.md).line_height(`${LINE.md}px`).child(x.text))
+          .when(picked.length > 0, (el) => el.child(div().text_size(TYPE.md).font_semibold().child(picked.join(", "))))))
+      .when(Boolean(typed), (el) => el.child(div().ml(GLYPH.md + SPACE[2]).text_size(TYPE.sm).text_color(c.muted).child(`You: ${typed}`)));
+  }
+
+  ideaBubble(c, p, width) {
+    return h_flex().justify_end().child(
       div()
-        .max_w(Math.round(width * 0.82))
+        .max_w(Math.round(width * 0.7))
         .px(SPACE[4])
         .py(SPACE[3])
         .rounded(SIZE.radius)
@@ -1027,121 +1484,207 @@ export class Work {
         .line_height(`${SIZE.line}px`)
         .child(p.idea || p.title || p.id),
     );
-    const set = (q) => {
-      const who = q.fromName || "The panel";
-      const tone = mentionTone(c, who);
-      const open = q.status === "open";
-      return v_flex()
-      .flex_none()
-      .gap(SPACE[3])
-      .p(SPACE[4])
-      .rounded(SIZE.radius)
-      .bg(c.fill)
-      .border_1()
-      .border_color(open ? alpha(tone, 0.45) : c.edge)
-      .child(h_flex().gap(SPACE[3]).items_center()
-        .child(avatar(c, who, tone, 26))
-        .child(div().text_size(TYPE.sm).font_semibold().text_color(tone).child(who))
-        .child(div().flex_1())
-        .when(open, (el) => el.child(pill(c, "Waiting for you", c.warning ?? c.accent, { pulse: true }))))
-      .children(q.questions.map((x, i) => {
-        const a = q.answers?.[i] ?? {};
-        const picked = [...(a.picks ?? [])];
-        const typed = (a.text ?? "").trim();
-        // A seat's question is edged in that seat's colour.
-        const seatTone = x.seat ? mentionTone(c, x.seat) : tone;
-        return v_flex()
-          .flex_none()
-          .pl(SPACE[3])
-          .gap(SPACE[2])
-          .border_l(2)
-          .border_color(alpha(seatTone, 0.55))
-          .child(h_flex().gap(SPACE[2]).items_start()
-            .when(Boolean(x.seat), (el) => el.child(div().flex_none().mt(2).child(pill(c, String(x.seat), seatTone))))
-            .child(div().flex_1().min_w(0).text_size(TYPE.md).line_height(`${LINE.md}px`).child(x.text)))
-          .child(h_flex().flex_wrap().gap(SPACE[2]).children(x.options.map((o) => {
-            const on = picked.includes(o.label);
-            return h_flex().h(CHIP).px(SPACE[3]).gap(SPACE[2]).items_center().rounded_full().border_1().text_size(TYPE.sm)
-              .border_color(on ? c.accent : c.edge).text_color(on ? c.ink : c.muted).when(on, (el) => el.bg(alpha(c.accent, 0.12)).font_medium())
-              .when(on, (el) => el.child(svg(ICON("check")).size(GLYPH.sm).text_color(c.accent)))
-              .child(o.label)
-              .when(Boolean(o.recommended), (el) => el.child(svg(ICON("star")).size(GLYPH.xs).text_color(c.warning ?? c.accent)));
-          })))
-          .when(Boolean(typed), (el) => el.child(div().text_size(TYPE.sm).text_color(c.muted).child(`You: ${typed}`)));
-      }));
-    };
-    return v_flex()
-      .flex_none()
-      .gap(SPACE[4])
-      .child(bubble)
-      .children(asked.map(set))
-      .when(!asked.length && !p.markdown, (el) => el.child(h_flex().gap(SPACE[3]).items_center().px(SPACE[4]).py(SPACE[3]).rounded(SIZE.radius).bg(alpha(c.accent, 0.06)).border_1().border_color(alpha(c.accent, 0.2))
-        .child(div().size(DOT).rounded_full().bg(c.accent).loop("opacity", { from: 0.3, to: 1, period: 1200, easing: "ease-in-out" }))
-        .child(div().text_size(TYPE.md).text_color(c.muted).child("Reading the code…"))));
   }
 
-  /** The rail: the round, the panel's seats, the actions. */
-  planRail(c, p, w) {
-    const seats = [
-      ["orchestrator", "Orchestrator", ICON("ask"), true],
-      ["dev", "Dev", ICON("file"), false],
-      ["design", "Design", ICON("image"), false],
-      ["qa", "QA", ICON("check"), false],
-      ["research", "Research", ICON("info"), false],
-    ];
-    const hues = { orchestrator: agentHue("orchestrator", c.accent), dev: agentHue("dev"), design: agentHue("design"), qa: agentHue("qa"), research: agentHue("research") };
-    const off = new Set(p.off ?? []);
+  /** One round of the panel's questions: its label in accent and the count, then each question. */
+  questionSet(c, q) {
+    const n = q.questions?.length ?? 0;
     return v_flex()
       .flex_none()
-      .w(w)
-      .pt(SPACE[1])
       .gap(SPACE[3])
+      .child(h_flex().gap(SPACE[2]).items_center()
+        .child(div().text_size(TYPE.sm).font_semibold().text_color(c.accent).child("Panel"))
+        .child(mutedLine(c, `${n} question${n === 1 ? "" : "s"}`)))
+      .children((q.questions ?? []).map((x, i) => this.questionRow(c, q, x, i)));
+  }
+
+  /** A question: its seat's colour edge and name, the question, its options, the mockups, and what was answered. */
+  questionRow(c, q, x, i) {
+    const { picked, typed } = answerOf(q, i);
+    const seat = x.seat ? String(x.seat) : "";
+    const tone = mentionTone(c, seat || q.fromName || "The panel");
+    const mocks = (x.options ?? []).some((o) => o.mockupFile);
+    return v_flex()
+      .flex_none()
+      .pl(SPACE[3])
+      .gap(SPACE[2])
+      .border_l(2)
+      .border_color(alpha(tone, 0.55))
+      .child(h_flex().flex_wrap().gap(SPACE[2]).items_baseline()
+        .when(Boolean(seat), (el) => el.child(div().flex_none().text_size(TYPE.sm).font_semibold().text_color(tone).child(seatName(seat))))
+        .child(div().flex_1().min_w(0).text_size(TYPE.md).line_height(`${LINE.md}px`).child(x.text)))
+      .when((x.options ?? []).length > 0, (el) => el.child(this.optionRow(c, x, picked)))
+      .when(mocks, (el) => el.child(this.mockupRow(c, q, x, i)))
+      .when(Boolean(typed), (el) => el.child(mutedLine(c, `You: ${typed}`)))
+      .when(q.status === "open" && !picked.length && !typed, (el) => el.child(mutedLine(c, "Waiting for your answer in the chat")));
+  }
+
+  /** The options as text runs: "Label — meaning", the picked one with a check, the rest muted. */
+  optionRow(c, x, picked) {
+    return h_flex().flex_wrap().gap(SPACE[4]).items_center()
+      .children(x.options.map((o) => this.optionRun(c, o, picked.includes(o.label))));
+  }
+
+  optionRun(c, o, on) {
+    return h_flex().flex_none().gap(SPACE[2]).items_center().text_size(TYPE.md)
+      .when(on, (el) => el.child(svg(ICON("check")).size(GLYPH.md).text_color(c.ink)))
+      .child(div().font_medium().text_color(on ? c.ink : c.muted).child(o.label))
+      .when(Boolean(o.meaning), (el) => el.child(div().text_size(TYPE.sm).text_color(c.muted).child(`— ${o.meaning}`)))
+      .when(Boolean(o.recommended), (el) => el.child(svg(ICON("star")).size(GLYPH.xs).text_color(c.warning)));
+  }
+
+  /** The options' mockups as thumbnails with numbered captions; a click opens them large, one after another. */
+  mockupRow(c, q, x, i) {
+    const shown = x.options.map((o, k) => ({ o, k, d: o.mockupFile ? mockupFile(o.mockupFile, this.cx) : null })).filter((y) => y.d);
+    const ready = shown.filter((y) => y.d.state === "ready");
+    const who = q.fromName || "The panel";
+    const items = ready.map((y) => ({ image: y.d.image, title: y.o.label, note: `${who} · ${x.text}`, html: y.o.mockupFile, glyph: y.k + 1 }));
+    return h_flex().flex_wrap().gap(SPACE[3]).items_start()
+      .children(shown.map((y) => this.mockupTile(c, y, `${q.id}-${i}-${y.k}`, items, ready.indexOf(y))));
+  }
+
+  mockupTile(c, y, key, items, at) {
+    return v_flex()
+      .flex_none()
+      .w(MOCK_W)
+      .gap(SPACE[2])
+      .child(this.mockupFrame(c, y, key, items, at))
+      .child(div().text_size(TYPE.xs).text_color(c.muted).child(`${y.k + 1}. ${y.o.label}`));
+  }
+
+  /** The thumbnail box: the picture when drawn (a click opens the set large), else its state. */
+  mockupFrame(c, y, key, items, at) {
+    const ready = y.d.state === "ready";
+    return clickable(
+      div()
+        .relative().w(MOCK_W).h(MOCK_H).rounded(SIZE.control).bg(c.well).border_1().border_color(c.edge)
+        .overflow_hidden().flex().items_center().justify_center()
+        .when(ready, (el) => el.child(image(y.d.image).w(MOCK_W - 2).h(MOCK_H - 2)).child(this.expandGlyph(c)))
+        .when(!ready, (el) => el.child(this.mockupStatus(c, y, key)))
+        .on_click(() => { if (ready) openLightbox({ items, at }); }),
+      c,
+      `bh-plan-mock-${key}`,
+    );
+  }
+
+  expandGlyph(c) {
+    return div()
+      .absolute()
+      .top(SPACE[2])
+      .right(SPACE[2])
+      .size(CHIP)
+      .rounded(SIZE.nested)
+      .bg(c.fill)
+      .flex()
       .items_center()
-      .child(v_flex().items_center().pb(SPACE[2])
-        .child(div().text_size(TYPE.lg).font_semibold().child(String(Math.max(1, p.round ?? 0))))
-        .child(div().text_size(TYPE.xs).text_color(c.faint).child("round")))
-      .children(seats.map(([seat, name, icon, fixed]) => {
-        const on = !off.has(seat);
-        const hue = hues[seat] || c.accent;
-        return focusable(
-          pressable(
-            div()
-              .tooltip(name)
-              .relative()
-              .size(ROW)
-              .flex_none()
-              .flex()
-              .items_center()
-              .justify_center()
-              .rounded(SIZE.control)
-              .border_1()
-              .border_color(on ? alpha(hue, 0.45) : c.edge)
-              .bg(on ? alpha(hue, 0.14) : c.ground)
-              .text_color(on ? agentInk(c, name) : c.faint)
-              .when(!fixed, (el) => el.hover((s) => s.bg(on ? alpha(hue, 0.22) : c.hover)).on_click((_e, cx) => {
-                this.act(["plan", "seat", p.id, seat, off.has(seat) ? "--on" : "--off"], cx);
-              }))
-              .child(svg(icon).size(GLYPH.lg)),
-          ),
-          `bh-seat-${seat}`,
-          c,
-        );
-      }))
-      .child(div().w(CHIP).h(HAIR).my(SPACE[2]).bg(c.edge))
-      .child(clickable(
-        div().size(ROW).flex().items_center().justify_center().rounded(SIZE.control).border_1().border_color(c.edge)
-          .on_click((_e, cx) => { this.showPrevious = !this.showPrevious; cx.notify(); })
-          .child(svg(ICON("chevron-left")).size(GLYPH.lg).text_color(this.showPrevious ? c.accent : c.muted)),
-        c,
-        "bh-plan-prev",
-      ))
-      .child(clickable(
-        div().size(ROW).flex().items_center().justify_center().rounded(SIZE.control).border_1().border_color(c.edge)
-          .on_click((_e, cx) => { this.planId = "__new"; this.plan = null; cx.notify(); })
-          .child(svg(ICON("plus")).size(GLYPH.lg).text_color(c.muted)),
-        c,
-        "bh-plan-new",
-      ));
+      .justify_center()
+      .child(svg(ICON("expand")).size(GLYPH.sm).text_color(c.muted));
+  }
+
+  /** A thumbnail not drawn yet, or one that failed: its state, and for a failure a link to open it in the browser. */
+  mockupStatus(c, y, key) {
+    if (y.d.state !== "failed") return mutedLine(c, "Drawing…");
+    return v_flex().items_center().gap(SPACE[2]).px(SPACE[3])
+      .child(mutedLine(c, "Couldn't draw it here"))
+      .child(textLink(c, `bh-plan-mock-open-${key}`, "Open in browser", (_e, cx) => {
+        cx.stop_propagation();
+        openInBrowser(y.o.mockupFile, cx);
+      }));
+  }
+
+  /**
+   * The rail: the round in a ring, the panel's seats (a click leaves one out or puts it back), a
+   * rule, then the actions. Across the top when horizontal (a narrow window).
+   */
+  planRail(c, p, { horizontal }) {
+    const off = new Set(p.off ?? []);
+    const round = Math.max(1, p.round ?? 0);
+    return (horizontal ? h_flex().flex_wrap().w_full() : v_flex().flex_none().w(RAIL_W))
+      .items_center()
+      .gap(SPACE[2])
+      .when(!horizontal, (el) => el.gap(SPACE[3]))
+      .child(div().tooltip(`Round ${round}`).flex_none().size(32).rounded_full().border_1().border_color(c.edge).flex().items_center().justify_center()
+        .text_size(TYPE.sm).font_semibold().child(String(round)))
+      .children(SEATS.map((seat) => this.seatPill(c, p, seat, off.has(seat.id))))
+      .child(div().flex_none().bg(c.edge)
+        .when(horizontal, (el) => el.w(HAIR).h(CONTROL))
+        .when(!horizontal, (el) => el.w(CONTROL + SPACE[2]).h(HAIR)))
+      .children(this.railActions(c, p));
+  }
+
+  /** A seat's pill: its three letters in the seat's colour on a tint when on, faint with no fill when off, and a badge of its open questions. */
+  seatPill(c, p, seat, off) {
+    const hue = agentHue(seat.id, c.accent);
+    const on = !off;
+    const el = this.seatFace(c, seat, { hue, on, waiting: waitingFor(p, seat.id) });
+    if (seat.fixed) return el;
+    return focusable(
+      pressable(el.hover((s) => s.bg(on ? alpha(hue, 0.22) : c.hover)).on_click((_e, cx) => {
+        this.act(["plan", "seat", p.id, seat.id, off ? "--on" : "--off"], cx);
+      })),
+      `bh-seat-${seat.id}`,
+      c,
+    );
+  }
+
+  /** A seat's three letters on its pill: in the seat's colour on a tint when on, faint with no fill when off. */
+  seatFace(c, seat, { hue, on, waiting }) {
+    return h_flex()
+      .relative()
+      .flex_none()
+      .w(40)
+      .h(CONTROL)
+      .justify_center()
+      .items_center()
+      .rounded(SIZE.control)
+      .border_1()
+      .border_color(on ? alpha(hue, 0.45) : c.edge)
+      .bg(on ? alpha(hue, 0.14) : alpha(c.ground, 0))
+      .text_size(TYPE.xs)
+      .font_semibold()
+      .text_color(on ? agentInk(c, seat.id) : c.faint)
+      .tooltip(`${seat.name}${on ? "" : " (off)"}`)
+      .child(seat.short)
+      .when(waiting > 0, (x) => x.child(seatBadge(c, waiting)));
+  }
+
+  /** The rail's icon actions: Other plans, New plan, and Discard (two steps, like Delete). */
+  railActions(c, p) {
+    return [this.otherPlansButton(c), this.newPlanButton(c), this.discardPlanButton(c, p)];
+  }
+
+  otherPlansButton(c) {
+    return actionButton(c, "bh-plan-prev", null, (_e, cx) => {
+      this.showPrevious = !this.showPrevious;
+      cx.notify();
+    }, { icon: "history", tone: this.showPrevious ? "secondary" : "quiet", tooltip: "Other plans" });
+  }
+
+  newPlanButton(c) {
+    return actionButton(c, "bh-plan-new", null, (_e, cx) => this.startNewPlan(cx), { icon: "file-plus", tone: "quiet", tooltip: "New plan" });
+  }
+
+  /** Discard: `bh plan delete` (the plan's open questions go with it); then the next plan opens, or the empty page. */
+  discardPlanButton(c, p) {
+    return this.twoStep(c, {
+      id: "bh-plan-discard",
+      label: null,
+      ask: "Click again to discard it for good",
+      icon: "trash",
+      tip: "Discard plan",
+      run: (cx) => this.remove(["plan", "delete", p.id], this.planComposer, cx, () => {
+        this.planId = null;
+        keep("plan", null);
+        this.plan = null;
+      }),
+    });
+  }
+
+  /** The box that starts a new plan: the page shows the intro until the idea is sent. */
+  startNewPlan(cx) {
+    this.planId = "__new";
+    this.plan = null;
+    cx.notify();
   }
 
   // Knowledge
@@ -1161,15 +1704,18 @@ export class Work {
     const columns = Array.from({ length: cols }, () => []);
     cards.forEach((card, i) => columns[i % cols].push(card));
     const bodyH = Math.max(300, this.height - 170);
-    const edited = this.knownText !== null && this.editor.value() === this.knownText ? false : this.knownText !== null && this.editor.value() !== this.knownText;
     if (this.editing) {
       const who = (this.agent ?? "orchestrator");
       return v_flex().w(width).gap(SPACE[3])
         .child(h_flex().gap(SPACE[3]).items_center()
           .child(div().text_size(TYPE.lg).font_semibold().child(who.charAt(0).toUpperCase() + who.slice(1)))
           .child(div().flex_1())
-          .child(this.secondary(c, "bh-know-undo", "Cancel", (_e, cx) => { this.editor.set_value(this.knownText ?? ""); this.editing = false; cx.notify(); }))
-          .when(this.knownText !== null && this.editor.value() !== this.knownText, (x) => x.child(this.button(c, "bh-know-save", "Save", (_e, cx) => this.saveKnowledge(cx)))))
+          .child(actionButton(c, "bh-know-undo", "Cancel", (_e, cx) => {
+            this.editor.set_value(this.knownText ?? "");
+            this.editing = false;
+            cx.notify();
+          }))
+          .when(this.knownText !== null && this.editor.value() !== this.knownText, (x) => x.child(actionButton(c, "bh-know-save", "Save", (_e, cx) => this.saveKnowledge(cx), { tone: "primary" }))))
         .child(div().h(bodyH).p(SPACE[3]).rounded(SIZE.control).bg(c.ground).border_1().border_color(c.edge).overflow_y_scroll()
           .child(this.editor.render(c, this.cx, "bh-know-md")));
     }
@@ -1203,11 +1749,11 @@ export class Work {
             c,
           );
         })))
-        .child(this.button(c, "bh-know-new-open", "New note", () => openNoteForm({
+        .child(actionButton(c, "bh-know-new-open", "New note", () => openNoteForm({
           agents,
           agent: this.agent ?? (filter.size === 1 ? [...filter][0] : "orchestrator"),
           dir: this.dir,
-        }))))
+        }), { tone: "primary" })))
       .child(h_flex().w(width).gap(SPACE[4]).items_start().children(
         columns.map((col) =>
           v_flex().flex_1().min_w(0).gap(SPACE[4]).children(
@@ -1270,8 +1816,8 @@ export class Work {
           ))
           .child(this.confirmDelete === `${agent}:${e.line}`
             ? h_flex().gap(SPACE[2]).items_center()
-              .child(this.chip(c, `bh-know-del-yes-${e.line}`, "Delete", false, (_ev, cx) => { cx.stop_propagation(); this.deleteEntry(agent, e, cx); }))
-              .child(this.chip(c, `bh-know-del-no-${e.line}`, "Keep", false, (_ev, cx) => { cx.stop_propagation(); this.confirmDelete = null; cx.notify(); }))
+              .child(actionButton(c, `bh-know-del-yes-${e.line}`, "Delete", (_ev, cx) => { cx.stop_propagation(); this.deleteEntry(agent, e, cx); }, { tone: "danger" }))
+              .child(actionButton(c, `bh-know-del-no-${e.line}`, "Keep", (_ev, cx) => { cx.stop_propagation(); this.confirmDelete = null; cx.notify(); }))
             : focusable(
               pressable(
                 div().size(CHIP).flex().items_center().justify_center().rounded(SIZE.nested).text_color(c.faint).hover((s) => s.bg(c.well).text_color(c.danger))
@@ -1286,89 +1832,6 @@ export class Work {
         .when(on, (el) => el.child(this.inlineBox(c).ml(0).mr(0))),
       c,
       `bh-know-card-${agent}-${e.line}`,
-    );
-  }
-
-  // Bits
-
-  /** The quiet button beside a primary one (Cancel next to Save): the same size, outlined. */
-  secondary(c, id, label, onClick) {
-    return clickable(
-      div()
-        .flex_none()
-        .h(CONTROL)
-        .px(SPACE[4])
-        .flex()
-        .items_center()
-        .rounded(SIZE.control)
-        .border_1()
-        .border_color(c.edge)
-        .text_size(TYPE.sm)
-        .font_medium()
-        .text_color(c.muted)
-        .on_click(onClick)
-        .child(label),
-      c,
-      id,
-    );
-  }
-
-  chip(c, id, label, on, onClick) {
-    return clickable(
-      div()
-        .flex_none()
-        .h(CHIP)
-        .px(SPACE[3])
-        .flex()
-        .items_center()
-        .rounded(SIZE.nested)
-        .border_1()
-        .text_size(TYPE.sm)
-        .when(on, (el) => el.bg(c.well).border_color(c.accent).text_color(c.ink).font_medium())
-        .when(!on, (el) => el.border_color(c.edge).text_color(c.muted).hover((s) => s.bg(c.hover).text_color(c.ink)))
-        .on_click(onClick)
-        .child(label),
-      c,
-      id,
-    );
-  }
-
-  button(c, id, label, onClick) {
-    return clickable(
-      div()
-        .flex_none()
-        .h(CONTROL)
-        .px(SPACE[4])
-        .flex()
-        .items_center()
-        .rounded(SIZE.control)
-        .bg(c.accent)
-        .border_b(1)
-        .border_color(c.accentLip)
-        .text_size(TYPE.sm)
-        .font_medium()
-        .text_color(c.accentInk)
-        .on_click(onClick)
-        .child(label),
-      c,
-      id, { fill: accentFill(c) },
-    );
-  }
-
-  iconButton(c, id, icon, onClick) {
-    return clickable(
-      div()
-        .size(CONTROL)
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(SIZE.nested)
-        .text_color(c.muted)
-        .on_click(onClick)
-        .child(svg(ICON(icon)).size(MARK)),
-      c,
-      id,
     );
   }
 }

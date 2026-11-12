@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -151,35 +151,46 @@ test("bh knowledge ask: starts (or reuses) scout and writes brief/reply via fake
   const briefDir = join(APP, "data", "bot-herdr", "briefs");
   const replyDir = join(APP, "data", "bot-herdr", "replies");
   mkdirSync(replyDir, { recursive: true });
-  // A stand-in for hc: send fails until run has started the scout; run leaves its brief and reply.
+  // A stand-in for hc, per Scout name: send fails until run has started that name; run leaves its brief and reply.
   writeFileSync(hc, [
     'import { appendFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";',
-    'const [log, running, briefDir, replyDir] = ' + JSON.stringify([log, join(tmp, "scout.running"), briefDir, replyDir]) + ';',
+    'const [log, runs, briefDir, replyDir] = ' + JSON.stringify([log, join(tmp, "runs"), briefDir, replyDir]) + ';',
     'const args = process.argv.slice(2);',
-    'appendFileSync(log, args.join(" ") + "\\n");',
+    'appendFileSync(log, JSON.stringify(args) + "\\n");',
+    'const name = args[0] === "send" ? args[1] : args[args.indexOf("--name") + 1];',
+    'const running = runs + "/" + name;',
     'if (args[0] === "send") process.exit(existsSync(running) ? 0 : 1);',
     'if (args[0] === "run") {',
+    '  mkdirSync(runs, { recursive: true });',
     '  writeFileSync(running, "");',
     '  mkdirSync(briefDir, { recursive: true });',
-    '  writeFileSync(briefDir + "/knowledge-scout.md", "[bot-herdr brief: you are Scout]\\n");',
-    '  writeFileSync(replyDir + "/knowledge-scout.md", "Scout answer\\n\\n<!-- bh now -->\\n");',
+    '  writeFileSync(briefDir + "/" + name + ".md", "[bot-herdr brief: you are Scout]\\n");',
+    '  writeFileSync(replyDir + "/" + name + ".md", "Scout answer\\n\\n<!-- bh now -->\\n");',
     '}',
   ].join("\n"));
   const env = { ...process.env, BH_APP_HOME: APP, HC_TERMINAL_ID: "", BH_AGENT: "", BH_HC: hc };
-  const r1 = spawnSync(process.execPath, [BH, "knowledge", "ask", "--json", "what is here?"], { cwd: PROJECT, encoding: "utf8", env });
-  assert.equal(r1.status, 0, r1.stderr + r1.stdout);
-  const j1 = JSON.parse(r1.stdout);
+  const askScout = (cwd, question) => {
+    const r = spawnSync(process.execPath, [BH, "knowledge", "ask", "--json", question], { cwd, encoding: "utf8", env });
+    assert.equal(r.status, 0, r.stderr + r.stdout);
+    return JSON.parse(r.stdout);
+  };
+  const j1 = askScout(PROJECT, "what is here?");
+  assert.match(j1.name, /^knowledge-scout-[0-9a-f]{6}$/);
   assert.equal(j1.started, true);
   assert.equal(j1.reused, false);
-  assert.ok(existsSync(join(replyDir, "knowledge-scout.md")), "reply file written");
-  assert.ok(existsSync(join(briefDir, "knowledge-scout.md")), "brief written");
-  const r2 = spawnSync(process.execPath, [BH, "knowledge", "ask", "--json", "and more?"], { cwd: PROJECT, encoding: "utf8", env });
-  assert.equal(r2.status, 0, r2.stderr + r2.stdout);
-  const j2 = JSON.parse(r2.stdout);
-  assert.equal(j2.reused, true);
-  const logText = readFileSync(log, "utf8");
-  assert.match(logText, /run/);
-  assert.match(logText, /send knowledge-scout/);
+  assert.ok(existsSync(join(replyDir, `${j1.name}.md`)), "reply file written");
+  assert.ok(existsSync(join(briefDir, `${j1.name}.md`)), "brief written");
+  assert.equal(askScout(PROJECT, "and more?").reused, true);
+  const OTHER = join(tmp, "other-project");
+  mkdirSync(OTHER, { recursive: true });
+  const j3 = askScout(OTHER, "what is there?");
+  assert.notEqual(j3.name, j1.name, "another project has its own scout");
+  assert.equal(j3.started, true);
+  const runs = readFileSync(log, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((a) => a[0] === "run");
+  assert.equal(runs.length, 2);
+  const folder = (args) => realpathSync.native(args[args.indexOf("--cwd") + 1]).toLowerCase();
+  assert.equal(folder(runs[0]), realpathSync.native(PROJECT).toLowerCase(), "scout starts in its project");
+  assert.equal(folder(runs[1]), realpathSync.native(OTHER).toLowerCase(), "the other project's scout starts there");
 });
 
 test("the classifier's Off switch wins over every kind", async () => {

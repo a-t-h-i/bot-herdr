@@ -2,22 +2,22 @@
   "id": "t-20261111-zud8",
   "title": "Toast dismissal animation",
   "request": "[task] fix the toast notification. It should dissapear as smoothly as it appeared.",
-  "status": "active",
+  "status": "paused",
   "track": "fast",
   "plan": null,
   "by": "t29",
   "created": "2026-11-11T19:33:10.707Z",
-  "updated": "2026-11-11T19:35:36.145Z",
-  "archived": false,
+  "updated": "2026-11-12T12:26:06.151Z",
+  "archived": true,
   "steps": [
     {
       "n": 1,
       "title": "Make the toast's dismissal mirror its appearance in both paths: composer toast and corner toast",
       "agent": "design-toast",
-      "status": "active",
+      "status": "todo",
       "started": "2026-11-11T19:35:36.143Z",
       "finished": null,
-      "workedMs": 0,
+      "workedMs": 60627518,
       "note": ""
     }
   ],

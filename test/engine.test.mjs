@@ -13,7 +13,7 @@ const APP = join(tmp, "app");
 const XDG = join(tmp, "xdg");
 const PROJECT = join(tmp, "project");
 mkdirSync(PROJECT, { recursive: true });
-// The libraries read where the person's data lives when they load.
+// The libraries read where the user's data lives when they load.
 process.env.BH_APP_HOME = APP;
 process.env.XDG_CONFIG_HOME = XDG;
 
@@ -137,11 +137,11 @@ test("briefs: every agent learns how to start child agents; the panel and review
   for (const text of [lead, dev, child, panel]) assert.doesNotMatch(text, /bot[- ]lobby/i);
 });
 
-test("briefs: the person's own instructions for an agent close its brief", async () => {
+test("briefs: the user's own instructions for an agent close its brief", async () => {
   const team = await lib("lib/team.mjs");
   const text = team.brief({ id: "dev", role: "dev", name: "Dev", harness: "claude", instructions: "Never commit." }, { mode: "child", root: PROJECT });
-  assert.ok(text.endsWith("\n\n## The person's instructions for you\n\nNever commit.\n\n[end of brief]"));
-  assert.doesNotMatch(team.brief({ id: "dev", role: "dev", name: "Dev", harness: "claude", instructions: "" }, { mode: "child", root: PROJECT }), /The person's instructions/);
+  assert.ok(text.endsWith("\n\n## The user's instructions for you\n\nNever commit.\n\n[end of brief]"));
+  assert.doesNotMatch(team.brief({ id: "dev", role: "dev", name: "Dev", harness: "claude", instructions: "" }, { mode: "child", root: PROJECT }), /The user's instructions/);
 });
 
 test("bh team save keeps instructions; a sentence in extra arguments is moved there and saved", () => {
@@ -201,7 +201,7 @@ test("agents can't change the settings that decide what they may do", () => {
   for (const args of [["access", "full"], ["access", "--allow", "rm"], ["team", "save", "--data", enc({ agents: [] })], ["config", "--data", enc({ enabled: true })], ["harness", "add", "x", "--run", "x"]]) {
     const r = run(args, { BH_AGENT: "Dev", HC_TERMINAL_ID: "t1" });
     assert.equal(r.code, 1, args.join(" "));
-    assert.match(r.err, /the person's to change/);
+    assert.match(r.err, /the user's to change/);
   }
   assert.equal(json("access").access, "standard");
   const set = json("access", "--data", enc({ access: "full", allow: "npm test, git commit", headless: false }));

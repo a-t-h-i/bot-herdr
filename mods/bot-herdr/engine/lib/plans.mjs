@@ -1,12 +1,14 @@
 // Plans: an idea the Orchestrator plans with the panel (Dev, Design, QA, Research) in rounds,
-// until nothing that changes the work is open. The person reads the draft and comments on any
+// until nothing that changes the work is open. The user reads the draft and comments on any
 // line; a ready plan becomes a task.
 //
 // .bot-herdr/plans/<id>/plan.json, plan.md, comments.json
 
+import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { listDir, newId, now, readJson, readText, store, titleFrom, writeJson, writeText } from "./core.mjs";
 import { changeComment, commentById, nextCommentId } from "./tasks.mjs";
+import * as Q from "./ask.mjs";
 
 export const PLAN_STATUSES = ["grilling", "ready", "task", "archived"];
 
@@ -27,6 +29,18 @@ export function savePlan(root, plan) {
   if (markdown !== undefined) writeText(join(dir(root, plan.id), "plan.md"), markdown);
   if (comments !== undefined) writeJson(join(dir(root, plan.id), "comments.json"), comments);
   return { ...meta, markdown, comments };
+}
+
+/**
+ * Discards a plan, for `bh plan delete`: its folder, and its open question sets (answered ones stay).
+ * A task made from the plan stays. Returns { deleted, questions } (questions: sets discarded).
+ */
+export function deletePlan(root, id) {
+  if (!/^[\w-]+$/.test(String(id))) throw new Error(`No plan ${id}. \`bh plan list\` shows them.`);
+  loadPlan(root, id);
+  const questions = Q.discardOpenFor(id);
+  rmSync(dir(root, id), { recursive: true, force: true });
+  return { deleted: id, questions };
 }
 
 export function listPlans(root, { all = false } = {}) {

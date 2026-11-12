@@ -173,7 +173,7 @@ test("git isolation: a task gets its own branch or worktree, and its agents find
   assert.equal(off.git, undefined);
 });
 
-test("git isolation is the person's setting, not an agent's", () => {
+test("git isolation is the user's setting, not an agent's", () => {
   const app = mkdtempSync(join(tmpdir(), "bh-app-"));
   const dir = repo();
   const env = { BH_APP_HOME: app };

@@ -29,7 +29,7 @@ test("saved choices stick to their role; the team is the six roles only; an old 
   assert.equal(dev.model, "gpt-6.1-sol");
   assert.equal(list[0].harness, "codex"); // the old lead's choices
   assert.equal(list[0].name, "Orchestrator");
-  assert.equal(list.length, 6); // an agent of the person's own isn't part of the team
+  assert.equal(list.length, 6); // an agent of the user's own isn't part of the team
   assert.ok(!list.some((a) => a.role === "custom"));
   assert.equal(findAgent(list, "@backend")?.role, "dev");
   assert.equal(findAgent(list, "frontend")?.role, "design");
@@ -68,13 +68,13 @@ test("installed, running, new and named", () => {
   assert.equal(slug(" Code Reviewer! "), "code-reviewer");
 });
 
-test("the brief names the person's agents and where to write the reply", () => {
+test("the brief names the user's agents and where to write the reply", () => {
   const b = teamBrief({ known, roster: [{ name: "Reviewer", command: "codex -m gpt-5" }], outbox: "/h/replies" });
   assert.match(b, /Reviewer = `codex -m gpt-5`/);
   assert.match(b, /`\/h\/replies\/<your terminal address>\.md`/);
   assert.match(b, /HC_TERMINAL_ID/);
-  assert.doesNotMatch(teamBrief({ known }), /Replying to the person/);
-  assert.match(orchestratorBrief({ known, outbox: "/h/replies" }), /Replying to the person/);
+  assert.doesNotMatch(teamBrief({ known }), /Replying to the user/);
+  assert.match(orchestratorBrief({ known, outbox: "/h/replies" }), /Replying to the user/);
 });
 
 test("the feed: reply files, what is kept and what is shown", () => {

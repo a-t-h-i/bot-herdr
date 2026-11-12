@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // bh: bot-herdr's tools for the agents (and for the bot-herdr chat). One command line, so every
 // harness can use them: tasks and their boards, plans, knowledge, shared scripts, questions for
-// the person, replies to the chat, the classifier, and starting team members.
+// the user, replies to the chat, the classifier, and starting team members.
 //
 //   node <app home>/mods/bot-herdr/engine/bh.mjs help
 
@@ -27,9 +27,9 @@ Tasks
   bh task list [--all]            bh task show [<id>]            bh task current
   bh task steps <id> "<step>" "<step>" …   (or --file plan.md: its ## Steps list)
   bh task step <id> <n> start|done|block|skip [--agent A] [--note N]
-  bh task status <id> active|paused|done|abandoned     bh task archive <id>
+  bh task status <id> active|paused|done|abandoned     bh task archive <id>   bh task delete <id>  (not while active; its worktree goes, its branch stays)
   bh task comment <id> [--step N] "<text>"  [--edit <cid> "<text>" | --delete <cid>]
-  bh task resolve <id> [--comment <cid>]       (the person's comments; all of them without --comment)
+  bh task resolve <id> [--comment <cid>]       (the user's comments; all of them without --comment)
   bh board post <task> contract|decision|blocker|question|done|note "<text>" [--from A] [--to B]
   bh board read <task> [--kinds a,b] [--since N]
 
@@ -38,8 +38,8 @@ Plans
   bh plan write <id> --file draft.md [--status grilling|ready]
   bh plan comment <id> [--line N] "<text>"  [--edit <cid> "<text>" | --delete <cid>]
   bh plan resolve <id> [--comment <cid>]
-  bh plan task <id>               (a task from the plan's steps)     bh plan archive <id>
-  bh plan seat <id> <seat> --off|--on   (the person leaves a panel seat out, or brings it back)
+  bh plan task <id>               (a task from the plan's steps)     bh plan archive <id>   bh plan delete <id>
+  bh plan seat <id> <seat> --off|--on   (the user leaves a panel seat out, or brings it back)
 
 Knowledge (one file per agent)
   bh knowledge [<agent>]          bh knowledge list       bh knowledge search "<words>"
@@ -52,7 +52,7 @@ Scripts
   bh scripts pick "<step>"        bh scripts save <file> [--name snake_case]
   bh check [--base <ref>]         lint, typecheck and tests for what changed
 
-The person
+The user
   bh ask --file questions.md [--title T] [--plan <id>]      (or: bh ask "<question>" --option "A — meaning" --option "B")
   bh reply "<markdown>"  |  bh reply --file reply.md       your reply in the bot-herdr chat
 
@@ -72,15 +72,31 @@ Used by the bot-herdr chat and Settings (--data takes URI-encoded JSON; agents c
   bh models <harness> [--command <exe>] [--refresh]   the models that harness really offers`;
 
 /**
- * Settings that decide what agents may do are the person's: refused when a headless agent runs
+ * Settings that decide what agents may do are the user's: refused when a headless agent runs
  * bh (the agent terminal marks everything it starts with BH_AGENT), so no agent can widen its
- * own access. An agent run as its CLI asks the person before each command anyway.
+ * own access. An agent run as its CLI asks the user before each command anyway.
  */
 function personOnly(what) {
-  if (process.env.BH_AGENT) throw new Error(`${what} is the person's to change, in bot-herdr's Settings. Ask them if you need it.`);
+  if (process.env.BH_AGENT) throw new Error(`${what} is the user's to change, in bot-herdr's Settings. Ask them if you need it.`);
 }
 
 const out = (flags, value, text) => console.log(flags.json ? JSON.stringify(value, null, 2) : typeof text === "function" ? text(value) : text ?? value);
+
+/** Questions with a misplaced block are not asked: the warnings say what to fix, and nothing is written. */
+function refuseAsk(flags, warnings) {
+  const file = typeof flags.file === "string" ? flags.file : "the questions";
+  process.exitCode = 1;
+  return out(flags, { asked: false, warnings }, [`Not asked: fix these in ${file} and run bh ask again:`, ...warnings].join("\n"));
+}
+
+/** What `bh ask` says: the question is asked, then how its mockups went (a failure says what the card shows). */
+function askedText(q) {
+  const n = q.drawn.length + q.failed.length;
+  const lines = [`Asked (${q.id}, ${q.questions.length} question${q.questions.length === 1 ? "" : "s"}). The user answers in the bot-herdr chat; the answers come to you as a message. End your turn now.`];
+  if (n) lines.push(`${q.drawn.length} of ${n} mockups drawn.`);
+  for (const f of q.failed) lines.push(`Couldn't draw question ${f.question}, option "${f.option}": ${f.error.replace(/\.$/, "")}. The card shows "Open in browser" for it.`);
+  return lines.join("\n");
+}
 
 /**
  * `--edit <cid>` (new words) or `--delete <cid>` on one comment of a task or plan (`M` is its
@@ -197,7 +213,11 @@ async function main(argv) {
         T.saveTask(root, task);
         return out(flags, task, (t) => `${t.id} ${t.archived ? "archived" : "back in the list"}.`);
       }
-      throw new UsageError("bh task new|list|show|steps|step|status|comment|resolve|archive");
+      if (sub === "delete") {
+        const gone = T.deleteTask(root, id);
+        return out(flags, gone, (g) => `Deleted ${g.deleted}.${g.branch ? ` Its branch ${g.branch} is kept.` : ""}`);
+      }
+      throw new UsageError("bh task new|list|show|steps|step|status|comment|resolve|archive|delete");
     }
 
     case "board": {
@@ -220,7 +240,7 @@ async function main(argv) {
       const id = need(args[0], `bh plan ${sub} <id>`);
       const plan = P.loadPlan(root, id);
       if (sub === "seat") {
-        // The person leaves a panel seat out of this plan, or brings it back.
+        // The user leaves a panel seat out of this plan, or brings it back.
         personOnly("The panel's seats");
         const seat = need(args[1], "bh plan seat <id> <seat> --off|--on").toLowerCase();
         const off = new Set(plan.off ?? []);
@@ -233,7 +253,7 @@ async function main(argv) {
       if (sub === "show") {
         const open = P.openComments(plan);
         plan.asked = Q.forPlan(plan.id);
-        return out(flags, plan, (p) => `${P.planLine(p)}${p.off?.length ? `\nThe person left these seats off the panel: ${p.off.join(", ")}.` : ""}\n\n${p.markdown || "(no draft yet)"}${open.length ? `\n## Open comments from the person\n${open.map((x) => `- ${x.line ? `line ${x.line} ("${x.quote}")` : "the plan"}: ${x.text}`).join("\n")}` : ""}`);
+        return out(flags, plan, (p) => `${P.planLine(p)}${p.off?.length ? `\nThe user left these seats off the panel: ${p.off.join(", ")}.` : ""}\n\n${p.markdown || "(no draft yet)"}${open.length ? `\n## Open comments from the user\n${open.map((x) => `- ${x.line ? `line ${x.line} ("${x.quote}")` : "the plan"}: ${x.text}`).join("\n")}` : ""}`);
       }
       if (sub === "write") {
         P.writeDraft(plan, need(bodyText(flags, args.slice(1)), "bh plan write <id> --file draft.md"), { status: flags.status, title: flags.title });
@@ -272,7 +292,11 @@ async function main(argv) {
         P.savePlan(root, plan);
         return out(flags, plan, () => `${plan.id} ${plan.status}.`);
       }
-      throw new UsageError("bh plan new|list|show|write|comment|resolve|task|archive");
+      if (sub === "delete") {
+        const gone = P.deletePlan(root, id);
+        return out(flags, gone, (g) => `Discarded ${g.deleted}.`);
+      }
+      throw new UsageError("bh plan new|list|show|write|comment|resolve|task|archive|delete");
     }
 
     case "knowledge": {
@@ -284,13 +308,12 @@ async function main(argv) {
         const repo = files.slice(0, 500).join("\n") + (files.length > 500 ? `\n… (${files.length - 500} more)` : "");
         const knowledge = K.list(root).map((k) => `## ${k.agent}\n${K.withNotes(root, k.agent)}`).filter(Boolean).join("\n\n") || "(no knowledge files yet)";
         const context = `# Knowledge files (.bot-herdr/knowledge)\n\n${knowledge}\n\n# Repository files\n${repo || "(none)"}`;
-        const name = "knowledge-scout";
+        const name = team.scoutName(root);
         const message = `${context}\n\n## Question\n${question}`;
         const sent = team.hc(["send", name, question.includes("\n") ? message : `Question: ${question}\n\n${context}`]);
         if (sent.code === 0) return out(flags, { started: false, reused: true, name }, () => `Asked ${name} (reused). Its answer will appear in the chat.`);
         const argv = team.agentArgv(scout, { mode: "lead", name });
-        const cwd = process.cwd();
-        const r = team.hc(["run", "--bg", "--name", name, "--cwd", cwd, "--", ...argv, "--", message]);
+        const r = team.hc(["run", "--bg", "--name", name, "--cwd", root, "--", ...argv, "--", message]);
         if (r.code !== 0) throw new Error(`couldn't start Scout: ${(r.err || r.out).trim()}`);
         return out(flags, { started: true, reused: false, name }, () => `Asked ${name}. Its answer will appear in the chat.`);
       }
@@ -353,12 +376,14 @@ async function main(argv) {
           const [label, ...meaning] = String(o).split(/\s+[—–-]{1,2}\s+/);
           return { label: label.replace(/\s*\(Recommended\)\s*/i, ""), meaning: meaning.join(" — "), recommended: /\(Recommended\)/i.test(label), mockup: null };
         });
-        parsed = { intro: "", questions: [{ seat: null, text, options: opts, multi: Boolean(flags.multi) }] };
+        parsed = { intro: "", questions: [{ seat: null, text, options: opts, multi: Boolean(flags.multi) }], warnings: [] };
       }
+      if (parsed.warnings.length) return refuseAsk(flags, parsed.warnings);
       const from = flags.as ?? myAddress();
       if (!from) throw new Error("bh ask needs to know who is asking: run it in a herdr terminal (HC_TERMINAL_ID), or pass --as <address>.");
       const q = Q.ask({ title: flags.title ?? null, intro: parsed.intro, questions: parsed.questions, from, fromName: flags.from ?? null, cwd: root, plan: typeof flags.plan === "string" ? flags.plan : null });
-      return out(flags, q, () => `Asked (${q.id}, ${q.questions.length} question${q.questions.length === 1 ? "" : "s"}). The person answers in the bot-herdr chat; the answers come to you as a message. End your turn now.`);
+      const { drawn, failed } = Q.drawMockups(q);
+      return out(flags, { ...q, drawn, failed }, askedText);
     }
 
     case "answer": {
@@ -525,7 +550,7 @@ async function main(argv) {
     }
 
     case "open": {
-      // Opens a file (a question's mockup) in the person's default app, without waiting for it.
+      // Opens a file (a question's mockup) in the user's default app, without waiting for it.
       const file = need(sub, "bh open <file>");
       const [cmd, args2] = process.platform === "win32" ? ["cmd", ["/c", "start", "", file]] : process.platform === "darwin" ? ["open", [file]] : ["xdg-open", [file]];
       spawn(cmd, args2, { detached: true, stdio: "ignore", windowsHide: true }).unref();
@@ -591,7 +616,7 @@ async function main(argv) {
 
     case "access": {
       // Settings → How agents run: headless or as their CLI, and what they may do without
-      // asking. Standard unless the person picks full.
+      // asking. Standard unless the user picks full.
       const file = join(DATA, "config.json");
       const saved = readJson(file, {}) ?? {};
       const next = accessOf();

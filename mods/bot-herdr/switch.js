@@ -8,7 +8,8 @@
 import { div, svg } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import { focused, shared, theme, nextCommand, settings } from "herdr";
-import { SIZE, TYPE, LINE, SPACE, CHIP, CONTROL, DOT, GLYPH, ICON, clickable, textWidth } from "./look.js";
+import { SIZE, TYPE, LINE, SPACE, CONTROL, DOT, GLYPH, ICON, clickable, textWidth } from "./look.js";
+import { actionButton } from "./button.js";
 import { colors } from "./theme.js";
 import { PAGES, HOLD, activePage, showPage } from "./pages.js";
 import { alpha } from "./working.js";
@@ -20,10 +21,11 @@ const HOLD_MS = 3000;
  * `items` is [{ id, label, on }]; `onPick(id, cx)` receives the picked one.
  */
 export function segmented(c, { id, items, onPick, grow }) {
+  // The track is the items' height: each item is a 28px button, inset from the track's sides only.
   return h_flex()
     .id(id)
     .h(CONTROL)
-    .p(SPACE[1])
+    .px(SPACE[1])
     .gap(SPACE[1])
     .items_center()
     .rounded(SIZE.control)
@@ -33,7 +35,7 @@ export function segmented(c, { id, items, onPick, grow }) {
     .children(items.map((item) =>
       clickable(
         div()
-          .h(CHIP)
+          .h(CONTROL)
           .px(SPACE[4])
           .flex()
           .items_center()
@@ -155,23 +157,7 @@ export function stateView(c, { id, title, line, action, loading }) {
       div().text_center().text_size(TYPE.md).line_height(`${LINE.md}px`).text_color(c.muted).child(line),
     ))
     .when(Boolean(action), (el) => el.child(
-      clickable(
-        h_flex()
-          .h(CONTROL)
-          .px(SPACE[4])
-          .items_center()
-          .rounded(SIZE.control)
-          .border_1()
-          .border_color(c.edge)
-          .text_size(TYPE.sm)
-          .font_medium()
-          .text_color(c.ink)
-          .hover((s) => s.border_color(c.faint))
-          .on_click(action.on)
-          .child(action.label),
-        c,
-        `${id ?? "bh-state"}-action`,
-      ),
+      actionButton(c, `${id ?? "bh-state"}-action`, action.label, action.on, { tone: "secondary" }),
     ));
 }
 

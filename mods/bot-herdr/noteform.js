@@ -5,7 +5,8 @@
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, TextareaState, Textarea } from "gpui-base";
 import { props, setShared, closeOverlay, openOverlay } from "herdr";
-import { SIZE, ICON, TYPE, SPACE, CHIP, CONTROL, GLYPH, clickable, accentFill } from "./look.js";
+import { SIZE, ICON, TYPE, SPACE, CONTROL, GLYPH, clickable } from "./look.js";
+import { actionButton } from "./button.js";
 import { colors } from "./theme.js";
 import { bh, enc } from "./bh.js";
 import { mentionTone, alpha } from "./indicators.js";
@@ -70,7 +71,7 @@ export class NoteForm {
 
   chip(c, id, label, on, onClick, lead = null) {
     return clickable(
-      h_flex().h(CHIP).px(SPACE[3]).gap(SPACE[2]).items_center().rounded_full().border_1()
+      h_flex().h(CONTROL).px(SPACE[3]).gap(SPACE[2]).items_center().rounded_full().border_1()
         .border_color(on ? c.accent : c.edge).when(on, (el) => el.bg(alpha(c.accent, 0.12)))
         .text_size(TYPE.sm).font_medium().text_color(on ? c.ink : c.muted)
         .on_click(onClick)
@@ -119,23 +120,7 @@ export class NoteForm {
       .when(Boolean(this.problem), (el) => el.child(div().text_size(TYPE.sm).text_color(c.danger).child(this.problem)))
       .child(h_flex().gap(SPACE[3]).items_center()
         .child(div().flex_1())
-        .child(clickable(
-          div().h(CONTROL).px(SPACE[4]).flex().items_center().rounded(SIZE.control).border_1().border_color(c.edge)
-            .text_size(TYPE.sm).font_medium().text_color(c.muted)
-            .on_click(() => this.close())
-            .child("Cancel"),
-          c,
-          "bh-note-cancel",
-        ))
-        .child(clickable(
-          div().h(CONTROL).px(SPACE[4]).flex().items_center().rounded(SIZE.control)
-            .bg(empty ? c.well : c.accent).border_b(1).border_color(empty ? c.well : c.accentLip)
-            .text_size(TYPE.sm).font_medium().text_color(empty ? c.faint : c.accentInk)
-            .on_click((_e, cx) => this.add(cx))
-            .child(this.busy ? "Adding…" : "Add note"),
-          c,
-          "bh-note-add",
-          { fill: empty ? null : accentFill(c) },
-        )));
+        .child(actionButton(c, "bh-note-cancel", "Cancel", () => this.close(), { tone: "secondary" }))
+        .child(actionButton(c, "bh-note-add", this.busy ? "Adding…" : "Add note", (_e, cx) => this.add(cx), { tone: "primary", disabled: empty })));
   }
 }

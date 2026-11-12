@@ -9,7 +9,7 @@ import { dirname, join, parse, resolve } from "node:path";
 /** At most this many entries in one folder; the rest are left out and `truncated` says so. */
 export const LIMIT = 2000;
 
-/** Where a path the person typed points: `~` is home, a relative path the folder bh runs in. */
+/** Where a path the user typed points: `~` is home, a relative path the folder bh runs in. */
 export function resolveFolder(path = "") {
   const text = String(path ?? "").trim();
   if (!text) return process.cwd();

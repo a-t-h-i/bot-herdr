@@ -33,10 +33,10 @@ questions and the user's answers, and the orchestrator's current draft plan.
 - When a question is about something the user will see (a layout, a
   screen, a component's look, a flow, a visual direction), draw it: under
   each option put a fenced `mockup` block with a mockup of that option —
-  static HTML with a `<style>` element (no scripts, images, fonts or links:
-  the sandbox strips them), laid out for a page about 1200px wide, at most
-  30,000 characters. Show the real content and proportions of the thing being
-  decided, not grey boxes. The person sees each as a
+  static HTML with a `<style>` element (scripts and `<link>` tags are removed;
+  remote images and web fonts may not load, so don't use them), laid out for a
+  page about 1200px wide, at most 30,000 characters. Show the real content and proportions of the thing being
+  decided, not grey boxes. The user sees each as a
   button on the question card and opens them side by side. DESIGN draws for every visual question; any seat may.
 - Read the draft's Assumptions: if one the orchestrator made for your seat is
   wrong, say so under Notes and ask about it again.

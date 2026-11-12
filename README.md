@@ -113,7 +113,7 @@ Each page shows the project of the space you are looking at.
 
 Everything above lives in one command line, so every harness can use it: `node <app home>/mods/bot-herdr/engine/bh.mjs` (the briefs call it `bh`). `bh help` lists it all:
 
-- `bh task new|list|show|steps|step|status|comment|resolve|archive`, `bh board post|read`: tasks, their steps (with active time), the person's comments, and a board for contracts, decisions, blockers and questions between agents.
+- `bh task new|list|show|steps|step|status|comment|resolve|archive`, `bh board post|read`: tasks, their steps (with active time), the user's comments, and a board for contracts, decisions, blockers and questions between agents.
 - `bh plan new|show|write|comment|task`: the planning panel's drafts.
 - `bh knowledge [add|note|write|search]`: one file per agent.
 - `bh scripts [run|save|pick]`, `bh check`: shared scripts (repo map, symbol search, tests for what changed, failure digests, …) and lint, typecheck and tests for the change.

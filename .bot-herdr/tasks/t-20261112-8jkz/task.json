@@ -1,0 +1,162 @@
+{
+  "id": "t-20261112-8jkz",
+  "title": "Scoped knowledge, plan/task pages, mockups",
+  "request": "I noticed that knowledge is not folder / repo scoped. Also I would like us to fix the planning page as well as the tasks page. They look ugly af. Also find a way to render mockups on the questionnaire because agents have been struggling to do that on my other machine. Screenshots of how the planning and tasks pages should look: C:\\Users\\athenkosi.hlubi\\.config\\herdr-app\\data\\bot-herdr\\pasted\\pasted-20261112-122154.png and C:\\Users\\athenkosi.hlubi\\.config\\herdr-app\\data\\bot-herdr\\pasted\\pasted-20261112-122222.png",
+  "status": "active",
+  "track": "full",
+  "plan": null,
+  "by": "t3p",
+  "created": "2026-11-12T12:22:59.653Z",
+  "updated": "2026-11-12T14:02:16.916Z",
+  "archived": false,
+  "steps": [
+    {
+      "n": 1,
+      "title": "Open a sent image large from its chip in the chat",
+      "agent": "design-img",
+      "status": "done",
+      "started": "2026-11-12T12:28:23.922Z",
+      "finished": "2026-11-12T12:32:19.770Z",
+      "workedMs": 235848,
+      "note": "Sent image chips open in the lightbox (chat.js sentChip/openSent)"
+    },
+    {
+      "n": 2,
+      "title": "Keep knowledge per project folder or repo",
+      "agent": "dev-engine",
+      "status": "done",
+      "started": "2026-11-12T12:39:12.385Z",
+      "finished": "2026-11-12T13:01:30.455Z",
+      "workedMs": 1338070,
+      "note": "Per-project Scout name and cwd; conversations reset when the project changes (resumeState)"
+    },
+    {
+      "n": 3,
+      "title": "Make mockups in question cards draw on every machine",
+      "agent": "dev-engine",
+      "status": "done",
+      "started": "2026-11-12T12:39:12.563Z",
+      "finished": "2026-11-12T13:01:30.745Z",
+      "workedMs": 1338182,
+      "note": "bh ask refuses misplaced mockups, draws at ask time, reports failures; wider browser search; AskUserQuestion previews; every agent told the format"
+    },
+    {
+      "n": 4,
+      "title": "Restyle the Tasks page to match the user's GIF",
+      "agent": "design-pages",
+      "status": "done",
+      "started": "2026-11-12T13:14:58.716Z",
+      "finished": "2026-11-12T14:02:16.386Z",
+      "workedMs": 2837670,
+      "note": ""
+    },
+    {
+      "n": 5,
+      "title": "Restyle the Plans page and plan sheet to match the user's GIF",
+      "agent": "design-pages",
+      "status": "done",
+      "started": "2026-11-12T13:14:58.908Z",
+      "finished": "2026-11-12T14:02:16.534Z",
+      "workedMs": 2837626,
+      "note": ""
+    },
+    {
+      "n": 6,
+      "title": "Delete a stopped task and discard a plan",
+      "agent": "design-pages",
+      "status": "done",
+      "started": "2026-11-12T13:14:59.078Z",
+      "finished": "2026-11-12T14:02:16.662Z",
+      "workedMs": 4836775,
+      "note": ""
+    },
+    {
+      "n": 7,
+      "title": "Give every button one size across all pages",
+      "agent": "design-pages",
+      "status": "done",
+      "started": "2026-11-12T13:14:59.255Z",
+      "finished": "2026-11-12T14:02:16.789Z",
+      "workedMs": 4268439,
+      "note": ""
+    },
+    {
+      "n": 8,
+      "title": "Call them the user, not the person, in every agent brief and message",
+      "agent": null,
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-12T14:02:16.916Z",
+      "workedMs": 0,
+      "note": ""
+    }
+  ],
+  "triage": {
+    "size": "medium",
+    "kind": "bugfix",
+    "domains": {
+      "design": 1,
+      "dev": 0,
+      "qa": 0
+    },
+    "research": 0,
+    "ambiguous": 0,
+    "by": "rules"
+  },
+  "qa": {
+    "risk": "high",
+    "qaRequired": true,
+    "testBudget": {
+      "min": 0,
+      "max": 6
+    },
+    "focusAreas": [
+      "security boundaries: the wrong user, no user and an expired session are refused, and no secret leaks",
+      "destructive operations: they touch only what they should, and a failure halfway leaves things recoverable",
+      "state transitions and recovery: no illegal or stuck state, and a crash or failed step recovers",
+      "isolation: work stays inside its branch, worktree and permission boundaries",
+      "the reported bug no longer reproduces"
+    ],
+    "riskFactors": [
+      "security: mods/bot-herdr/engine/lib/ask.mjs (\"sanitiz\")",
+      "destructive operations: mods/bot-herdr/engine/lib/ask.mjs (\"rmSync(\")",
+      "orchestration and state: mods/bot-herdr/chat.js (\"transition(\")",
+      "isolation: mods/bot-herdr/engine/bh.mjs (\"worktree\")",
+      "a wide change: 37 files, 3477 changed lines across 4 modules (mods/bot-herdr, mods/bot-herdr/engine, .bot-herdr/tasks/t-20261112-8jkz and 1 more)",
+      "a bug fix: the bug must no longer reproduce",
+      "tests changed with it: test/brief.test.mjs, test/engine.test.mjs, test/knowledge-classifier.test.mjs and 8 more"
+    ],
+    "existingTestsLikelySufficient": true,
+    "reasoning": "HIGH: security: mods/bot-herdr/engine/lib/ask.mjs (\"sanitiz\"); destructive operations: mods/bot-herdr/engine/lib/ask.mjs (\"rmSync(\"); orchestration and state: mods/bot-herdr/chat.js (\"transition(\"). the engine's rules (Jev is off or had nothing to read).",
+    "source": "rules",
+    "at": "2026-11-12T13:38:18.477Z"
+  },
+  "summary": "",
+  "base": "cd1546c81aa59838868c413f6fd834cfa8ebd145",
+  "comments": [
+    {
+      "id": "c1",
+      "step": null,
+      "quote": "",
+      "text": "I should be able to delete a stopped task.",
+      "at": "2026-11-12T12:26:27.088Z",
+      "open": false
+    },
+    {
+      "id": "c2",
+      "step": null,
+      "quote": "",
+      "text": "All buttons should have the same size throughout I noticed that the archive button is smaller than the rest on the tasks page. Please check others as well.",
+      "at": "2026-11-12T12:27:27.633Z",
+      "open": false
+    },
+    {
+      "id": "c3",
+      "step": null,
+      "quote": "",
+      "text": "I should also be able to discard a plan.",
+      "at": "2026-11-12T12:34:53.660Z",
+      "open": false
+    }
+  ]
+}

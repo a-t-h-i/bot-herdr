@@ -1,5 +1,5 @@
 // The team: the six roles (Orchestrator, Design, Dev, QA, Research, Scout) and any agents the
-// person adds, each on a harness with a model and an effort level. Pure functions, shared by the
+// user adds, each on a harness with a model and an effort level. Pure functions, shared by the
 // mod and the bh tool, so `npm test` can check them without herdr.
 
 import { MODELS } from "./models.js";
@@ -126,7 +126,7 @@ const clean = (a, i, fallback) => migrateArgs({
 
 /**
  * The roster as stored, made whole: the six roles in order (each with what was saved for it),
- * then the person's own agents. The Orchestrator leads. With nothing stored, every role runs on
+ * then the user's own agents. The Orchestrator leads. With nothing stored, every role runs on
  * the first installed harness at its default model.
  */
 export function roster(stored, known = []) {
@@ -144,7 +144,7 @@ export function roster(stored, known = []) {
     const saved = take((a) => a.role === r.role) ?? (r.role === "orchestrator" ? take((a) => a.role === "custom" && (a.id === "orchestrator" || a.lead)) : null);
     return { ...(saved ?? { id: r.role, harness: fallback, model: "", effort: "", args: "", instructions: "" }), role: r.role, name: r.name, lead: r.role === "orchestrator" };
   });
-  // The team is the six roles: agents of the person's own aren't kept (nor reachable).
+  // The team is the six roles: agents of the user's own aren't kept (nor reachable).
   return stock;
 }
 

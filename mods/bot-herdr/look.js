@@ -138,6 +138,17 @@ export function clickable(el, c, id, { fill = null } = {}) {
   return focusable(pressable(hoverable(el, c, fill)), id, c);
 }
 
+/**
+ * An action button's colours per tone: `fill` at rest (null for none), `hover` under the pointer,
+ * `ink` for its label and glyph, and `edge` as a 1px line (null for none).
+ */
+export function buttonTone(c, tone) {
+  if (tone === "primary") return { fill: c.accent, hover: accentFill(c), ink: c.accentInk, edge: null };
+  if (tone === "danger") return { fill: c.fill, hover: c.hover, ink: c.danger, edge: c.edge };
+  if (tone === "quiet") return { fill: null, hover: c.hover, ink: c.ink, edge: null };
+  return { fill: c.fill, hover: c.hover, ink: c.ink, edge: c.edge };
+}
+
 export const ICON = (name) => `mods/bot-herdr/icons/${name}.svg`;
 
 /** Relative luminance of a #rrggbb colour (WCAG). */

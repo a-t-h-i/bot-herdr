@@ -8,6 +8,7 @@ import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, TextView, InputState, Input, Editor, EditorState } from "gpui-base";
 import { props, settings, theme, readTextFile, closeOverlay, openOverlay } from "herdr";
 import { SIZE, ICON, TYPE, LINE, SPACE, CONTROL, ROW, PIP, GLYPH, clickable, mix } from "./look.js";
+import { actionButton } from "./button.js";
 import { segmented } from "./switch.js";
 import { colors } from "./theme.js";
 import { bh } from "./bh.js";
@@ -40,22 +41,7 @@ export function openFile({ path, line = null, root = null }) {
 
 /** A header control: an icon and, when given, a label. */
 function button(c, id, icon, label, onClick) {
-  return clickable(
-    h_flex()
-      .flex_none()
-      .h(CONTROL)
-      .px(SPACE[3])
-      .gap(SPACE[2])
-      .items_center()
-      .rounded(SIZE.nested)
-      .text_size(TYPE.sm)
-      .text_color(c.muted)
-      .on_click(onClick)
-      .when(Boolean(icon), (el) => el.child(svg(ICON(icon)).size(GLYPH.md)))
-      .when(Boolean(label), (el) => el.child(label)),
-    c,
-    id,
-  );
+  return actionButton(c, id, label, onClick, { icon, tone: "quiet" });
 }
 
 export class FileView {
@@ -216,7 +202,6 @@ export class FileView {
   findRow(c, hits, cx) {
     const count = hits.length;
     const say = count ? `${this.search.at + 1} of ${count}` : this.search.query ? "No matches" : "";
-    const flat = () => h_flex().flex_none().h(CONTROL).gap(SPACE[1]).items_center().rounded(SIZE.nested).px(SPACE[2]).text_size(TYPE.xs).font_medium().text_color(c.muted).hover((s) => s.bg(c.hover));
     return h_flex()
       .flex_none()
       .px(SPACE[4])
@@ -240,8 +225,8 @@ export class FileView {
           .child(div().flex_1().min_w(0).h_full().child(Input.new(this.findInput).w_full().h_full().text_size(TYPE.sm).text_color(c.ink))),
       )
       .when(Boolean(say), (el) => el.child(div().flex_none().text_size(TYPE.xs).text_color(count ? c.muted : c.faint).child(say)))
-      .child(clickable(flat().on_click((_e, cx) => this.hit(-1, cx)).child(svg(ICON("chevron-left")).size(GLYPH.md)), c, "bh-find-prev"))
-      .child(clickable(flat().on_click((_e, cx) => this.hit(1, cx)).child(svg(ICON("chevron-right")).size(GLYPH.md)), c, "bh-find-next"))
+      .child(actionButton(c, "bh-find-prev", null, (_e, cx) => this.hit(-1, cx), { icon: "chevron-left", tone: "quiet" }))
+      .child(actionButton(c, "bh-find-next", null, (_e, cx) => this.hit(1, cx), { icon: "chevron-right", tone: "quiet" }))
       .child(clickable(
         h_flex()
           .flex_none()

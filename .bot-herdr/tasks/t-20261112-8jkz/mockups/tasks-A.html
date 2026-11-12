@@ -1,0 +1,139 @@
+<style>
+html,body{margin:0;padding:0;background:#faf9f5}
+.frame{position:relative;width:1200px;height:825px;overflow:hidden;background:#faf9f5;color:#141413;font-family:"Segoe UI",system-ui,sans-serif;font-size:14px;line-height:1.45}
+.frame *{box-sizing:border-box;margin:0;padding:0}
+.i{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.top{height:56px;display:flex;align-items:center;gap:20px;padding:0 24px;border-bottom:1px solid #e3e0d7}
+.tabs{display:flex;gap:4px}
+.tab{display:flex;align-items:center;gap:8px;height:32px;padding:0 12px;border-radius:10px;color:#6a6964;border:1px solid transparent}
+.tab.on{color:#141413;font-weight:600;background:#ffffff;border-color:#e3e0d7}
+.grow{flex:1}
+.ib{width:32px;height:32px;border-radius:10px;display:flex;align-items:center;justify-content:center;color:#6a6964;border:1px solid #e3e0d7;background:#ffffff}
+.body{display:flex;height:769px}
+.list{width:300px;flex:none;padding:22px 16px 22px 24px;border-right:1px solid #e3e0d7;display:flex;flex-direction:column;gap:2px}
+.seg{display:flex;gap:18px;padding-bottom:12px;margin-bottom:12px;border-bottom:1px solid #e3e0d7;color:#6a6964}
+.seg .on{color:#141413;font-weight:600;border-bottom:2px solid #a25338;padding-bottom:10px}
+.grp{font-size:13px;font-weight:600;color:#6a6964;padding:12px 10px 6px}
+.row{display:flex;flex-direction:column;gap:4px;padding:14px 10px;border-radius:10px;border:1px solid transparent}
+.row.on{background:#ffffff;border-color:#d6d2c6}
+.r1{display:flex;align-items:center;gap:10px}
+.r1 .t{flex:1;min-width:0;font-size:15px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.r1 .a{font-size:13px;color:#6a6964;flex:none}
+.r2{font-size:13px;color:#6a6964;padding-left:26px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.r3{font-size:13px;color:#6a6964;padding-left:26px;display:flex;align-items:center;gap:8px}
+.pips{display:flex;gap:4px}
+.pips i{width:7px;height:7px;border-radius:4px;background:#e3e0d7}
+.pips i.on{background:#a25338}
+.mk{width:18px;height:18px;flex:none;border-radius:5px;border:1.5px solid #6a6964;display:flex;align-items:center;justify-content:center;color:#ffffff}
+.mk.done{background:#a25338;border-color:#a25338}
+.mk.done .i{width:12px;height:12px;stroke-width:3}
+.mk.active{border-color:#a25338}
+.mk.active b{width:7px;height:7px;border-radius:2px;background:#a25338}
+.mk.pause{border-color:#aa4f0a;color:#aa4f0a;font-weight:700;font-size:13px}
+.doc{flex:1;min-width:0;padding:30px 56px 26px;display:flex;flex-direction:column;gap:22px}
+.head{display:flex;align-items:center;gap:16px}
+h1{flex:1;font-size:24px;font-weight:600;line-height:1.25}
+.btn{height:32px;padding:0 14px;border-radius:10px;font-size:14px;font-weight:500;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.btn.solid{background:#a25338;color:#ffffff;border-bottom:2px solid #82422d}
+.btn.line{border:1px solid #d6d2c6;background:#ffffff;color:#141413}
+.facts{display:flex;gap:30px;flex-wrap:wrap}
+.facts dt{font-size:13px;color:#6a6964}
+.facts dd{font-size:15px;margin-top:2px}
+.branch{display:flex;align-items:center;gap:8px;font-size:14px;color:#6a6964}
+h3{font-size:13px;font-weight:600;color:#6a6964;margin-bottom:8px}
+.quote{border-left:3px solid #a25338;padding:2px 0 2px 16px;font-size:16px;line-height:1.5}
+.steps{list-style:none;border-top:1px solid #e3e0d7}
+.step{display:flex;gap:12px;align-items:flex-start;padding:14px 4px;border-bottom:1px solid #e3e0d7}
+.step .n{width:20px;flex:none;color:#6a6964;font-size:14px;padding-top:1px}
+.step .sb{flex:1;min-width:0;display:flex;flex-direction:column;gap:8px}
+.step .st{font-size:15px;line-height:1.45}
+.step .tm{flex:none;font-size:13px;color:#6a6964;padding-top:1px}
+.trail{display:flex;align-items:center;gap:10px;font-size:13px}
+.dots{flex:1;display:flex;gap:6px;align-items:center}
+.dots i{width:5px;height:5px;border-radius:3px;background:#d6825a}
+.trail b{font-weight:600;color:#a16447;flex:none}
+.cmt{display:flex;gap:12px;align-items:flex-start;padding:4px 0}
+.cmt .bar{width:3px;align-self:stretch;border-radius:2px;background:#a25338;flex:none}
+.cmt p{flex:1;font-size:14px;color:#6a6964}
+.lk{font-size:13px;color:#6a6964;flex:none}
+.lk.del{color:#b91c1c}
+.addc{display:flex;gap:12px;align-items:center;margin-top:auto}
+.field{flex:1;height:36px;border:1px solid #e3e0d7;border-radius:10px;background:#ffffff;padding:0 12px;display:flex;align-items:center;color:#6a6964;font-size:14px}
+.note{font-size:13px;color:#6a6964}
+</style>
+<div class="frame">
+  <div class="top">
+    <div class="tabs">
+      <span class="tab on"><svg class="i" viewBox="0 0 24 24"><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></svg>Tasks</span>
+      <span class="tab"><svg class="i" viewBox="0 0 24 24"><path d="M14.106 5.553a2 2 0 0 0 1.788 0l3.659-1.83A1 1 0 0 1 21 4.619v12.764a1 1 0 0 1-.553.894l-4.553 2.277a2 2 0 0 1-1.788 0l-4.212-2.106a2 2 0 0 0-1.788 0l-3.659 1.83A1 1 0 0 1 3 19.381V6.618a1 1 0 0 1 .553-.894l4.553-2.277a2 2 0 0 1 1.788 0z"/><path d="M15 5.764v15"/><path d="M9 3.236v15"/></svg>Plans</span>
+      <span class="tab"><svg class="i" viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>Knowledge</span>
+    </div>
+    <div class="grow"></div>
+    <span class="ib"><svg class="i" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg></span>
+  </div>
+  <div class="body">
+    <aside class="list">
+      <div class="seg"><span class="on">Tasks</span><span>Archived</span></div>
+      <div class="grp">Under way · 2</div>
+      <div class="row on">
+        <div class="r1"><span class="mk active"><b></b></span><span class="t">Toast dismissal animation</span><span class="a">1h</span></div>
+        <div class="r2">active · fast track</div>
+        <div class="r3"><span class="pips"><i class="on"></i><i></i></span>0/1 steps</div>
+      </div>
+      <div class="row">
+        <div class="r1"><span class="mk active"><b></b></span><span class="t">Scoped knowledge, plan/task pages, mockups</span><span class="a">now</span></div>
+        <div class="r2">active · full track</div>
+        <div class="r3"><span class="pips"><i class="on"></i><i></i><i></i><i></i><i></i></span>0/5 steps</div>
+      </div>
+      <div class="grp">Finished · 2</div>
+      <div class="row">
+        <div class="r1"><span class="mk done"><svg class="i" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></span><span class="t">Fix browser back, popup backdrop</span><span class="a">1d</span></div>
+        <div class="r2">done · worked 4m</div>
+      </div>
+      <div class="row">
+        <div class="r1"><span class="mk done"><svg class="i" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></span><span class="t">Fix per-agent model selection</span><span class="a">2d</span></div>
+        <div class="r2">done · worked &lt;1m</div>
+      </div>
+    </aside>
+    <main class="doc">
+      <div class="head">
+        <h1>Toast dismissal animation</h1>
+        <span class="btn solid">Pause</span>
+        <span class="btn line">Archive</span>
+      </div>
+      <dl class="facts">
+        <div><dt>Task</dt><dd>t-20261111-zud8</dd></div>
+        <div><dt>Status</dt><dd>active</dd></div>
+        <div><dt>Track</dt><dd>fast</dd></div>
+        <div><dt>Worked</dt><dd>16h 43m</dd></div>
+        <div><dt>Started</dt><dd>11/11/2026</dd></div>
+      </dl>
+      <div class="branch">
+        <svg class="i" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
+        Branch toast-dismissal-animation, from main
+      </div>
+      <section>
+        <h3>Request</h3>
+        <p class="quote">[task] fix the toast notification. It should dissapear as smoothly as it appeared.</p>
+      </section>
+      <section>
+        <h3>Steps · 1</h3>
+        <ol class="steps">
+          <li class="step">
+            <span class="n">1.</span>
+            <div class="sb">
+              <div class="st">Make the toast's dismissal mirror its appearance in both paths: composer toast and corner toast</div>
+              <div class="trail"><span class="dots"><i style="opacity:.2"></i><i style="opacity:.3"></i><i style="opacity:.4"></i><i style="opacity:.5"></i><i style="opacity:.6"></i><i style="opacity:.7"></i><i style="opacity:.8"></i><i style="opacity:.9"></i><i style="opacity:1"></i><i style="opacity:1"></i><i style="opacity:1"></i><i style="opacity:1"></i><i style="opacity:1"></i><i style="opacity:1"></i><i style="opacity:1"></i><i style="opacity:1"></i><i style="opacity:1"></i><i style="opacity:1"></i></span><b>design-toast</b></div>
+            </div>
+            <span class="tm">16h 43m</span>
+          </li>
+        </ol>
+      </section>
+      <section>
+        <h3>Comments</h3>
+        <div class="cmt"><span class="bar"></span><p>Sample comment on step 1: the corner toast should fade the same way.</p><span class="lk">Resolve</span><span class="lk">Edit</span><span class="lk del">Delete</span></div>
+      </section>
+      <div class="addc"><span class="field">Comment</span><span class="btn solid">Comment</span></div>
+    </main>
+  </div>
+</div>

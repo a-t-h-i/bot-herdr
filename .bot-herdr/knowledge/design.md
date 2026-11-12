@@ -7,12 +7,16 @@
 - herdr's built-in theme presets return border, selected and hover with alpha (#rrggbbaa); composite them over their surface before any contrast math.
 - TextareaState exposes no caret or selection; EditorState only value/set_value/on/release (no find, scroll or select); MotionProperty animates only opacity, width, height, left, top (no colour transitions).
 - gpui has no blur or backdrop filter; behind an open file browser or question card the feed is dimmed with bg(ground) at 0.6 instead.
+- Plan asked sets are ordered oldest first, so the last element is the newest: older rounds collapse to one line without a round field.
 
 ## Standards
 - When reusing the Composer for non-chat sends (e.g. plan comments), override send but reset input/files/pane state or the composer sticks (chosen by Design)
 - Node tests can only import mod files with no gpui-kit/gpui-base/herdr imports: put pure logic in its own module (e.g. mdblocks.js, search.js) and import it from the drawing file.
+- A theme file named bot-herdr* is drawn with the Claude palette (look.js ownTheme) and its colours are ignored; name new themes without that prefix.
+- Every button is button.js actionButton (28px, tone primary|secondary|danger|quiet); the only exceptions are the settings.js field chevron and slider tick labels.
+- A page composer's toast survives an action that changes the open item when the pane opens its neighbour in the same render (Archive, Delete).
 
 ## Decisions
-- Knowledge cards: no coloured side stripe; the agent is marked by its dot and name only (the person's choice, 2026-11-11).
+- Knowledge cards: no coloured side stripe; the agent is marked by its dot and name only (the user's choice, 2026-11-11).
 
 ## History

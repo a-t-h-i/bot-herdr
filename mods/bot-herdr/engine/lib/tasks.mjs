@@ -1,11 +1,13 @@
-// Tasks and their boards. A task is a request the Orchestrator took on: its steps (the person's
+// Tasks and their boards. A task is a request the Orchestrator took on: its steps (the user's
 // checklist), who works on each and for how long, the classifier's read, and a board where the
 // agents post contracts, decisions, blockers, questions and what they finished.
 //
 // .bot-herdr/tasks/<id>/task.json, board.jsonl, reports/
 
+import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { appendJsonl, listDir, newId, now, readJson, readJsonl, store, titleFrom, writeJson } from "./core.mjs";
+import { runGit } from "./workspace.mjs";
 
 export const STATUSES = ["backlog", "active", "paused", "done", "abandoned"];
 export const STEP_STATUSES = ["todo", "active", "done", "blocked", "skipped"];
@@ -112,6 +114,29 @@ export function setStatus(task, status) {
   return task;
 }
 
+/**
+ * Deletes a task's folder, for `bh task delete`. Not while it is active. Its worktree goes first, with
+ * git's own check: git refuses when the worktree holds changes, and then nothing is deleted. Its
+ * branch is kept. Returns { deleted, branch }.
+ */
+export function deleteTask(root, id) {
+  if (!/^[\w-]+$/.test(String(id))) throw new Error(`No task ${id}. \`bh task list\` shows them.`);
+  const task = loadTask(root, id);
+  if (task.status === "active") throw new Error(`${id} is active: pause or finish it first.`);
+  const g = task.git;
+  if (g?.mode === "worktree" && g.path && existsSync(g.path)) removeWorktree(root, g.path);
+  rmSync(dir(root, id), { recursive: true, force: true });
+  return { deleted: id, branch: g?.branch ?? null };
+}
+
+function removeWorktree(root, path) {
+  try {
+    runGit(root, ["worktree", "remove", path]);
+  } catch (e) {
+    throw new Error(`${e.message}\nCommit or discard its changes, then delete it again.`);
+  }
+}
+
 /** How long agents have worked on a task, in ms: finished time plus what is running now. */
 export function worked(task, at = Date.now()) {
   return task.steps.reduce((sum, s) => sum + (s.workedMs ?? 0) + (s.status === "active" && s.started ? at - Date.parse(s.started) : 0), 0);
@@ -128,7 +153,7 @@ export function board(root, id, { kinds = null, since = 0 } = {}) {
   return readJsonl(join(dir(root, id), "board.jsonl")).filter((e) => e.n > since && (!kinds || kinds.includes(e.kind)));
 }
 
-/** The person's comment on a task, or on one of its steps (`step`, its number). */
+/** The user's comment on a task, or on one of its steps (`step`, its number). */
 export function comment(task, { step = null, text }) {
   const n = step === null || step === undefined ? null : Number(step);
   if (n !== null && !task.steps.some((s) => s.n === n)) throw new Error(`Task ${task.id} has no step ${step}. It has ${task.steps.length}.`);
@@ -192,7 +217,7 @@ export function taskText(t, entries = []) {
     "",
     "## Steps",
     ...(t.steps.length ? t.steps.map((s) => `${s.n}. [${s.status}] ${s.title}${s.agent ? ` (${s.agent})` : ""}${s.note ? ` — ${s.note}` : ""}`) : ["(none yet: `bh task steps`)"]),
-    ...(openComments(t).length ? ["", "## Open comments from the person", ...openComments(t).map((c) => `- ${c.step ? `step ${c.step} ("${c.quote}")` : "the task"}: ${c.text}`)] : []),
+    ...(openComments(t).length ? ["", "## Open comments from the user", ...openComments(t).map((c) => `- ${c.step ? `step ${c.step} ("${c.quote}")` : "the task"}: ${c.text}`)] : []),
   ];
   if (t.triage) lines.push("", "## Classifier triage", JSON.stringify(t.triage));
   if (t.qa) lines.push("", "## QA risk", `${t.qa.risk}: ${t.qa.reasoning ?? ""}`);

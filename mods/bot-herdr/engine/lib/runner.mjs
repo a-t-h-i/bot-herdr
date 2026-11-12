@@ -7,13 +7,13 @@
 // remember to write a reply. The session is the harness's own, so `/cli` in the agent's terminal
 // opens the same conversation in the full interactive CLI.
 //
-// What an agent may do without asking is the person's choice (Settings → Agent access):
+// What an agent may do without asking is the user's choice (Settings → Agent access):
 //   standard (the default)  edit files in the project, read and search, run the team's own
 //                           tools (bh, which also runs the project's checks, and hc), read-only
-//                           git, and any command the person listed under "Also allow"; other
+//                           git, and any command the user listed under "Also allow"; other
 //                           commands are refused and the agent says so. Codex runs in its
 //                           workspace-write sandbox.
-//   full                    anything, with no prompts: only for a machine or folder the person
+//   full                    anything, with no prompts: only for a machine or folder the user
 //                           is happy to let agents run free in
 // pi and Oh My Pi have no permission system of their own: they run as they would in a terminal.
 
@@ -159,8 +159,19 @@ export function toolLine(name, input = {}) {
 }
 
 /**
+ * An option's `preview` (Claude Code's AskUserQuestion) as its mockup: HTML as it is, anything
+ * else as preformatted text. Null when there is no preview.
+ */
+export function previewMockup(preview) {
+  if (typeof preview !== "string" || !preview.trim()) return null;
+  if (preview.trim().startsWith("<")) return preview;
+  const text = preview.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return `<pre style="margin:24px;font:15px/1.5 Consolas,ui-monospace,monospace;white-space:pre-wrap">${text}</pre>`;
+}
+
+/**
  * Claude Code's own question tool (AskUserQuestion) as bh ask's questions:
- * { questions: [{ question, header, options: [{ label, description }], multiSelect }] }.
+ * { questions: [{ question, header, options: [{ label, description, preview }], multiSelect }] }.
  * Run headless it can't show its own prompt, so the chat shows the questions instead.
  */
 export function fromAskTool(input) {
@@ -175,7 +186,7 @@ export function fromAskTool(input) {
         label: String(o.label).replace(/\s*\(Recommended\)\s*/i, "").trim(),
         meaning: String(o.description ?? ""),
         recommended: /\(Recommended\)/i.test(String(o.label)),
-        mockup: null,
+        mockup: previewMockup(o.preview),
       })),
     }));
   if (!questions.length) return null;
@@ -223,7 +234,7 @@ export function standardCommands() {
 }
 
 /**
- * Claude Code's permissions: edits, the team's tools and what the person allowed; everything when
+ * Claude Code's permissions: edits, the team's tools and what the user allowed; everything when
  * chosen. When it would run as root (herdr is root and no user to hand it to, or BH_AGENT_USER=root),
  * Claude Code won't start with bypassPermissions at all, so full access falls back to standard
  * there rather than failing every turn.
@@ -351,7 +362,7 @@ function oneShot(argv, prompt, cwd, handle, init = {}) {
   lines(child, (event) => {
     if (turn.asked) return;
     handle(event, turn);
-    if (turn.asked) stop(child); // it asked the person: the turn ends here
+    if (turn.asked) stop(child); // it asked the user: the turn ends here
   });
   child.stdin.on("error", () => {});
   child.stdin.end(prompt);
@@ -376,7 +387,7 @@ function oneShot(argv, prompt, cwd, handle, init = {}) {
 
 /**
  * Whether an ACP tool call may run without asking, by access level: reading, searching, editing
- * and fetching always; a command when it starts with one the team or the person allowed.
+ * and fetching always; a command when it starts with one the team or the user allowed.
  */
 export function acpAllowed(kind, access, { command = "", allow = [] } = {}) {
   if (access === "full") return true;
@@ -551,7 +562,7 @@ export class Acp {
 /**
  * One turn. `state` is the agent's saved { session }; `key` names its session folder; `brief`
  * the role brief (and `briefFile` the same text on disk); `access` standard or full, and
- * `allow` the commands the person added to standard. Returns
+ * `allow` the commands the user added to standard. Returns
  * { done, cancel }: `done` resolves to { text, error, session, cancelled }.
  */
 export function turn(opts) {
