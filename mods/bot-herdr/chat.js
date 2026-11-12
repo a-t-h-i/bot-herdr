@@ -27,9 +27,8 @@ import { summary } from "./drawer.js";
 import { mockup, openInBrowser, previews, isImage } from "./media.js";
 import { commentRow } from "./plandoc.js";
 import { openLightbox } from "./lightbox.js";
+import { OpenQuestions } from "./questions.js";
 
-/** Where agents' questions for the user wait (bh ask writes them; answered ones move aside). */
-const questionsDir = () => `${outboxDir().replace(/\/replies$/, "")}/questions`;
 /** What an agent run headless is doing right now (agent.mjs writes it on each tool call). */
 const activityDir = () => `${outboxDir().replace(/\/replies$/, "")}/activity`;
 
@@ -100,8 +99,7 @@ export class Chat {
     this.outAt = shared(OUTGOING)?.at ?? 0; // the last message another page asked us to send
     this.page = null;
     this.reading = false;
-    this.questions = []; // open questions from agents, oldest first (bh ask): the composer asks them
-    this.qfiles = {}; // file name → its question, read once
+    this.open = new OpenQuestions();
     this.unfolded = new Set(); // your long messages opened with Show more
     this.turn = null; // the agent on the working line when several work (its address)
     this.turnShown = true; // the line's first frame is drawn low and clear, then slides up
@@ -505,56 +503,18 @@ export class Chat {
 
   /** Reads new question files; a file that went (answered) drops its card. */
   async readQuestions(cx) {
-    let names = [];
-    try {
-      names = (await fs.readdir(questionsDir())).map((d) => (typeof d === "string" ? d : d.name)).filter((n) => /^q-.*\.json$/.test(n));
-    } catch {
-      names = [];
-    }
-    let changed = false;
-    for (const name of names) {
-      if (name in this.qfiles) continue;
-      let q = null;
-      try {
-        q = JSON.parse((await readTextFile(`${questionsDir()}/${name}`)) ?? "null");
-      } catch {
-        q = null;
-      }
-      this.qfiles[name] = q?.status === "open" && Array.isArray(q.questions) && q.questions.length ? q : null;
-      changed = true;
-    }
-    for (const name of Object.keys(this.qfiles)) {
-      if (names.includes(name)) continue;
-      delete this.qfiles[name];
-      changed = true;
-    }
-    if (!changed) return;
-    this.questions = Object.values(this.qfiles).filter(Boolean).sort((a, b) => String(a.created).localeCompare(String(b.created)));
-    cx.notify();
+    if (await this.open.poll()) cx.notify();
   }
 
   /** Your answers to an agent's questions (from the composer's drawer), sent back with bh answer. */
   submit(q, answers, cx, { dismissed = false } = {}) {
-    const file = Object.keys(this.qfiles).find((name) => this.qfiles[name]?.id === q.id);
-    if (file) this.qfiles[file] = null;
-    this.questions = this.questions.filter((x) => x.id !== q.id);
+    const file = this.open.drop(q);
     const who = q.fromName ?? this.composer.nameOf(q.from);
     this.add({ kind: "me", text: dismissed ? `Dismissed: ${who} makes the calls.` : summary(q, answers), files: [], to: [who] }, cx);
     cx.spawn(async (cx) => {
-      const r = await bh(["answer", q.id, "--json", "--data", enc(answers)]);
-      let sent = null;
-      try {
-        sent = JSON.parse(r.stdout);
-      } catch {
-        sent = null;
-      }
-      if (r.code !== 0 || !sent) {
-        // Read the file again on the next poll, so the questions come back.
-        if (file) delete this.qfiles[file];
-        this.composer.say(`Couldn't send your answers: ${(r.stderr || r.stdout || "node didn't run").trim().split("\n")[0]}`, cx, "error");
-        return;
-      }
-      if (!sent.ok) this.add({ kind: "note", text: `Saved, but ${who} didn't get them: ${sent.error}`, address: q.from }, cx);
+      const r = await this.open.send(q, answers, file);
+      if (!r.sent) return this.composer.say(`Couldn't send your answers: ${r.why}`, cx, "error");
+      if (!r.ok) this.add({ kind: "note", text: `Saved, but ${who} didn't get them: ${r.why}`, address: q.from }, cx);
       cx.notify();
     });
   }
@@ -630,7 +590,7 @@ export class Chat {
     });
     const up = this.back > 0 || this.px > 0;
     const working = this.workers();
-    this.composer.questions = this.questions;
+    this.composer.questions = this.open.list;
     // A pane with nothing to draw (a suggestion list that matches nothing) dims nothing either.
     const pane = this.composer.paneShown() ? this.composer.paneNow() : null;
 

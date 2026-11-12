@@ -30,6 +30,7 @@ import { openNoteForm, NOTE_ADDED } from "./noteform.js";
 import { Composer } from "./composer.js";
 import { mockupFile, openInBrowser } from "./media.js";
 import { openLightbox } from "./lightbox.js";
+import { OpenQuestions } from "./questions.js";
 
 const TABS = [
   { id: "tasks", icon: "page-tasks", label: "Tasks" },
@@ -79,6 +80,8 @@ export function stepAgents(s) {
 const GAP = 14;
 const MAX = 1140;
 const REFRESH_MS = 4000;
+const QUESTIONS_MS = 2500; // the chat's cadence, so a card answered on one page goes from the others together
+const PAGE_CHROME = SPACE[5] + CONTROL + GAP; // the page's top padding, its tab bar, and the gap under it
 
 const load = (key, fallback) => {
   try {
@@ -123,12 +126,13 @@ const day = (iso) => {
 
 const firstLine = (r) => (r.stderr || r.stdout || "").trim().split("\n")[0];
 
-/** A composer for a page's box: `onSend(text, cx)` gets what was written, after the box is cleared. */
-function pageComposer(given, cx, { minRows, placeholder, onSend }) {
+/** A composer for a page's box: `onSend(text, cx)` gets what was written, after the box is cleared; `onAnswer(q, answers, cx)` gets what was answered on its question cards. */
+function pageComposer(given, cx, { minRows, placeholder, onSend, onAnswer }) {
   const comp = new Composer({});
   comp.init(given, cx);
   comp.minRows = minRows;
   comp.placeholder = placeholder;
+  comp.hooks.answered = onAnswer ? (q, answers, cx) => onAnswer(q, answers, cx) : undefined;
   comp.send = (cx) => {
     const text = comp.input.value().trim();
     if (comp.sending || !text) return;
@@ -347,14 +351,24 @@ export class Work {
     this.knowSearch.on("change", (_e, cx) => cx.notify());
     this.knowFilter = new Set();
     this.noteAddedAt = shared(NOTE_ADDED)?.at ?? 0;
+    this.handle = cx.focus_handle(); // holds the keyboard while the Plans box is folded
+    this.open = new OpenQuestions(); // the agents' open questions, read here as the chat reads them
     // Plans are written at length: the Plans page's box starts taller than the chat's.
     this.planComposer = pageComposer(given, cx, {
       minRows: 2,
       placeholder: "Describe what to plan, or answer the panel…",
       onSend: (text, cx) => this.sendPlanText(text, cx),
+      onAnswer: (q, answers, cx) => this.answerQuestion(this.planComposer, q, answers, cx),
     });
     // The task's box at the foot of its detail: a comment on the task, its placeholder names it.
-    this.taskComposer = pageComposer(given, cx, { minRows: 1, placeholder: "Comment on the task…", onSend: (text, cx) => this.sendTaskComment(cx, text) });
+    this.taskComposer = pageComposer(given, cx, {
+      minRows: 1,
+      placeholder: "Comment on the task…",
+      onSend: (text, cx) => this.sendTaskComment(cx, text),
+      onAnswer: (q, answers, cx) => this.answerQuestion(this.taskComposer, q, answers, cx),
+    });
+    this.readQuestions(cx);
+    cx.timer.every(QUESTIONS_MS, (cx) => this.readQuestions(cx));
     this.reload(cx);
     cx.timer.every(REFRESH_MS, (cx) => {
       if (activePage() === (this.fixed ?? "work")) this.reload(cx);
@@ -438,10 +452,36 @@ export class Work {
     this.notes = cur.notes;
   }
 
+  // ── Questions ──────────────────────────────────────────────────────────────────────────────
+
+  /** Reads the agents' open questions; the page's box shows them, as the chat's does. */
+  async readQuestions(cx) {
+    if (!this.hasComposer()) return;
+    if (await this.open.poll()) cx.notify();
+  }
+
+  /** Your answers to an agent's questions, from the page's box: the chat's bh answer, sent from here. */
+  answerQuestion(composer, q, answers, cx) {
+    const file = this.open.drop(q);
+    cx.notify(); // the card goes now; a failure brings it back on the next poll
+    cx.spawn(async (cx) => {
+      const r = await this.open.send(q, answers, file);
+      if (!r.sent) composer.say(`Couldn't send your answers: ${r.why}`, cx, "error");
+      else if (!r.ok) composer.say(`Saved, but the agent didn't get them: ${r.why}`, cx, "warning");
+      cx.notify();
+    });
+  }
+
+  /** Whether the tab shown has a box for the cards: Tasks and Plans do; Knowledge has none. */
+  hasComposer() {
+    return this.tab === "tasks" || this.tab === "plans";
+  }
+
   show(tab, cx) {
     this.tab = tab;
     keep("tab", tab);
     this.reload(cx);
+    this.readQuestions(cx);
     cx.notify();
   }
 
@@ -676,12 +716,25 @@ export class Work {
     const body = stale
       ? stateView(c, { id: "bh-work-switching", title: "Loading…", loading: true })
       : this.tab === "plans" ? this.plansView(c, content) : this.tab === "knowledge" ? this.knowledgeView(c, content) : this.tasksView(c, content);
+    // The agents' open questions go to the box of the tab shown; the Knowledge tab has no box.
+    this.planComposer.questions = this.tab === "plans" ? this.open.list : [];
+    this.taskComposer.questions = this.tab === "tasks" ? this.open.list : [];
+    // The plan's column reaches the page's foot: nothing sits below its pinned box.
+    const pinned = stale ? null : this.shownPlan();
     return div()
       .id("bh-work")
       .relative()
       .size_full()
       .bg(c.ground)
       .text_color(c.ink)
+      .track_focus(this.handle)
+      .on_key_down((e, cx) => {
+        // Typing on the Plans page while its box is folded grows the box back, as on the chat.
+        const chord = e.modifiers.control || e.modifiers.platform || e.modifiers.alt;
+        if (!e.key_char || chord || !this.planBoxFolded()) return;
+        this.planComposer.typeFolded(e.key_char, cx);
+        cx.stop_propagation();
+      })
       .on_size_change((size, cx) => {
         // px with the app's zoom multiplied in; drawn sizes are without it.
         const zoom = Number(settings().zoom) || 1;
@@ -700,7 +753,8 @@ export class Work {
             v_flex()
               .flex_none()
               .w(content)
-              .py(SPACE[5])
+              .pt(SPACE[5])
+              .when(!pinned, (el) => el.pb(SPACE[5]))
               .gap(GAP)
               .child(
                 h_flex()
@@ -1239,6 +1293,25 @@ export class Work {
 
   // Plans
 
+  /** The plan whose column the page draws now: the box pins to the page's foot with it, and not on the list or the intro. */
+  shownPlan() {
+    if (this.tab !== "plans" || !this.plan) return null;
+    return this.width < NARROW && this.showPrevious ? null : this.plan;
+  }
+
+  /** Whether the Plans box is folded to its slim bar on the page drawn now. */
+  planBoxFolded() {
+    return Boolean(this.shownPlan()) && this.planComposer.isFolded();
+  }
+
+  /** A press on the conversation folds the box to its slim bar; a click on the bar or typing grows it back, draft intact. */
+  foldPlanBox(cx) {
+    if (this.commenting) return; // an open comment box takes the press
+    this.planComposer.expanded = false;
+    this.handle.focus(); // the text box is not drawn while folded: typing comes here
+    cx.notify();
+  }
+
   /**
    * The Plans page, as the planning session: a centred column of your idea, the panel's questions
    * with your answers, and the View plan tab over the box. The rail at the right has the round,
@@ -1290,23 +1363,30 @@ export class Work {
 
   /**
    * The conversation column: the rail across its top when narrow, the title and the conversation
-   * scrolling above the box, and the View plan tab on the box's top edge.
+   * scrolling above the box, and the View plan tab on the box's top edge at the page's foot.
    */
   planColumn(c, w, p, { rail }) {
-    const planH = Math.max(300, this.height - 110);
+    const box = this.planComposer.height(w);
+    const tab = p.markdown ? CONTROL : 0;
     return v_flex()
       .id(`bh-plan-main-${p.id}`)
+      .relative()
       .flex_none()
       .w(w)
-      .h(planH)
+      .h(Math.max(300, this.height - PAGE_CHROME))
       .gap(SPACE[2])
       .when(rail, (el) => el.child(this.planRail(c, p, { horizontal: true })))
-      .child(v_flex().flex_1().min_h(0).overflow_y_scroll().gap(SPACE[4]).pb(SPACE[5])
+      // The conversation ends above the pinned box and its tab: the last round scrolls clear of them.
+      .child(v_flex().flex_1().min_h(0).overflow_y_scroll().gap(SPACE[4]).pb(SIZE.foot + box + tab + SPACE[4])
+        .on_mouse_down("left", (_e, cx) => this.foldPlanBox(cx))
         .child(this.planTitle(c, p))
         .child(this.planConversation(c, p, w)))
+      // The box at the page's foot, as the chat draws its composer: its pane and toast grow up over the page.
       .child(v_flex()
-        .flex_none()
-        .w_full()
+        .absolute()
+        .left(0)
+        .right(0)
+        .bottom(SIZE.foot)
         .items_center()
         .when(Boolean(p.markdown), (el) => el.child(this.viewPlanTab(c, p)))
         .child(this.planComposer.render(this.cx, w, this.height)));

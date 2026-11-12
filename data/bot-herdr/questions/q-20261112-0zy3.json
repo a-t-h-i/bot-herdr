@@ -1,0 +1,32 @@
+{
+  "id": "q-20261112-0zy3",
+  "title": "Questions",
+  "intro": "",
+  "questions": [
+    {
+      "seat": null,
+      "text": "Where should the question cards live?",
+      "options": [
+        {
+          "label": "Every page composer",
+          "meaning": "Tasks, Plans and chat",
+          "recommended": false,
+          "mockup": null
+        },
+        {
+          "label": "The chat only",
+          "meaning": "",
+          "recommended": false,
+          "mockup": null
+        }
+      ],
+      "multi": false
+    }
+  ],
+  "from": "design-plans-composer",
+  "fromName": null,
+  "cwd": "C:/Users/athenkosi.hlubi/Desktop/bot-herdr",
+  "status": "open",
+  "answers": null,
+  "created": "2026-11-12T14:27:29.440Z"
+}

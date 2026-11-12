@@ -1,0 +1,95 @@
+{
+  "id": "t-20261112-5hcb",
+  "title": "Plans composer matches chat",
+  "request": "the plans page composer needs to match the chat composer exactly. Also it should stick to the bottom. Remove the bottom padding below the composer",
+  "status": "active",
+  "track": "fast",
+  "plan": null,
+  "by": "t3p",
+  "created": "2026-11-12T14:06:52.504Z",
+  "updated": "2026-11-12T15:19:15.245Z",
+  "archived": false,
+  "steps": [
+    {
+      "n": 1,
+      "title": "Pin the Plans page composer to the page bottom exactly like the chat composer, with no padding below it",
+      "agent": "design-plans-composer",
+      "status": "done",
+      "started": "2026-11-12T14:07:59.415Z",
+      "finished": "2026-11-12T14:20:47.668Z",
+      "workedMs": 768253,
+      "note": ""
+    },
+    {
+      "n": 2,
+      "title": "Shrink to the chat's slim bar on a press in the conversation, and grow back on click or typing, exactly as the chat composer does",
+      "agent": null,
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-12T14:24:08.063Z",
+      "workedMs": 0,
+      "note": ""
+    },
+    {
+      "n": 3,
+      "title": "Show open agent questionnaires on every page composer, not only the chat, with answers sent back the same way",
+      "agent": null,
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-12T15:19:15.243Z",
+      "workedMs": 0,
+      "note": ""
+    }
+  ],
+  "triage": {
+    "size": "small",
+    "kind": "feature",
+    "domains": {
+      "design": 1,
+      "dev": 0,
+      "qa": 0
+    },
+    "research": 0,
+    "ambiguous": 0,
+    "by": "rules"
+  },
+  "qa": {
+    "risk": "high",
+    "qaRequired": true,
+    "testBudget": {
+      "min": 2,
+      "max": 6
+    },
+    "focusAreas": [
+      "concurrency: races, ordering, double runs, and a lock or claim that is never released"
+    ],
+    "riskFactors": [
+      "concurrency: .bot-herdr/plans/p-20261111-9dkc/comments.json (\"locks\")",
+      "4 files, 156 changed lines in mods/bot-herdr, .bot-herdr/tasks/t-20261112-5hcb"
+    ],
+    "existingTestsLikelySufficient": false,
+    "reasoning": "HIGH: concurrency: .bot-herdr/plans/p-20261111-9dkc/comments.json (\"locks\"); 4 files, 156 changed lines in mods/bot-herdr, .bot-herdr/tasks/t-20261112-5hcb. the engine's rules (Jev is off or had nothing to read).",
+    "source": "rules",
+    "at": "2026-11-12T15:18:20.936Z"
+  },
+  "summary": "",
+  "base": "23436e4697282ae9b817becb52575224b7af7354",
+  "comments": [
+    {
+      "id": "c1",
+      "step": null,
+      "quote": "",
+      "text": "It should also shrink on scroll. In fact you can copy the chat composer exactly as it is and port it over.",
+      "at": "2026-11-12T14:08:10.704Z",
+      "open": true
+    },
+    {
+      "id": "c2",
+      "step": null,
+      "quote": "",
+      "text": "The questionaire shouldn't be visible only on the chat page. It should be visible also on all other pages that have the composer",
+      "at": "2026-11-12T14:08:58.655Z",
+      "open": true
+    }
+  ]
+}
