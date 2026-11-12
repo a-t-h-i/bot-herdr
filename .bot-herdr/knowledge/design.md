@@ -8,6 +8,7 @@
 - TextareaState exposes no caret or selection; EditorState only value/set_value/on/release (no find, scroll or select); MotionProperty animates only opacity, width, height, left, top (no colour transitions).
 - gpui has no blur or backdrop filter; behind an open file browser or question card the feed is dimmed with bg(ground) at 0.6 instead.
 - Plan asked sets are ordered oldest first, so the last element is the newest: older rounds collapse to one line without a round field.
+- work.js page chrome is PAGE_CHROME (pt SPACE[5] + tab bar CONTROL + GAP): a column that must reach the page's foot sizes this.height - PAGE_CHROME and the page drops its pb(SPACE[5]).
 
 ## Standards
 - When reusing the Composer for non-chat sends (e.g. plan comments), override send but reset input/files/pane state or the composer sticks (chosen by Design)
@@ -15,6 +16,8 @@
 - A theme file named bot-herdr* is drawn with the Claude palette (look.js ownTheme) and its colours are ignored; name new themes without that prefix.
 - Every button is button.js actionButton (28px, tone primary|secondary|danger|quiet); the only exceptions are the settings.js field chevron and slider tick labels.
 - A page composer's toast survives an action that changes the open item when the pane opens its neighbour in the same render (Archive, Delete).
+- A page composer folds like the chat's only if the page root has a cx.focus_handle() with track_focus and forwards e.key_char to composer.typeFolded while composer.isFolded(); Composer.changed sets expanded back to true.
+- OpenQuestions (mods/bot-herdr/questions.js) is the one read/answer path for every page composer: poll() reads the outbox questions folder every 2500ms, drop(q) takes a card off at once, send() posts bh answer; a page composer's hooks.answered must be wired or its cards cannot go.
 
 ## Decisions
 - Knowledge cards: no coloured side stripe; the agent is marked by its dot and name only (the user's choice, 2026-11-11).
