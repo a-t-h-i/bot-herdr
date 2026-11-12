@@ -2,12 +2,12 @@
   "id": "t-20261112-8jkz",
   "title": "Scoped knowledge, plan/task pages, mockups",
   "request": "I noticed that knowledge is not folder / repo scoped. Also I would like us to fix the planning page as well as the tasks page. They look ugly af. Also find a way to render mockups on the questionnaire because agents have been struggling to do that on my other machine. Screenshots of how the planning and tasks pages should look: C:\\Users\\athenkosi.hlubi\\.config\\herdr-app\\data\\bot-herdr\\pasted\\pasted-20261112-122154.png and C:\\Users\\athenkosi.hlubi\\.config\\herdr-app\\data\\bot-herdr\\pasted\\pasted-20261112-122222.png",
-  "status": "active",
+  "status": "done",
   "track": "full",
   "plan": null,
   "by": "t3p",
   "created": "2026-11-12T12:22:59.653Z",
-  "updated": "2026-11-12T14:02:16.916Z",
+  "updated": "2026-11-12T14:04:31.696Z",
   "archived": false,
   "steps": [
     {
