@@ -9,7 +9,8 @@
 //
 // How agents run: headless (the default: each message runs the harness non-interactively and
 // the answer comes back to the chat) or as their CLI; and what they may do without asking,
-// standard (edits, reading, the team's tools) unless the user picks full access.
+// standard (edits, reading, the team's tools) unless the user picks full access. Repo history,
+// on by default, pushes .bot-herdr/ to git with the project; off keeps it out via .gitignore.
 
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, TextareaState, Textarea } from "gpui-base";
@@ -227,6 +228,7 @@ export class Settings {
     this.allowInput.set_value((got.allow ?? []).join(", "));
     const on = got.headless !== false;
     if (shared(HEADLESS_KEY) !== on) setShared(HEADLESS_KEY, on);
+    if (got.repoHistoryError) this.problem = got.repoHistoryError;
   }
 
   setAccess(patch, cx) {
@@ -896,6 +898,8 @@ export class Settings {
         !full && this.settingRow(c, "Also allow", div().w(240).child(this.field(c, this.allowInput)), "Commands, comma separated"),
         this.settingRow(c, "Git per task", this.choice(c, "bh-git", [["off", "Off"], ["branch", "Branch"], ["worktree", "Worktree"]], k.git ?? "off",
           (v, cx) => this.setAccess({ git: v }, cx))),
+        this.settingRow(c, "Repo history", this.choice(c, "bh-repo-history", [["on", "Pushed"], ["off", "Local only"]], k.repoHistory === false ? "off" : "on",
+          (v, cx) => this.setAccess({ repoHistory: v === "on" }, cx)), k.repoHistory === false ? ".bot-herdr/ is gitignored and untracked in every project" : null),
       ],
     });
   }

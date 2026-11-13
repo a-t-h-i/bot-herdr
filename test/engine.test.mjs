@@ -205,11 +205,11 @@ test("agents can't change the settings that decide what they may do", () => {
   }
   assert.equal(json("access").access, "standard");
   const set = json("access", "--data", enc({ access: "full", allow: "npm test, git commit", headless: false }));
-  assert.deepEqual(set, { access: "full", allow: ["npm test", "git commit"], headless: false, git: "off" });
+  assert.deepEqual(set, { access: "full", allow: ["npm test", "git commit"], headless: false, git: "off", repoHistory: true });
   assert.equal(json("access", "standard").access, "standard");
   assert.equal(json("access").headless, false);
   bh("access", "--data", enc({ headless: true, allow: "" }));
-  assert.deepEqual(json("access"), { access: "standard", allow: [], headless: true, git: "off" });
+  assert.deepEqual(json("access"), { access: "standard", allow: [], headless: true, git: "off", repoHistory: true });
 });
 
 test("nothing in the repository mentions the old name", () => {

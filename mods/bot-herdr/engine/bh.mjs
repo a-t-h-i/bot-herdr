@@ -66,7 +66,7 @@ The team
 Used by the bot-herdr chat and Settings (--data takes URI-encoded JSON; agents can't change these)
   bh team save --data <roster>    bh config [--data <changes>]    bh questions    bh open <file>
   bh harness add <key> --name "<Name>" --run "<command and arguments>"
-  bh access [standard|full] [--allow "npm test, git commit"]     how agents run, what they may do without asking
+  bh access [standard|full] [--allow "npm test, git commit"] [--repo-history on|off]   how agents run, what they may do without asking
   bh mockup <file.html> | --data <html>     bh clip     bh preview <image>…     pictures for the chat
   bh files [<path>] [--all]                 a folder's entries for the composer's file browser
   bh models <harness> [--command <exe>] [--refresh]   the models that harness really offers`;
@@ -621,11 +621,15 @@ async function main(argv) {
       const saved = readJson(file, {}) ?? {};
       const next = accessOf();
       const level = rest[0];
-      if (level && level !== "standard" && level !== "full") throw new UsageError('bh access [standard|full] [--allow "npm test, git commit"] [--git off|branch|worktree]   or   bh access --data <changes>');
+      if (level && level !== "standard" && level !== "full") throw new UsageError('bh access [standard|full] [--allow "npm test, git commit"] [--git off|branch|worktree] [--repo-history on|off]   or   bh access --data <changes>');
       const patch = typeof flags.data === "string" ? JSON.parse(bodyText(flags, [])) : {};
       if (level) patch.access = level;
       if (typeof flags.allow === "string") patch.allow = flags.allow;
       if (typeof flags.git === "string") patch.git = flags.git;
+      if (flags["repo-history"] !== undefined) {
+        if (flags["repo-history"] !== "on" && flags["repo-history"] !== "off") throw new UsageError("Repo history is on or off.");
+        patch.repoHistory = flags["repo-history"] === "on";
+      }
       if (Object.keys(patch).length) {
         personOnly("Agent access");
         if (patch.access === "standard" || patch.access === "full") next.access = patch.access;
@@ -636,8 +640,18 @@ async function main(argv) {
           if (!W.ISOLATIONS.includes(patch.git)) throw new UsageError("Git isolation is off, branch or worktree.");
           next.git = patch.git;
         }
+        if (patch.repoHistory !== undefined) {
+          if (typeof patch.repoHistory !== "boolean") throw new UsageError("Repo history is true or false.");
+          next.repoHistory = patch.repoHistory;
+        }
         writeJson(file, { ...saved, agents: next });
         if (next.headless !== was) team.sync(root); // the templates start agents the new way
+        // The project's git follows the setting: a query never touches it, only the user's patch.
+        if (patch.repoHistory !== undefined) {
+          const applied = W.applyRepoHistory({ root, on: next.repoHistory });
+          next.repoHistoryNote = applied.note;
+          next.repoHistoryError = applied.error;
+        }
       }
       return out(flags, next, (x) => `Agents run ${x.headless ? "headless" : "as their CLI"}; access ${x.access}${x.allow.length ? `; also allowed: ${x.allow.join(", ")}` : ""}; git isolation ${x.git}.`);
     }

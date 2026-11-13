@@ -27,6 +27,8 @@ export function accessOf() {
     headless: saved.headless !== false,
     // Settings → Git isolation: a new task's own branch, or worktree, or neither.
     git: ["branch", "worktree"].includes(saved.git) ? saved.git : "off",
+    // Settings → Repo history: .bot-herdr/ committed and pushed with the project, unless turned off.
+    repoHistory: saved.repoHistory !== false,
   };
 }
 

@@ -1,0 +1,80 @@
+{
+  "id": "t-20261113-pwha",
+  "title": "Repo history git setting",
+  "request": "Add a setting to enable repo history: when toggled on, the repo's history through bot-herdr (.bot-herdr data) is also pushed to git; when off it is excluded from git using a gitignore entry",
+  "status": "done",
+  "track": "fast",
+  "plan": null,
+  "by": "t43",
+  "created": "2026-11-13T06:51:42.427Z",
+  "updated": "2026-11-13T09:24:19.054Z",
+  "archived": false,
+  "steps": [
+    {
+      "n": 1,
+      "title": "Engine: repo-history setting in bh access, git convergence in workspace.mjs, tests",
+      "agent": "dev-fix-qa2",
+      "status": "done",
+      "started": "2026-11-13T09:16:07.767Z",
+      "finished": "2026-11-13T09:18:32.632Z",
+      "workedMs": 413142,
+      "note": ""
+    },
+    {
+      "n": 2,
+      "title": "Settings: Repo history row in the Access card",
+      "agent": "design",
+      "status": "done",
+      "started": "2026-11-13T07:00:51.540Z",
+      "finished": "2026-11-13T07:02:59.062Z",
+      "workedMs": 127522,
+      "note": ""
+    },
+    {
+      "n": 3,
+      "title": "QA gate and finish",
+      "agent": null,
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-13T09:24:18.951Z",
+      "workedMs": 0,
+      "note": ""
+    }
+  ],
+  "triage": {
+    "size": "small",
+    "kind": "feature",
+    "domains": {
+      "design": 0,
+      "dev": 0,
+      "qa": 0
+    },
+    "research": 0,
+    "ambiguous": 0,
+    "by": "rules"
+  },
+  "qa": {
+    "risk": "high",
+    "qaRequired": true,
+    "testBudget": {
+      "min": 0,
+      "max": 6
+    },
+    "focusAreas": [
+      "concurrency: races, ordering, double runs, and a lock or claim that is never released",
+      "isolation: work stays inside its branch, worktree and permission boundaries"
+    ],
+    "riskFactors": [
+      "concurrency: .bot-herdr/plans/p-20261111-9dkc/comments.json (\"locks\")",
+      "isolation: mods/bot-herdr/engine/bh.mjs (\"worktree\")",
+      "5 files, 89 changed lines in mods/bot-herdr/engine, mods/bot-herdr, .bot-herdr/tasks/t-20261113-pwha",
+      "tests changed with it: test/engine.test.mjs, test/repo-history.test.mjs"
+    ],
+    "existingTestsLikelySufficient": true,
+    "reasoning": "HIGH: concurrency: .bot-herdr/plans/p-20261111-9dkc/comments.json (\"locks\"); isolation: mods/bot-herdr/engine/bh.mjs (\"worktree\"); 5 files, 89 changed lines in mods/bot-herdr/engine, mods/bot-herdr, .bot-herdr/tasks/t-20261113-pwha. the engine's rules (Jev is off or had nothing to read).",
+    "source": "rules",
+    "at": "2026-11-13T07:05:20.272Z"
+  },
+  "summary": "",
+  "base": "88adcf4fa6529e643138c7646a83c51f4adf5f4c"
+}
