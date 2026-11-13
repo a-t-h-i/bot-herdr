@@ -17,7 +17,7 @@ import { colors } from "./theme.js";
 import { Composer, outboxDir, liveAgents } from "./composer.js";
 import { isQuiet, quietStatus } from "./live.js";
 import { FOCUS, OUTGOING, OPEN_TASK, activePage, openTerminal, showPage, sendFromChat } from "./pages.js";
-import { replyFile, replyBody, push, shown, scrollBy, clampScroll, isNew, outcome, clock, segments, fold, linkFiles, fileTarget, FILE_LINK, addComment, editComment, resolveComment, deleteComment } from "./feed.js";
+import { replyFile, replyBody, push, shown, scrollBy, clampScroll, isNew, isHandled, outcome, clock, segments, fold, linkFiles, fileTarget, FILE_LINK, addComment, editComment, resolveComment, deleteComment } from "./feed.js";
 import { openFile } from "./viewer.js";
 import { bh, bhJson, enc, projectDir } from "./bh.js";
 import { roleWord, roleTone, mentionTone, alpha } from "./indicators.js";
@@ -87,7 +87,7 @@ const keepPress = (el) => el.on_mouse_down("left", (_e, cx) => cx.stop_propagati
 export class Chat {
   init(props, cx) {
     this.size = { width: 960, height: 640 };
-    this.entries = load("feed", []);
+    this.entries = load("feed", []).filter((e) => !(e.kind === "agent" && isHandled(e.text)));
     this.seen = load("seen", {}); // address → the last reply text shown
     this.waits = {}; // address → { name, worked, stopped, blocked }: agents we wrote to
     this.doing = {}; // address → what a headless agent is doing ("Read src/app.tsx")
@@ -333,6 +333,7 @@ export class Chat {
           this.seen[a.address] = text;
           save("seen", this.seen);
           delete this.waits[a.address];
+          if (isHandled(text)) continue;
           this.add({ kind: "agent", space: a.space, text: replyBody(text), from: { address: a.address, name: this.composer.nameOf(a.address), tile: a.tile } }, cx);
         }
         const doing = {};

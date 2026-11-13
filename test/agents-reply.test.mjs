@@ -30,3 +30,14 @@ test("a late or handled child report leaves nothing in the chat", async () => {
   assert.equal(toChat("fix the button", "", { asked: true }), null);
   assert.equal(toChat("fix the button", "Done."), "Done.");
 });
+
+test("the chat never shows a (handled) reply, and its value matches the engine's", async () => {
+  const { isHandled, HANDLED: shown } = await import("../mods/bot-herdr/feed.js");
+  const { HANDLED, replyText } = await import("../mods/bot-herdr/engine/lib/agent.mjs");
+  assert.equal(shown, HANDLED);
+  assert.equal(isHandled(replyText(HANDLED)), true);
+  assert.equal(isHandled("(handled) — and one more thing"), false);
+  const chat = readFileSync(fileURLToPath(new URL("../mods/bot-herdr/chat.js", import.meta.url)), "utf8");
+  assert.match(chat, /if \(isHandled\(text\)\) continue;/);
+  assert.match(chat, /load\("feed", \[\]\)\.filter\(\(e\) => !\(e\.kind === "agent" && isHandled\(e\.text\)\)\)/);
+});

@@ -106,6 +106,10 @@ export function replyBody(text) {
   return String(text ?? "").replace(/<!--\s*bh [^>]*-->/g, "").trim();
 }
 
+/** An agent's answer to a late report it already dealt with (engine/lib/agent.mjs HANDLED): never shown. */
+export const HANDLED = "(handled)";
+export const isHandled = (text) => replyBody(text) === HANDLED;
+
 /** A reply file's text counts as new when it has words and differs from the last one seen. */
 export function isNew(text, seen) {
   return typeof text === "string" && replyBody(text).length > 0 && text !== seen;
