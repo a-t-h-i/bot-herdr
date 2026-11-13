@@ -6,7 +6,7 @@
 
 import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { appendJsonl, listDir, newId, now, readJson, readJsonl, store, titleFrom, writeJson } from "./core.mjs";
+import { appendJsonl, listDir, newId, now, readJson, readJsonl, store, titleFrom, withLock, writeJson } from "./core.mjs";
 import { runGit } from "./workspace.mjs";
 
 export const STATUSES = ["backlog", "active", "paused", "done", "abandoned"];
@@ -26,6 +26,19 @@ export function saveTask(root, task) {
   task.updated = now();
   writeJson(file(root, task.id), task);
   return task;
+}
+
+/**
+ * Changes one task under its lock: loaded fresh, changed, saved. Returns what `change` returned.
+ * Two commands changing one task at once never lose an update.
+ */
+export function updateTask(root, id, change) {
+  return withLock(file(root, id), () => {
+    const task = loadTask(root, id);
+    const result = change(task);
+    saveTask(root, task);
+    return result;
+  });
 }
 
 export function listTasks(root, { all = false } = {}) {
@@ -144,9 +157,12 @@ export function worked(task, at = Date.now()) {
 
 export function post(root, id, { kind, text, from = null, to = null }) {
   if (!BOARD_KINDS.includes(kind)) throw new Error(`A board post is one of: ${BOARD_KINDS.join(", ")}.`);
-  const entry = { n: board(root, id).length + 1, at: now(), kind, from, to, text: String(text ?? "").trim() };
-  appendJsonl(join(dir(root, id), "board.jsonl"), entry);
-  return entry;
+  const path = join(dir(root, id), "board.jsonl");
+  return withLock(path, () => {
+    const entry = { n: board(root, id).length + 1, at: now(), kind, from, to, text: String(text ?? "").trim() };
+    appendJsonl(path, entry);
+    return entry;
+  });
 }
 
 export function board(root, id, { kinds = null, since = 0 } = {}) {

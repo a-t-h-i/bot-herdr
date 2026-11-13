@@ -225,6 +225,25 @@ function collectErr(child) {
 const textOf = (content) => (Array.isArray(content) ? content : []).filter((b) => b?.type === "text" && typeof b.text === "string").map((b) => b.text).join("");
 const extra = (agent) => (agent.args ? agent.args.split(/\s+/).filter(Boolean) : []);
 
+/** A turn whose harness says nothing for this long is over; tests pass a smaller `idleMs`. */
+export const TURN_IDLE_MS = 30 * 60 * 1000;
+
+/** The error a silent turn ends with: "no activity for 30 minutes: stopped". */
+const idleStopped = (ms) => `no activity for ${ms >= 60_000 ? `${Math.round(ms / 60_000)} minutes` : `${Math.round(ms)} ms`}: stopped`;
+
+/** A timer that fires after `ms` without a `pet`; `done` clears it. */
+function watchdog(ms, fire) {
+  let timer = setTimeout(fire, ms);
+  timer.unref?.();
+  return {
+    pet: () => {
+      clearTimeout(timer);
+      timer = setTimeout(fire, ms);
+    },
+    done: () => clearTimeout(timer),
+  };
+}
+
 // ── One-shot harnesses: a process per turn ─────────────────────────────────────────────────
 
 /** Commands every agent may run in standard access: the team's tools and read-only git. */
@@ -247,7 +266,7 @@ export function claudeAccess(access, allow = [], { root = asRoot() } = {}) {
 }
 
 /** Claude Code: `claude -p --output-format stream-json`, the brief as an appended system prompt. */
-function claudeTurn({ agent, known, state, briefFile, prompt, cwd, on, access, allow }) {
+function claudeTurn({ agent, known, state, briefFile, prompt, cwd, on, access, allow, idleMs }) {
   const first = !state.session;
   const id = state.session ?? randomUUID();
   const argv = [
@@ -287,11 +306,11 @@ function claudeTurn({ agent, known, state, briefFile, prompt, cwd, on, access, a
       if (event.is_error || (event.subtype && event.subtype !== "success")) turn.error = event.result?.trim() || (event.errors ?? []).join("; ") || `stopped: ${event.subtype}`;
       else if (typeof event.result === "string" && event.result.trim()) turn.text = event.result;
     }
-  }, { session: id });
+  }, { session: id, idleMs });
 }
 
 /** Codex: `codex exec --json`, resumed by thread id; the brief leads the first prompt. */
-function codexTurn({ agent, known, state, brief, prompt, cwd, on, access }) {
+function codexTurn({ agent, known, state, brief, prompt, cwd, on, access, idleMs }) {
   const run = known.find((k) => k.key === agent.harness)?.run ?? ["codex"];
   const effort = agent.effort && effortsOf("codex", agent.model).includes(agent.effort) ? ["-c", `model_reasoning_effort=${agent.effort}`] : [];
   const argv = [
@@ -320,11 +339,11 @@ function codexTurn({ agent, known, state, brief, prompt, cwd, on, access }) {
       if (item.type === "mcp_tool_call") on({ kind: "tool", line: `${item.server ?? "mcp"}: ${item.tool ?? "tool"}` });
     }
     if (event.type === "turn.failed") turn.error = event.error?.message ?? "Codex reported a failed turn";
-  }, { session: state.session });
+  }, { session: state.session, idleMs });
 }
 
 /** pi and Oh My Pi: `-p --mode json`, one session folder per agent; the brief as a system prompt file. */
-function piTurn({ agent, known, state, key, briefFile, prompt, cwd, on }) {
+function piTurn({ agent, known, state, key, briefFile, prompt, cwd, on, idleMs }) {
   const dir = ensureDir(join(DATA, "sessions", key));
   const argv = [...argvOf(agent, known), "-p", "--mode", "json", "--session-dir", dir, "--append-system-prompt", briefFile, ...(state.session ? ["--continue"] : [])];
   return oneShot(argv, prompt, cwd, (event, turn) => {
@@ -343,7 +362,7 @@ function piTurn({ agent, known, state, key, briefFile, prompt, cwd, on }) {
       }
       if (event.message.stopReason === "error") turn.error = event.message.errorMessage || "the model returned an error";
     }
-  }, { session: state.session ?? "pi" });
+  }, { session: state.session ?? "pi", idleMs });
 }
 
 function asksPerson(name, input = {}) {
@@ -357,30 +376,41 @@ function asksPerson(name, input = {}) {
 /** Runs one process for one turn: the prompt on stdin, JSON lines out. */
 function oneShot(argv, prompt, cwd, handle, init = {}) {
   const child = launch(argv, { cwd });
+  const ms = init.idleMs ?? TURN_IDLE_MS;
   const turn = { text: "", error: null, session: init.session ?? null, cancelled: false, asked: false };
   const err = collectErr(child);
+  const idle = watchdog(ms, () => {
+    turn.error = idleStopped(ms); // not cancelled: the reply must say why it stopped
+    stop(child);
+  });
   lines(child, (event) => {
     if (turn.asked) return;
+    idle.pet();
     handle(event, turn);
     if (turn.asked) stop(child); // it asked the user: the turn ends here
   });
   child.stdin.on("error", () => {});
   child.stdin.end(prompt);
-  const done = new Promise((resolve) => {
+  return {
+    done: ended(child, turn, argv, err, idle),
+    cancel: () => {
+      idle.done();
+      turn.cancelled = true;
+      stop(child);
+    },
+  };
+}
+
+/** The turn's `done`: the child's end, with its last stderr when it failed and said nothing. */
+function ended(child, turn, argv, err, idle) {
+  return new Promise((resolve) => {
     child.on("error", (e) => resolve({ ...turn, error: `couldn't start ${argv[0]}: ${e.message}` }));
     child.on("close", (code) => {
       if (turn.cancelled || turn.asked) return resolve(turn);
       if (code !== 0 && !turn.text && !turn.error) turn.error = err().split("\n").slice(-6).join("\n") || `${argv[0]} exited with ${code}`;
       resolve(turn);
     });
-  });
-  return {
-    done,
-    cancel: () => {
-      turn.cancelled = true;
-      stop(child);
-    },
-  };
+  }).finally(() => idle.done());
 }
 
 // ── ACP harnesses: one process for the agent's whole life ──────────────────────────────────
@@ -480,6 +510,7 @@ export class Acp {
   }
 
   message(m) {
+    this.idle?.pet(); // anything from the agent means the turn is alive
     if (m.method === "session/update") {
       const u = m.params?.update ?? {};
       if (u.sessionUpdate === "agent_message_chunk" && u.content?.type === "text") this.said(u.content.text);
@@ -525,18 +556,30 @@ export class Acp {
     }
   }
 
-  turn({ brief, prompt, on }) {
+  turn({ brief, prompt, on, idleMs = TURN_IDLE_MS }) {
     this.on = on;
     this.text = "";
     this.block = "";
     this.asked = false;
     this.askCall = null;
+    this.idleLost = null;
+    this.idleStop = null;
+    this.idle = watchdog(idleMs, () => {
+      this.idleLost = idleStopped(idleMs);
+      if (this.session) this.send({ method: "session/cancel", params: { sessionId: this.session } });
+      this.idleStop?.(); // the prompt's answer may never come: the turn ends here
+    });
     const done = (async () => {
       try {
         const first = !this.child;
         if (first) await this.start();
         await this.pickModel(); // every turn: a model changed in Settings reaches a live session too
-        const r = await this.request("session/prompt", { sessionId: this.session, prompt: [{ type: "text", text: first ? `${brief}\n\n${prompt}` : prompt }] });
+        if (this.idleLost) return { text: this.text, error: this.idleLost, session: this.session };
+        const stopped = new Promise((resolve) => {
+          this.idleStop = () => resolve({ stopped: true });
+        });
+        const r = await Promise.race([this.request("session/prompt", { sessionId: this.session, prompt: [{ type: "text", text: first ? `${brief}\n\n${prompt}` : prompt }] }), stopped]);
+        if (this.idleLost) return { text: this.text, error: this.idleLost, session: this.session };
         if (this.asked) return { text: this.text, asked: true, error: null, session: this.session };
         if (r.error) return { text: this.text, error: r.error.message ?? "the agent refused the prompt", session: this.session };
         if (r.result?.stopReason === "cancelled") return { text: this.text, cancelled: true, session: this.session };
@@ -544,11 +587,15 @@ export class Acp {
         return { text: this.text, error: null, session: this.session };
       } catch (e) {
         return { text: "", error: e.message, session: null };
+      } finally {
+        this.idle?.done();
+        this.idle = null;
       }
     })();
     return {
       done,
       cancel: () => {
+        this.idle?.done();
         if (this.session) this.send({ method: "session/cancel", params: { sessionId: this.session } });
       },
     };

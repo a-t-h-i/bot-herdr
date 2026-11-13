@@ -202,12 +202,14 @@ export function sync(root) {
   return agents.filter((a) => !a.lead).map((a) => writeTemplate(a, known, { body: brief(a, { mode: "child", root }) })).filter(Boolean);
 }
 
-/** `hc …`, its output passed back. */
+/** `hc …`, its output passed back. A call that hangs is ended after `timeout` ms (30 s). */
 export function hc(args, opts = {}) {
   // BH_HC names a script to run in hc's place (the tests' stand-in). Never through a shell:
   // a brief is one argument, whatever it holds.
   const fake = process.env.BH_HC;
-  const r = fake ? spawnSync(process.execPath, [fake, ...args], { encoding: "utf8", ...opts }) : spawnSync("hc", args, { encoding: "utf8", ...opts });
+  const timeout = opts.timeout ?? 30000;
+  const r = fake ? spawnSync(process.execPath, [fake, ...args], { encoding: "utf8", ...opts, timeout }) : spawnSync("hc", args, { encoding: "utf8", ...opts, timeout });
+  if (r.error?.code === "ETIMEDOUT") return { code: 1, out: r.stdout ?? "", err: `hc ${args[0] ?? "run"} timed out after ${timeout / 1000} s` };
   return { code: r.status ?? 1, out: r.stdout ?? "", err: r.stderr ?? (r.error ? String(r.error.message) : "") };
 }
 

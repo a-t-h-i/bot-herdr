@@ -108,6 +108,16 @@ function changeOne(M, owner, flags, words) {
   return null;
 }
 
+/** Who a command speaks for: BH_AGENT (a child says its name), else the terminal it runs in. */
+const actor = () => process.env.BH_AGENT || myAddress() || null;
+
+/** Who a step start is by: --agent, else the actor; a done or a block only takes --agent. */
+function stepAgent(flags, task, n, to) {
+  if (flags.agent) return flags.agent;
+  const step = task.steps.find((s) => s.n === Number(n));
+  return to === "start" && !step?.agent ? actor() : null;
+}
+
 /**
  * Settings → Git isolation (or --branch / --worktree / --no-git for this one task): gives a new
  * task its branch or worktree. Returns why it couldn't, or "".
@@ -167,50 +177,51 @@ async function main(argv) {
       if (sub === "current") return out(flags, T.currentTask(root), (t) => t?.id ?? "No task.");
       const id = /^t-\d{8}-\w+$/.test(args[0] ?? "") ? args[0] : T.currentTask(root)?.id;
       need(id, `bh task ${sub} <id>`);
-      const task = T.loadTask(root, id);
       const rest2 = args[0] === id ? args.slice(1) : args;
       if (sub === "show" || sub === undefined) {
+        const task = T.loadTask(root, id);
         const where = [W.gitLine(task.git), W.missingWorktree(task)].filter(Boolean).join("\n");
         return out(flags, { ...task, worked: T.worked(task), board: T.board(root, id), cwd: W.taskCwd(task, root) }, () => T.taskText(task, T.board(root, id)).replace(/\n/, `\n${where ? `${where}\n` : ""}`));
       }
       if (sub === "steps") {
         const titles = typeof flags.file === "string" ? T.stepsFromMarkdown(bodyText(flags, [])) : rest2;
         need(titles.length || "", `bh task steps <id> "<step 1>" "<step 2>" …`);
-        T.setSteps(task, titles);
-        T.saveTask(root, task);
+        const task = T.updateTask(root, id, (t) => T.setSteps(t, titles));
         return out(flags, task, (t) => t.steps.map((s) => `${s.n}. ${s.title}`).join("\n"));
       }
       if (sub === "step") {
         const [n, to] = rest2;
         need(to, "bh task step <id> <n> start|done|block|skip");
-        const step = T.moveStep(task, n, to, { agent: flags.agent, note: flags.note });
-        T.saveTask(root, task);
+        const step = T.updateTask(root, id, (t) => T.moveStep(t, n, to, { agent: stepAgent(flags, t, n, to), note: flags.note }));
         return out(flags, step, (s) => `Step ${s.n} is ${s.status}: ${s.title}`);
       }
       if (sub === "status") {
-        T.setStatus(task, need(rest2[0], "bh task status <id> <status>"));
-        T.saveTask(root, task);
+        const status = need(rest2[0], "bh task status <id> <status>");
+        const task = T.updateTask(root, id, (t) => T.setStatus(t, status));
         return out(flags, task, (t) => `${t.id} is ${t.status}.`);
       }
       if (sub === "comment") {
-        const one = changeOne(T, task, flags, () => rest2.join(" ") || bodyText(flags, []));
-        const x = one?.c ?? T.comment(task, { step: flags.step ?? null, text: need(rest2.join(" ") || bodyText(flags, []), 'bh task comment <id> [--step N] "<text>"') });
-        T.saveTask(root, task);
-        return out(flags, x, () => one?.said ?? `Comment ${x.id} added.`);
+        const words = () => rest2.join(" ") || bodyText(flags, []);
+        const usage = 'bh task comment <id> [--step N] "<text>"';
+        const one = T.updateTask(root, id, (t) => changeOne(T, t, flags, words) ?? { c: T.comment(t, { step: flags.step ?? null, text: need(words(), usage) }) });
+        return out(flags, one.c, () => one.said ?? `Comment ${one.c.id} added.`);
       }
       if (sub === "resolve" && flags.comment !== undefined) {
-        const x = T.resolveComment(task, String(flags.comment));
-        T.saveTask(root, task);
+        const x = T.updateTask(root, id, (t) => T.resolveComment(t, String(flags.comment)));
         return out(flags, x, () => `Comment ${x.id} resolved.`);
       }
       if (sub === "resolve") {
-        task.comments = (task.comments ?? []).map((x) => ({ ...x, open: false }));
-        T.saveTask(root, task);
+        const task = T.updateTask(root, id, (t) => {
+          t.comments = (t.comments ?? []).map((x) => ({ ...x, open: false }));
+          return t;
+        });
         return out(flags, task, () => "Comments marked addressed.");
       }
       if (sub === "archive" || sub === "unarchive") {
-        task.archived = sub === "archive";
-        T.saveTask(root, task);
+        const task = T.updateTask(root, id, (t) => {
+          t.archived = sub === "archive";
+          return t;
+        });
         return out(flags, task, (t) => `${t.id} ${t.archived ? "archived" : "back in the list"}.`);
       }
       if (sub === "delete") {
@@ -224,7 +235,7 @@ async function main(argv) {
       const id = need(args[0], "bh board post|read <task> …");
       if (sub === "post") {
         const [kind, ...words] = args.slice(1);
-        const entry = T.post(root, id, { kind, text: need(words.join(" ") || bodyText(flags, []), 'bh board post <task> <kind> "<text>"'), from: flags.from ?? null, to: flags.to ?? null });
+        const entry = T.post(root, id, { kind, text: need(words.join(" ") || bodyText(flags, []), 'bh board post <task> <kind> "<text>"'), from: flags.from ?? actor(), to: flags.to ?? null });
         return out(flags, entry, (e) => `Posted ${e.kind} #${e.n}.`);
       }
       const kinds = flags.kinds ? String(flags.kinds).split(",") : null;
@@ -479,11 +490,7 @@ async function main(argv) {
           ? team.hc(["run", "--bg", "--name", name, "--cwd", cwd, template.name, first])
           : team.hc(["run", "--bg", "--name", name, "--cwd", cwd, "--", ...withPrompt(argvOf(agent, known, { effort }), first), `${body}\n\n${first}`]);
       }
-      if (task && flags.step) {
-        const t = T.loadTask(root, task);
-        T.moveStep(t, flags.step, "start", { agent: name });
-        T.saveTask(root, t);
-      }
+      if (task && flags.step) T.updateTask(root, task, (t) => T.moveStep(t, flags.step, "start", { agent: name }));
       if (r.code !== 0) throw new Error(`hc run failed: ${(r.err || r.out).trim()}`);
       return out(flags, { name, agent: a.name, effort, routed, hc: r.out.trim() }, (x) => `Started ${x.name} (${x.agent}${x.effort ? `, effort ${x.effort}` : ""}${x.routed ? `; routed: ${x.routed}` : ""}). Wait with hc wait --children any.`);
     }
@@ -503,10 +510,9 @@ async function main(argv) {
         const task = flags.task ? T.loadTask(root, flags.task) : null;
         const { files, diff } = changes(root, flags.base ?? task?.base);
         const risk = await C.qaRisk(c, { files, diff, request: task?.request, bugfix: task?.triage?.kind === "bugfix" });
-        if (task) {
-          task.qa = risk;
-          T.saveTask(root, task);
-        }
+        if (task) T.updateTask(root, flags.task, (t) => {
+          t.qa = risk;
+        });
         const { qaRiskBrief } = await import("./classifier/qa-risk.mjs");
         return out(flags, risk, () => qaRiskBrief(risk));
       }

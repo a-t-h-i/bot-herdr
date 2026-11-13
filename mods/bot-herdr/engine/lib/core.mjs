@@ -5,7 +5,7 @@
 // belongs to a project (tasks, plans, knowledge, scripts) is kept in the project, in .bot-herdr/.
 
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -94,6 +94,51 @@ export function readText(path, fallback = "") {
 export function appendJsonl(path, value) {
   ensureDir(dirname(path));
   appendFileSync(path, JSON.stringify(value) + "\n");
+}
+
+const SLEEP = new Int32Array(new SharedArrayBuffer(4)); // for Atomics.wait: a synchronous sleep
+const LOCK_WAIT_MS = 5000;
+const LOCK_STALE_MS = 10_000;
+
+/**
+ * Runs `fn` holding `<path>.lock`, so two commands never read-modify-write one file at once.
+ * The lock is a file made exclusively, waited on, and removed afterwards; one left by a killed
+ * command (older than 10 s) is stale and is taken over. Returns what `fn` returned.
+ */
+export function withLock(path, fn) {
+  const lock = `${path}.lock`;
+  ensureDir(dirname(lock));
+  const until = Date.now() + LOCK_WAIT_MS;
+  let fd;
+  while (fd === undefined) {
+    try {
+      fd = openSync(lock, "wx");
+    } catch (e) {
+      if (e.code !== "EEXIST") throw e;
+      if (clearStaleLock(lock)) continue;
+      if (Date.now() >= until) throw new Error(`bh: ${path} is locked by another command; try again`);
+      Atomics.wait(SLEEP, 0, 0, 25);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    closeSync(fd);
+    try {
+      unlinkSync(lock);
+    } catch {}
+  }
+}
+
+/** Removes a lock file old enough to be from a killed command; true when there is no lock left. */
+function clearStaleLock(lock) {
+  try {
+    if (Date.now() - statSync(lock).mtimeMs < LOCK_STALE_MS) return false;
+    unlinkSync(lock);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function readJsonl(path) {
