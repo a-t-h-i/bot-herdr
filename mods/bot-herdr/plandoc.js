@@ -379,9 +379,10 @@ export class PlanDoc {
         .on_hover((over, cx) => this.hoverChanged(b.line, over, cx))
         .on_click((_e, cx) => this.startInline(b.line, cx))
         .child(this.markSlot(c, live))
+        // The text takes the row up to 760px; the glyph sits at the right edge (a second flex_1
+        // spacer here split the row in half and held the text to about 440px).
         .child(div().flex_1().min_w(0).max_w(760).child(TextView.markdown(`bh-plan-doc-md-${p.id}-${p.round ?? 0}-${b.line}`, b.text)))
-        .child(div().flex_1().min_w(0))
-        .child(this.marginGlyph(c, live, on || hovered)),
+        .child(this.marginGlyph(c, live, on || hovered).ml_auto()),
       c,
       `bh-plan-doc-b-${p.id}-${b.line}`,
     );
