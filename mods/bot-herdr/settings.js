@@ -14,7 +14,7 @@
 
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, TextareaState, Textarea } from "gpui-base";
-import { agents, panes, spaces, settings, shared, setShared, knownAgents, notify } from "herdr";
+import { agents, panes, spaces, settings, shared, setShared, knownAgents, notify, props, closeOverlay, openOverlay } from "herdr";
 import { SIZE, ICON, TYPE, LINE, SPACE, CONTROL, CHIP, MARK, PIP, HAIR, GLYPH, clickable, pressable, focusable, textWidth } from "./look.js";
 import { actionButton } from "./button.js";
 import { stateView, pill, avatar, segmented } from "./switch.js";
@@ -84,15 +84,37 @@ const THRESHOLDS = [
 /** OpenRouter's classifier models (System One): the only provider the classifier uses. */
 const OPENROUTER_MODELS = [{ id: "~typesafe/jev-latest", label: "Jev" }];
 
+/**
+ * The live Settings page, by id. A dialog's props are serialized, so it cannot carry the page:
+ * it carries the id and looks the page up here, in the same module the page registered in.
+ */
+const PAGES = new Map();
+let pageSeq = 0;
+
+/** Opens a card's extra content as a dialog over the page; MoreSheet draws it. */
+function openMore({ kind, key, pageId }) {
+  return openOverlay({
+    mod: "bot-herdr",
+    kind: "dialog",
+    frame: "none",
+    width: 0.6,
+    height: 0.7,
+    props: { view: "settings-more", kind, key, pageId },
+  });
+}
+
 export class Settings {
   init(_props, cx) {
+    // A dialog finds its page by id: overwriting keeps the map at one page, the latest.
+    this.pageId = `settings-${++pageSeq}`;
+    PAGES.clear();
+    PAGES.set(this.pageId, this);
     this.known = [];
     this.knownSaved = "";
     this.inputs = {}; // agent id → { name, model, args, instructions }
     this.open = null; // "<id>:harness" or "<id>:model": the field whose list is open
     const was = remembered();
     this.section = was === "access" || was === "classifier" ? "general" : was; // the tab open
-    this.more = new Set(); // the parts opened past their essentials: an agent's id, "access", "harness", "classifier"
     this.pickedAt = shared(PICKED)?.at ?? 0;
     this.refreshedAt = shared(REFRESH)?.at ?? 0;
     this.asking = {}; // harness → true while `bh models` runs for it
@@ -560,14 +582,9 @@ export class Settings {
       .child(div().text_size(TYPE.lg).font_semibold().child(title));
   }
 
-  /** "More" / "Less": opens a part past its essentials. */
-  disclosure(c, key, label = "More") {
-    const open = this.more.has(key);
-    return actionButton(c, `bh-more-${key}`, open ? "Less" : label, (_e, cx) => {
-      if (open) this.more.delete(key);
-      else this.more.add(key);
-      cx.notify();
-    }, { icon: open ? "chevron-down" : "chevron-right", tone: "quiet" });
+  /** "More" and its siblings ("Add", "Advanced"): opens the card's extra content in a dialog. */
+  disclosure(c, kind, key, label = "More") {
+    return actionButton(c, `bh-more-${key}`, label, () => openMore({ kind, key, pageId: this.pageId }), { icon: "chevron-right", tone: "quiet" });
   }
 
   /** One setting on one line: its name (and a short hint under it) on the left, its control on the right. */
@@ -635,7 +652,6 @@ export class Settings {
     const stops = ["", ...efforts];
     // The essentials: who, harness, model, effort. The rest opens under More.
     const tone = mentionTone(c, a.role !== "custom" ? a.role : a.name);
-    const more = this.more.has(a.id);
     // Plain: the card, the agent's avatar and name, then its fields. Colour only in the avatar
     // and the effort slider.
     return v_flex()
@@ -670,13 +686,9 @@ export class Settings {
         .child(efforts.length
           ? this.slider(c, a, stops, inner, tone)
           : div().text_size(TYPE.sm).text_color(c.faint).child("No effort setting for this harness.")))
-      .when(more, (el) => el
-        .child(v_flex().gap(SPACE[2]).child(this.label(c, "Arguments")).child(this.field(c, inputs.args)))
-        .child(v_flex().gap(SPACE[2]).child(this.label(c, "Instructions")).child(this.textarea(c, inputs.instructions)))
-        .child(div().truncate().text_size(TYPE.xs).text_color(c.faint).child(argvOf(a, this.known).join(" "))))
       // Pinned to the foot, so every card's More sits on the same line.
       .child(div().flex_1())
-      .child(h_flex().child(this.disclosure(c, a.id))));
+      .child(h_flex().child(this.disclosure(c, "agent", a.id))));
   }
 
   /** A multi-line field, framed like field(). */
@@ -860,9 +872,6 @@ export class Settings {
   }
 
   harnesses(c) {
-    const f = this.harnessForm;
-    const open = this.more.has("harness");
-    const col = (label, state, w) => v_flex().gap(SPACE[2]).w(w).child(this.label(c, label)).child(this.field(c, state));
     const found = this.known.filter((k) => k.installed);
     return v_flex()
       .gap(SPACE[4])
@@ -873,12 +882,44 @@ export class Settings {
             .child(div().text_size(TYPE.sm).text_color(c.ink).child(k.name))))
           .when(!found.length, (el) => el.child(div().text_size(TYPE.sm).text_color(c.muted).child("None found")))
           .child(div().flex_1())
-          .child(this.disclosure(c, "harness", "Add")))
-        .when(open, (el) => el.child(h_flex().gap(SPACE[3]).items_end()
-          .child(col("Key", f.key, 120))
-          .child(col("Name", f.name, 160))
-          .child(v_flex().flex_1().min_w(0).gap(SPACE[2]).child(this.label(c, "Command")).child(this.field(c, f.run)))
-          .child(this.button(c, "bh-add-harness", "plus", "Add", (_e, cx) => this.addHarness(cx))))));
+          .child(this.disclosure(c, "harness", "harness", "Add"))));
+  }
+
+  /** The harness dialog: the add form the panel used to open in place. */
+  harnessMore(c) {
+    const f = this.harnessForm;
+    const col = (label, state, w) => v_flex().gap(SPACE[2]).w(w).child(this.label(c, label)).child(this.field(c, state));
+    return v_flex().gap(SPACE[4])
+      .child(h_flex().flex_wrap().gap(SPACE[3]).items_end()
+        .child(col("Key", f.key, 120))
+        .child(col("Name", f.name, 160))
+        .child(v_flex().flex_1().min_w(0).gap(SPACE[2]).child(this.label(c, "Command")).child(this.field(c, f.run))))
+      .child(h_flex().child(this.button(c, "bh-add-harness", "plus", "Add", (_e, cx) => this.addHarness(cx))))
+      .when(Boolean(this.problem), (el) => el.child(div().text_size(TYPE.sm).text_color(c.danger).child(this.problem)));
+  }
+
+  /** An agent's dialog: the arguments, instructions and command the card kept under More. */
+  agentMore(c, id) {
+    const a = this.list().find((x) => x.id === id);
+    const inputs = this.inputs[id];
+    if (!a || !inputs) return div().text_size(TYPE.sm).text_color(c.muted).child("This agent is no longer on the team.");
+    return v_flex().gap(SPACE[4])
+      .child(v_flex().gap(SPACE[2]).child(this.label(c, "Arguments")).child(this.field(c, inputs.args)))
+      .child(v_flex().gap(SPACE[2]).child(this.label(c, "Instructions")).child(this.textarea(c, inputs.instructions)))
+      .child(div().text_size(TYPE.xs).text_color(c.faint).child(argvOf(a, this.known).join(" ")));
+  }
+
+  /** The classifier's dialog: what it decides, and the thresholds the card kept under Advanced. */
+  classifierMore(c) {
+    const k = this.classifier;
+    if (!k) return stateView(c, { id: "bh-cls-more-loading", title: "Loading…", loading: true });
+    return v_flex().gap(SPACE[4])
+      .child(v_flex().gap(SPACE[2])
+        .child(div().text_size(TYPE.md).font_medium().child("Use it for"))
+        .child(h_flex().flex_wrap().gap(SPACE[2]).children(FEATURES.map((f) =>
+          this.chip(c, `bh-feat-${f.key}`, f.label, k.features?.[f.key] !== false, (_e, cx) => this.config({ features: { [f.key]: k.features?.[f.key] === false } }, cx))))))
+      .child(h_flex().gap(SPACE[3]).items_start().children(THRESHOLDS.map((t) =>
+        v_flex().flex_1().min_w(0).gap(SPACE[2]).child(div().text_size(TYPE.xs).text_color(c.muted).child(t.label)).child(div().w(84).child(this.field(c, this.thresholdInputs[t.key]))))));
   }
 
   accessCard(c) {
@@ -912,7 +953,6 @@ export class Settings {
     const model = onOpenRouter ? k.model || OPENROUTER_MODELS[0].id : "";
     const picked = !k.openrouterKey ? "Needs an OpenRouter key" : onOpenRouter ? OPENROUTER_MODELS.find((m) => m.id === model)?.label ?? model : "Pick a model";
     const problem = !k.enabled ? null : !k.openrouterKey ? "Add your OpenRouter key below" : !onOpenRouter ? "Pick an OpenRouter model" : null;
-    const more = this.more.has("classifier");
     const modelSelect = focusable(
       pressable(
         h_flex()
@@ -946,13 +986,7 @@ export class Settings {
       rows: [
         this.settingRow(c, "Model", modelSelect, problem),
         this.settingRow(c, "OpenRouter key", field(this.keyInput), k.key ? "Saved" : k.openrouterKey ? "From OPENROUTER_API_KEY" : "Not set"),
-        more && v_flex().px(PAD).py(SPACE[3]).gap(SPACE[2])
-          .child(div().text_size(TYPE.md).font_medium().child("Use it for"))
-          .child(h_flex().flex_wrap().gap(SPACE[2]).children(FEATURES.map((f) =>
-            this.chip(c, `bh-feat-${f.key}`, f.label, k.features?.[f.key] !== false, (_e, cx) => this.config({ features: { [f.key]: k.features?.[f.key] === false } }, cx))))),
-        more && h_flex().px(PAD).py(SPACE[3]).gap(SPACE[3]).children(THRESHOLDS.map((t) =>
-          v_flex().flex_1().min_w(0).gap(SPACE[2]).child(div().text_size(TYPE.xs).text_color(c.muted).child(t.label)).child(div().w(84).child(this.field(c, this.thresholdInputs[t.key]))))),
-        h_flex().px(PAD).py(SPACE[2]).child(this.disclosure(c, "classifier", "Advanced")),
+        h_flex().px(PAD).py(SPACE[2]).child(this.disclosure(c, "classifier", "classifier", "Advanced")),
       ],
     });
   }
@@ -1019,3 +1053,73 @@ export class Settings {
 }
 
 export { ROLES };
+
+/**
+ * A settings card's More, as a dialog over the page: the fields the card used to open in place
+ * (an agent's arguments and instructions, adding a harness, the classifier's advanced settings).
+ * It draws the Settings page's own rows, so a change saves exactly as it did there; the card
+ * behind it never changes height. Props: { view: "settings-more", kind, key, pageId }.
+ */
+export class MoreSheet {
+  init(given, cx) {
+    this.p = given ?? props() ?? {};
+    this.handle = cx.focus_handle();
+    this.handle.focus();
+  }
+
+  /** The live page this dialog belongs to, or undefined once it is gone. */
+  page() {
+    return PAGES.get(this.p.pageId);
+  }
+
+  close() {
+    closeOverlay(props()?.overlay ?? this.p.overlay);
+  }
+
+  /** The card's title: the agent's avatar and name, or the section's icon and title. */
+  heading(c) {
+    const page = this.page();
+    const agent = this.p.kind === "agent" ? page?.list().find((a) => a.id === this.p.key) : null;
+    const icon = { agent: "users", harness: "page-terminals", classifier: "zap" }[this.p.kind] ?? "page-settings";
+    return h_flex().flex_none().h(CONTROL + SPACE[4]).px(PAD).gap(SPACE[3]).items_center()
+      .border_b(1)
+      .border_color(c.edge)
+      .when(Boolean(agent), (el) => el.child(avatar(c, agent?.name ?? "", mentionTone(c, agent?.role !== "custom" ? agent?.role : agent?.name), 28)))
+      .when(!agent, (el) => el.child(div().flex_none().size(26).rounded(SIZE.nested).flex().items_center().justify_center().bg(c.well).text_color(c.muted)
+        .child(svg(ICON(icon)).size(GLYPH.md))))
+      .child(div().flex_1().min_w(0).truncate().text_size(TYPE.lg).font_semibold()
+        .child(agent ? agent.name : this.p.kind === "harness" ? "Add a harness" : "Classifier"))
+      .child(actionButton(c, "bh-more-close", null, () => this.close(), { icon: "x", tone: "quiet" }));
+  }
+
+  body(c) {
+    const page = this.page();
+    if (!page || typeof page.agentMore !== "function") return div().text_size(TYPE.sm).text_color(c.muted).child("The settings page is no longer open.");
+    if (this.p.kind === "agent") return page.agentMore(c, this.p.key);
+    if (this.p.kind === "harness") return page.harnessMore(c);
+    return page.classifierMore(c);
+  }
+
+  render() {
+    const c = colors();
+    return v_flex()
+      .id("bh-settings-more")
+      .track_focus(this.handle)
+      .on_key_down((e, cx) => {
+        if (e.key !== "escape") return;
+        cx.stop_propagation();
+        this.close();
+      })
+      .size_full()
+      .rounded(SIZE.radius)
+      .bg(c.fill)
+      .border_1()
+      .border_color(c.edge)
+      .shadow_lg()
+      .overflow_hidden()
+      .text_color(c.ink)
+      .child(this.heading(c))
+      .child(div().flex_1().min_h(0).overflow_y_scroll().p(PAD)
+        .child(this.body(c)));
+  }
+}

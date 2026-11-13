@@ -1,0 +1,94 @@
+{
+  "id": "t-20261113-463i",
+  "title": "File popup and settings modal",
+  "request": "Fix the chat file popup not loading its text contents; show the agent Settings cards' More options in a modal instead of expanding the card",
+  "status": "done",
+  "track": "fast",
+  "plan": null,
+  "by": "t43",
+  "created": "2026-11-13T07:17:10.424Z",
+  "updated": "2026-11-13T09:43:57.493Z",
+  "archived": false,
+  "steps": [
+    {
+      "n": 1,
+      "title": "Viewer: the file popup loads its text (node fs read)",
+      "agent": "design-viewer-modal",
+      "status": "done",
+      "started": "2026-11-13T07:17:20.183Z",
+      "finished": "2026-11-13T09:23:39.065Z",
+      "workedMs": 7134888,
+      "note": ""
+    },
+    {
+      "n": 2,
+      "title": "Settings: More opens a modal, cards keep one size",
+      "agent": null,
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-13T09:23:39.162Z",
+      "workedMs": 0,
+      "note": ""
+    },
+    {
+      "n": 3,
+      "title": "Fix QA round 1: More sheet resolves the live page, missing file message",
+      "agent": "design-fix-463i",
+      "status": "done",
+      "started": "2026-11-13T09:23:39.305Z",
+      "finished": "2026-11-13T09:32:57.156Z",
+      "workedMs": 557851,
+      "note": ""
+    },
+    {
+      "n": 4,
+      "title": "QA gate and finish",
+      "agent": null,
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-13T09:43:57.395Z",
+      "workedMs": 0,
+      "note": ""
+    }
+  ],
+  "triage": {
+    "size": "small",
+    "kind": "bugfix",
+    "domains": {
+      "design": 0,
+      "dev": 0,
+      "qa": 0
+    },
+    "research": 0,
+    "ambiguous": 0,
+    "by": "rules"
+  },
+  "qa": {
+    "risk": "high",
+    "qaRequired": true,
+    "testBudget": {
+      "min": 0,
+      "max": 6
+    },
+    "focusAreas": [
+      "destructive operations: they touch only what they should, and a failure halfway leaves things recoverable",
+      "concurrency: races, ordering, double runs, and a lock or claim that is never released",
+      "isolation: work stays inside its branch, worktree and permission boundaries",
+      "the reported bug no longer reproduces"
+    ],
+    "riskFactors": [
+      "destructive operations: mods/bot-herdr/engine/lib/workspace.mjs (\"rmSync(\")",
+      "concurrency: .bot-herdr/plans/p-20261111-9dkc/comments.json (\"locks\")",
+      "isolation: mods/bot-herdr/engine/bh.mjs (\"worktree\")",
+      "a wide change: 8 files, 294 changed lines across 4 modules (mods/bot-herdr/engine, mods/bot-herdr, .bot-herdr/tasks/t-20261113-463i and 1 more)",
+      "a bug fix: the bug must no longer reproduce",
+      "tests changed with it: test/engine.test.mjs, test/repo-history.test.mjs"
+    ],
+    "existingTestsLikelySufficient": true,
+    "reasoning": "HIGH: destructive operations: mods/bot-herdr/engine/lib/workspace.mjs (\"rmSync(\"); concurrency: .bot-herdr/plans/p-20261111-9dkc/comments.json (\"locks\"); isolation: mods/bot-herdr/engine/bh.mjs (\"worktree\"). the engine's rules (Jev is off or had nothing to read).",
+    "source": "rules",
+    "at": "2026-11-13T09:16:15.381Z"
+  },
+  "summary": "",
+  "base": "88adcf4fa6529e643138c7646a83c51f4adf5f4c"
+}

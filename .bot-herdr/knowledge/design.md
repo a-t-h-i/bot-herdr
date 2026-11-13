@@ -9,6 +9,8 @@
 - gpui has no blur or backdrop filter; behind an open file browser or question card the feed is dimmed with bg(ground) at 0.6 instead.
 - Plan asked sets are ordered oldest first, so the last element is the newest: older rounds collapse to one line without a round field.
 - work.js page chrome is PAGE_CHROME (pt SPACE[5] + tab bar CONTROL + GAP): a column that must reach the page's foot sizes this.height - PAGE_CHROME and the page drops its pb(SPACE[5]).
+- Overlay props are serialized (data only, methods dropped), but the overlay shares the page's module realm: pass an id in props and resolve the live object from a module-level Map (settings.js PAGES).
+- The mod runtime's fs/promises has no stat and readFile rejects with a plain Error with no code; test absence with exists(path).
 
 ## Standards
 - When reusing the Composer for non-chat sends (e.g. plan comments), override send but reset input/files/pane state or the composer sticks (chosen by Design)

@@ -6,7 +6,8 @@
 
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, TextView, InputState, Input, Editor, EditorState } from "gpui-base";
-import { props, settings, theme, readTextFile, closeOverlay, openOverlay } from "herdr";
+import { readFile, exists } from "fs/promises";
+import { props, settings, theme, closeOverlay, openOverlay } from "herdr";
 import { SIZE, ICON, TYPE, LINE, SPACE, CONTROL, ROW, PIP, GLYPH, clickable, mix } from "./look.js";
 import { actionButton } from "./button.js";
 import { segmented } from "./switch.js";
@@ -66,15 +67,18 @@ export class FileView {
     const path = this.p.path;
     cx.spawn(async (cx) => {
       try {
-        const text = await readTextFile(path);
-        if (text === null) this.error = "This file isn't there. It may have moved, or it lives in another folder.";
-        else if (text.includes("\0")) this.error = "This is not a text file. Open it in its app.";
+        const text = await readFile(path, "utf8");
+        if (text.includes("\0")) this.error = "This is not a text file. Open it in its app.";
         else {
           this.text = text;
           this.code = this.editorState(text, ext);
         }
       } catch {
-        this.error = "Couldn't read this file (too large, or not readable).";
+        // The runtime's readFile has no `code`: ask whether the file is there at all.
+        const there = await exists(path).catch(() => true);
+        this.error = there
+          ? "Couldn't read this file (too large, or not readable)."
+          : "This file isn't there. It may have moved, or it lives in another folder.";
       }
       cx.notify();
     });
