@@ -17,7 +17,7 @@ import { sendFromChat } from "./pages.js";
 export const CONFIRM_MS = 5000;
 /** The comment links on the work pages: links in TYPE.sm, Delete in the danger tone. */
 export const COMMENT_LINKS = { link: TYPE.sm, danger: true };
-const SHEET_MIN = 480;
+const SHEET_MIN = 560;
 
 /** Comments, the open ones first, then the resolved ones, each in their own order. */
 export function openFirst(list) {
@@ -218,10 +218,10 @@ export class PlanDoc {
     cx.stop_propagation();
   }
 
-  /** 45% of the window, at least 480px, and never wider than the window. */
+  /** 55% of the window, at least 560px, and never wider than the window. */
   sheetW() {
     if (!this.width) return SHEET_MIN;
-    return Math.min(this.width, Math.max(SHEET_MIN, Math.round(this.width * 0.45)));
+    return Math.min(this.width, Math.max(SHEET_MIN, Math.round(this.width * 0.55)));
   }
 
   /** The sheet's left edge: SPACE[4] off the window's right edge; the first frame puts it past that edge. */
@@ -379,7 +379,7 @@ export class PlanDoc {
         .on_hover((over, cx) => this.hoverChanged(b.line, over, cx))
         .on_click((_e, cx) => this.startInline(b.line, cx))
         .child(this.markSlot(c, live))
-        .child(div().flex_1().min_w(0).max_w(600).text_size(TYPE.md).line_height(`${LINE.md}px`).child(TextView.markdown(`bh-plan-doc-md-${p.id}-${p.round ?? 0}-${b.line}`, b.text)))
+        .child(div().flex_1().min_w(0).max_w(760).child(TextView.markdown(`bh-plan-doc-md-${p.id}-${p.round ?? 0}-${b.line}`, b.text)))
         .child(div().flex_1().min_w(0))
         .child(this.marginGlyph(c, live, on || hovered)),
       c,
@@ -422,7 +422,7 @@ export class PlanDoc {
     return h_flex()
       .flex_none()
       .w_full()
-      .max_w(600)
+      .max_w(760)
       .gap(SPACE[3])
       .items_start()
       .px(SPACE[3])
