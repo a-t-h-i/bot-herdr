@@ -28,6 +28,7 @@ import { mentionTone } from "./indicators.js";
 import { MarkdownEditor } from "./mdedit.js";
 import { openNoteForm, NOTE_ADDED } from "./noteform.js";
 import { Composer } from "./composer.js";
+import { messageText } from "./route.js";
 import { mockupFile, openInBrowser } from "./media.js";
 import { openLightbox } from "./lightbox.js";
 import { OpenQuestions } from "./questions.js";
@@ -126,7 +127,7 @@ const day = (iso) => {
 
 const firstLine = (r) => (r.stderr || r.stdout || "").trim().split("\n")[0];
 
-/** A composer for a page's box: `onSend(text, cx)` gets what was written, after the box is cleared; `onAnswer(q, answers, cx)` gets what was answered on its question cards. */
+/** A composer for a page's box: `onSend(text, cx)` gets what was written, with each attached file's path on a line of its own as the chat sends them, after the box is cleared; `onAnswer(q, answers, cx)` gets what was answered on its question cards. */
 function pageComposer(given, cx, { minRows, placeholder, onSend, onAnswer }) {
   const comp = new Composer({});
   comp.init(given, cx);
@@ -134,7 +135,7 @@ function pageComposer(given, cx, { minRows, placeholder, onSend, onAnswer }) {
   comp.placeholder = placeholder;
   comp.hooks.answered = onAnswer ? (q, answers, cx) => onAnswer(q, answers, cx) : undefined;
   comp.send = (cx) => {
-    const text = comp.input.value().trim();
+    const text = messageText(comp.input.value().trim(), comp.files.map((f) => f.path));
     if (comp.sending || !text) return;
     resetComposer(comp);
     cx.notify();
