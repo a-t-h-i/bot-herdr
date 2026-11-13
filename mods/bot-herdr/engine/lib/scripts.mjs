@@ -36,11 +36,15 @@ export function find(root, name) {
   return s;
 }
 
-/** Runs a script in the project, its output passed straight through. Returns the exit code. */
-export function run(root, name, args = []) {
+/** Runs a script in the project. Returns the exit code, or `{ code, out, err }` when `capture` is asked. */
+export function run(root, name, args = [], { capture = false } = {}) {
   const s = find(root, name);
   const runner = RUNNERS[extname(s.file)];
   if (process.platform === "win32" && runner[0] === "python3") runner[0] = "python";
+  if (capture) {
+    const r = spawnSync(runner[0], [...runner.slice(1), s.file, ...args], { cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+    return { code: r.status ?? 1, out: r.stdout ?? "", err: r.stderr ?? (r.error ? String(r.error.message) : "") };
+  }
   const r = spawnSync(runner[0], [...runner.slice(1), s.file, ...args], { cwd: root, stdio: "inherit" });
   return r.status ?? 1;
 }

@@ -6,9 +6,10 @@
 //   node <app home>/mods/bot-herdr/engine/bh.mjs help
 
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { argvOf, effortsOf, slug, withPrompt } from "../roster.js";
-import { APP_HOME, BH, BOOLEANS, DATA, UsageError, accessOf, bodyText, ensureDir, myAddress, need, parseArgs, projectRoot, readJson, readText, sh, store, withLock, writeJson, writeText } from "./lib/core.mjs";
+import { APP_HOME, BH, BOOLEANS, DATA, UsageError, accessOf, bodyText, ensureDir, myAddress, need, now, parseArgs, projectRoot, readJson, readText, sh, store, withLock, writeJson, writeText } from "./lib/core.mjs";
 import * as T from "./lib/tasks.mjs";
 import * as P from "./lib/plans.mjs";
 import * as K from "./lib/knowledge.mjs";
@@ -17,6 +18,8 @@ import * as Q from "./lib/ask.mjs";
 import * as team from "./lib/team.mjs";
 import * as W from "./lib/workspace.mjs";
 import * as C from "./classifier/index.mjs";
+import { fileKind } from "./classifier/qa-risk.mjs";
+import { countTests, tail, testCommand } from "./scripts/lib/common.mjs";
 import { fileKey, replyText } from "./lib/agent.mjs";
 
 const HELP = `bh: bot-herdr's tools. Run from the project folder. Add --json for machine-readable output.
@@ -33,6 +36,7 @@ Tasks
   bh board post <task> contract|decision|blocker|question|done|note "<text>" [--from A] [--to B]
   bh board read <task> [--kinds a,b] [--since N]
   bh report <task> [--step N] --file <path> "<summary>"   record a report on the task (the board entry is the record)
+  bh gate <task> --verdict PASS|CHANGES_REQUIRED [--round N] --file <report> "<summary>"   record the QA gate's verdict
   bh inbox [--task T] [--peek]    reports addressed to me that I have not seen yet
 
 Plans
@@ -140,13 +144,103 @@ function git(root, args) {
   return sh("git", args, { cwd: root });
 }
 
-/** What a task changed since it started: files and diff, untracked files included. */
+/** A check script's `--json` line, its exit code and the text a person reads. */
+function scriptSummary(run) {
+  const last = run.out.trim().split("\n").at(-1) ?? "";
+  try {
+    return { code: run.code, ...JSON.parse(last) };
+  } catch {
+    return { code: run.code, lint: 0, typecheck: 0, tests: 0, ran: false, untested: [], report: [run.out, run.err].filter(Boolean).join("\n").trim() };
+  }
+}
+
+/** The project's own test command, run whole: `npm test` is not one binary, so it gets a shell. */
+function runSuite(cwd, command) {
+  const r = spawnSync(command, { cwd, shell: true, encoding: "utf8", timeout: 600000 });
+  return { code: r.status ?? 1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+}
+
+/** The tree a check saw: its diff from HEAD plus every untracked file's path and content. */
+function changeHash(cwd) {
+  const parts = [git(cwd, ["diff", "HEAD", "--binary"]).out];
+  for (const file of git(cwd, ["ls-files", "--others", "--exclude-standard"]).out.split("\n").filter(Boolean)) parts.push(file, readText(join(cwd, file)));
+  return createHash("sha1").update(parts.join("\n")).digest("hex");
+}
+
+/** What a task changed since it started: files, diff, and untracked paths (their content goes to qa-risk). */
 function changes(root, base) {
   const from = base || "HEAD";
   const diff = git(root, ["diff", from]).out;
   const files = new Set(git(root, ["diff", "--name-only", from]).out.split("\n").filter(Boolean));
-  for (const f of git(root, ["ls-files", "--others", "--exclude-standard"]).out.split("\n").filter(Boolean)) files.add(f);
-  return { files: [...files], diff };
+  const untracked = git(root, ["ls-files", "--others", "--exclude-standard"]).out.split("\n").filter(Boolean);
+  for (const f of untracked) files.add(f);
+  return { files: [...files], diff, untracked };
+}
+
+/** The check scripts' outcome: lint and typecheck what changed, then either targeted tests or, when a changed file has none, the full suite. */
+function runChecks(root, task, base) {
+  const cwd = W.taskCwd(task, root);
+  const extra = [...(base ? ["--base", base] : []), "--json"];
+  const lint = scriptSummary(S.run(cwd, "check_changed", extra, { capture: true }));
+  const plan = scriptSummary(S.run(cwd, "run_changed_tests", [...extra, "--dry-run"], { capture: true }));
+  const uncovered = (plan.untested ?? []).filter((file) => !file.startsWith(".bot-herdr/") && fileKind(file) === "code");
+  const command = uncovered.length ? testCommand(cwd) : "";
+  const targeted = command ? plan : scriptSummary(S.run(cwd, "run_changed_tests", extra, { capture: true }));
+  const full = command ? runSuite(cwd, command) : null;
+  const tests = full ? countTests(full.out) : targeted.tests ?? 0;
+  const ran = { lint: lint.lint ?? 0, typecheck: lint.typecheck ?? 0, tests };
+  const anything = (lint.checks ?? []).length > 0 || Boolean(full) || Boolean(targeted.ran);
+  const codes = [lint.code, full?.code, command ? undefined : targeted.code].filter((code) => code !== undefined);
+  return { cwd, lint, targeted, full, command, ran, anything, exit: !anything ? 0 : codes.some((code) => code !== 0) ? 1 : 0 };
+}
+
+/** What ran, in one line before the verdict. */
+const ranLine = (ran, full) => `Ran: ${ran.lint} lint, ${ran.typecheck} typecheck, ${ran.tests} tests (${full ? "full suite" : "targeted"})`;
+
+/** The verdict in its own words: what ran, and that nothing is set up when no lint or typecheck exists. */
+function verdictLine(exit, ran, lint, testsOk) {
+  const parts = [`${ran.tests} tests ${testsOk ? "pass" : "fail"}`];
+  const kinds = [ran.lint ? "lint" : "", ran.typecheck ? "typecheck" : ""].filter(Boolean);
+  if (kinds.length) parts.push(`${kinds.join(" and ")} ${lint.code === 0 ? (kinds.length > 1 ? "pass" : "passes") : kinds.length > 1 ? "fail" : "fails"}`);
+  return `${exit === 0 ? "PASS" : "FAIL"}: ${parts.join(", ")}${kinds.length ? "" : "; no lint or typecheck is set up"}`;
+}
+
+/** One `### <title>` section of a markdown document, or "" when it has none. */
+function mdSection(md, title) {
+  const lines = String(md ?? "").split("\n");
+  const start = lines.findIndex((line) => new RegExp(`^#{2,4}\\s+${title}\\s*$`, "i").test(line));
+  if (start < 0) return "";
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex((line) => /^#{2,4}\s/.test(line));
+  return (end < 0 ? rest : rest.slice(0, end)).join("\n").trim();
+}
+
+/** The last `bh check` receipt per step, as the lines a review reads. */
+function lastReceipts(list) {
+  const byStep = new Map();
+  for (const receipt of list) byStep.set(receipt.step ?? "task", receipt);
+  return [...byStep].map(([step, r]) => `- step ${step}: ${r.command}: ran ${r.ran?.lint ?? 0} lint, ${r.ran?.typecheck ?? 0} typecheck, ${r.ran?.tests ?? 0} tests${r.fallback ? `, fallback ${r.fallback}` : ""}, exit ${r.exit}, head ${String(r.head ?? "").slice(0, 7)}, diff ${String(r.diff ?? "").slice(0, 12)}`);
+}
+
+/** What a review needs before it reads code: the acceptance criteria, the reports, the receipts and the risk. */
+async function reviewContext(root, task, cwd) {
+  const { qaRiskBrief, unreadRisk } = await import("./classifier/qa-risk.mjs");
+  const criteria = task.plan ? mdSection(readText(join(store(root, "plans", task.plan, "plan.md")), ""), "Acceptance criteria") : "";
+  const reports = [
+    ...task.steps.filter((s) => s.report).map((s) => `- step ${s.n}: ${s.report.file} — ${s.report.summary}`),
+    ...T.board(root, task.id, { kinds: ["done"] }).filter((e) => e.file && !task.steps.some((s) => s.report?.file === e.file)).map((e) => `- board #${e.n}: ${e.file} — ${e.text}`),
+  ];
+  const hash = changeHash(cwd);
+  const risk = task.qa ? qaRiskBrief(task.qa) : `${qaRiskBrief(unreadRisk("this task was not classified with bh classify qa-risk"))}\nThis task was not classified: the engine set a full MEDIUM review.`;
+  const previous = (task.gates ?? []).at(-1);
+  return [
+    "## What the engine checked and found",
+    criteria ? `### Acceptance criteria\n${criteria}` : "",
+    reports.length ? `### Reports on the task\n${reports.join("\n")}` : "",
+    `### Check receipts\nThe tree this review reads hashes to ${hash}. A receipt whose diff hash equals it is proof the check ran on this code: cite it, do not re-run. Re-run anything else you rely on.\n${lastReceipts(T.checks(root, task.id)).join("\n") || "No bh check receipt yet: run bh check yourself."}`,
+    risk,
+    previous ? `### The previous round\nRound ${previous.round} ended ${previous.verdict}: ${previous.file}. Check each finding there first and say which are addressed.` : "",
+  ].filter(Boolean).join("\n\n");
 }
 
 async function main(argv) {
@@ -246,6 +340,17 @@ async function main(argv) {
       }
       const kinds = flags.kinds ? String(flags.kinds).split(",") : null;
       return out(flags, T.board(root, id, { kinds, since: Number(flags.since ?? 0) }), (l) => l.map(T.boardLine).join("\n") || "The board is empty.");
+    }
+
+    case "gate": {
+      const id = need(sub, 'bh gate <task> --verdict PASS|CHANGES_REQUIRED --file <report> "<summary>"');
+      const verdict = need(flags.verdict, "bh gate <task> --verdict PASS|CHANGES_REQUIRED");
+      const summary = need(args.join(" "), 'bh gate <task> --verdict V --file <report> "<summary>"');
+      const file = need(typeof flags.file === "string" ? flags.file : "", "bh gate <task> --file <report>");
+      const task = T.loadTask(root, id);
+      const head = git(W.taskCwd(task, root), ["rev-parse", "HEAD"]).out.trim() || null;
+      const gate = T.recordGate(root, id, { verdict, round: flags.round ? Number(flags.round) : null, file, summary, from: flags.from ?? actor(), head });
+      return out(flags, gate, (g) => `Gate round ${g.round}: ${g.verdict} — ${g.summary}`);
     }
 
     case "report": {
@@ -401,14 +506,27 @@ async function main(argv) {
     }
 
     case "check": {
-      const base = flags.base ?? T.currentTask(root)?.base ?? null;
-      const extra = base ? ["--base", base] : [];
+      const task = flags.task ? T.loadTask(root, flags.task) : T.currentTask(root);
+      const base = flags.base ?? task?.base ?? null;
+      const { cwd, lint, targeted, full, command, ran, anything, exit } = runChecks(root, task, base);
+      const receipt = { at: now(), from: flags.from ?? actor(), step: process.env.BH_STEP ? Number(process.env.BH_STEP) : null, command: "bh check", base, head: git(cwd, ["rev-parse", "HEAD"]).out.trim() || null, diff: changeHash(cwd), ran, fallback: command || null, exit };
+      if (task) T.recordCheck(root, task.id, receipt);
+      if (flags.json) {
+        console.log(JSON.stringify(receipt, null, 2));
+        process.exit(exit);
+      }
       console.log("## Lint and typecheck (check_changed)");
-      const a = S.run(root, "check_changed", extra);
+      console.log(lint.report ?? "");
       console.log("\n## Tests for what changed (run_changed_tests)");
-      const b = S.run(root, "run_changed_tests", extra);
-      console.log(`\n${a === 0 && b === 0 ? "PASS" : "FAIL"}: lint and typecheck ${a === 0 ? "pass" : "fail"}, tests ${b === 0 ? "pass" : "fail"}.`);
-      process.exit(a === 0 && b === 0 ? 0 : 1);
+      console.log(targeted.report ?? "");
+      if (full) console.log(`\nNo targeted test covered the change: ran the full suite (${command})\n${tail(full.out, 40)}`);
+      if (!anything) {
+        console.log("\nNO CHECKS: nothing could verify these files");
+        process.exit(0);
+      }
+      console.log(`\n${ranLine(ran, full)}`);
+      console.log(verdictLine(exit, ran, lint, full ? full.code === 0 : targeted.code === 0));
+      process.exit(exit);
     }
 
     case "ask": {
@@ -490,32 +608,29 @@ async function main(argv) {
       } else if (typeof flags.effort === "string") effort = flags.effort;
       const agent = { ...a, ...(flags.model ? { model: flags.model } : {}) };
       const parent = myAddress();
-      let risk = "";
-      if (mode === "review" && task) {
-        const t = T.loadTask(root, task);
-        if (t.qa) risk = (await import("./classifier/qa-risk.mjs")).qaRiskBrief(t.qa);
-      }
+      const current = task ? T.loadTask(root, task) : null;
+      // A task with a worktree: its agents run there.
+      const cwd = flags.cwd ?? (current ? W.taskCwd(current, root) : root);
+      const review = mode === "review" && current ? await reviewContext(root, current, cwd) : "";
       const report = task ? `.bot-herdr/tasks/${task}/reports/${name}.md` : `.bot-herdr/reports/${name}.md`;
       const plan = flags.panel ?? flags.plan ?? null;
       const about = [
         `You are ${name}.`,
         task ? `Your task is ${task} (bh task show ${task}); post on its board with --from ${name}.` : "",
         flags.panel ? `The plan is ${flags.panel} (bh plan show ${flags.panel}).` : "",
-        `When done or stuck, write your report to ${report} and send its path with a one-line summary: hc send ${parent ?? "<the agent that started you>"} "<summary> — ${report}".`,
+        `When done or stuck, write your report to ${report}${task ? `, record it with bh report ${task}${flags.step ? ` --step ${flags.step}` : ""}${parent ? ` --to ${parent}` : ""} --file ${report} "<one-line summary>"` : ""}, and send its path with a one-line summary: hc send ${parent ?? "<the agent that started you>"} "<summary> — ${report}".`,
       ].filter(Boolean).join(" ");
-      const first = `${text}\n\n(${about})`;
-      // A task with a worktree: its agents run there.
-      const cwd = flags.cwd ?? (task ? W.taskCwd(T.loadTask(root, task), root) : root);
+      const first = [text, `(${about})`, review].filter(Boolean).join("\n\n");
       let r;
       if (team.runsHeadless(agent)) {
         // The agent terminal: it runs the harness headless, writes its own brief, and reports
         // its status, so hc wait sees each turn end.
         const argv = team.agentArgv(agent, { mode, name, parent, task, step: flags.step ?? null, plan, effort, model: flags.model ?? null });
-        r = team.hc(["run", "--bg", "--name", name, "--cwd", cwd, "--", ...argv, "--", risk ? `${first}\n\n${risk}` : first]);
+        r = team.hc(["run", "--bg", "--name", name, "--cwd", cwd, "--", ...argv, "--", first]);
       } else {
         // The template carries the generic brief (role, team, knowledge); this run's specifics go
         // with the task, so one template per agent and mode serves every spawn.
-        const body = team.brief(agent, { mode, root, parent, task, plan, step: flags.step ?? null, name }) + (risk ? `\n\n${risk}` : "");
+        const body = team.brief(agent, { mode, root, parent, task, plan, step: flags.step ?? null, name });
         const variant = [slug(a.name), mode !== "child" ? mode : "", flags.model ? slug(flags.model) : "", effort !== a.effort ? effort : ""].filter(Boolean).join("-");
         // hc runs a template's `command:` through `sh -c`, which Windows doesn't have: there the
         // command goes to hc run as argv instead.
@@ -542,8 +657,9 @@ async function main(argv) {
       }
       if (sub === "qa-risk") {
         const task = flags.task ? T.loadTask(root, flags.task) : null;
-        const { files, diff } = changes(root, flags.base ?? task?.base);
-        const risk = await C.qaRisk(c, { files, diff, request: task?.request, bugfix: task?.triage?.kind === "bugfix" });
+        const cwd = task ? W.taskCwd(task, root) : root;
+        const { files, diff, untracked } = changes(cwd, flags.base ?? task?.base);
+        const risk = await C.qaRisk(c, { files, diff, untracked, root: cwd, request: task?.request, bugfix: task?.triage?.kind === "bugfix" });
         if (task) T.updateTask(root, flags.task, (t) => {
           t.qa = risk;
         });

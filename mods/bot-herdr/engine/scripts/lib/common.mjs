@@ -10,7 +10,7 @@ export function lines(text) {
   return text.split("\n").map((line) => line.trimEnd()).filter(Boolean);
 }
 
-/** The project's root: the git top level around the script, else the folder it runs in. */
+/** The project's root: the git top level around the script (a task's own worktree stays itself), else the folder it runs in. */
 export function projectRoot() {
   return gitTop(process.cwd());
 }
@@ -94,29 +94,62 @@ function stemOf(file) {
   return basename(file, extname(file)).replace(/\.(test|spec)$/, "").replace(/^test_/, "").replace(/_test$/, "");
 }
 
-/** Test files that cover these files: the tests themselves, tests named after them, and tests that import them. */
+const escapeRe = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** The last two path segments: `lib/tasks.mjs` for `mods/bot-herdr/engine/lib/tasks.mjs`. */
+const tailOf = (file) => file.split("/").slice(-2).join("/");
+
+/** What names a file in a test: its path tail in a string, and an import of its stem. */
+function matchersFor(file) {
+  const stem = stemOf(file);
+  const parts = [escapeRe(tailOf(file))];
+  if (stem.length >= 3 && stem !== "index") parts.push(`(from|import|require\\().*[/'"]${escapeRe(stem)}(\\.[a-z]+)?['"]`);
+  return parts.map((part) => new RegExp(part));
+}
+
+/** One `git grep` for every changed file: the tests whose text names one of them. */
+function namingTests(root, matchers, dirs) {
+  const pattern = [...new Set([...matchers.values()].flat().map((re) => re.source))].join("|");
+  const found = [];
+  for (const line of lines(sh("git", ["grep", "-n", "-I", "-E", pattern, "--", ...dirs], { cwd: root }).out)) {
+    const hit = /^(.+?):\d+:(.*)$/.exec(line);
+    if (!hit || !isTest(hit[1])) continue;
+    for (const [file, res] of matchers) if (res.some((re) => re.test(hit[2]))) found.push([file, hit[1]]);
+  }
+  return found;
+}
+
+/** Test files that cover these files: the tests themselves, tests named after them, and tests that name their path. */
 export function testsFor(root, files, all = lines(sh("git", ["ls-files", "--cached", "--others", "--exclude-standard"], { cwd: root }).out)) {
   const tests = all.filter(isTest);
   const found = new Map();
+  const matchers = new Map();
   for (const file of files) {
-    const hits = new Set();
-    if (isTest(file)) hits.add(file);
-    else if (isCode(file)) {
-      const stem = stemOf(file);
-      if (stem.length < 3 || stem === "index") {
-        // An index is named after its folder.
-        const folder = basename(dirname(file));
-        for (const test of tests) if (stemOf(test) === folder) hits.add(test);
-      } else {
-        for (const test of tests) if (stemOf(test) === stem) hits.add(test);
-        // Tests that import it by name.
-        const importers = sh("git", ["grep", "-l", "-E", `(from|import|require\\().*[/'"]${stem.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\.[a-z]+)?['"]`, "--", ...new Set(tests.map((test) => test.split("/")[0]))], { cwd: root });
-        for (const test of lines(importers.out)) if (isTest(test)) hits.add(test);
-      }
-    }
-    found.set(file, [...hits].sort());
+    const stem = stemOf(file);
+    const named = stem.length < 3 || stem === "index" ? basename(dirname(file)) : stem;
+    const hits = new Set(isTest(file) ? [file] : isCode(file) ? tests.filter((test) => stemOf(test) === named) : []);
+    if (isCode(file) && !isTest(file)) matchers.set(file, matchersFor(file));
+    found.set(file, hits);
   }
-  return found;
+  const dirs = [...new Set(tests.map((test) => test.split("/")[0]))];
+  if (matchers.size && dirs.length) for (const [file, test] of namingTests(root, matchers, dirs)) found.get(file).add(test);
+  return new Map([...found].map(([file, hits]) => [file, [...hits].sort()]));
+}
+
+/** How many tests a runner said it ran: node --test, vitest, mocha, jest or pytest. */
+export function countTests(text) {
+  const m = /(?:^|\n)\s*ℹ tests\s+(\d+)/.exec(text) ?? /Tests:\s+(\d+)\s+passed/.exec(text) ?? /(\d+)\s+passing\b/.exec(text) ?? /(\d+)\s+passed\b/.exec(text);
+  return m ? Number(m[1]) : 0;
+}
+
+/** The project's own test command ("" when it has none): what `bh check` falls back to. */
+export function testCommand(root, tool = detect(root)) {
+  if (tool.pkg?.scripts?.test) return runScript(tool.pm, "test");
+  const py = join(root, "pyproject.toml");
+  if (tool.python && (existsSync(join(root, "pytest.ini")) || existsSync(join(root, "tests")) || (existsSync(py) && /pytest/.test(readFileSync(py, "utf8"))))) return "python3 -m pytest -q";
+  if (tool.go) return "go test ./...";
+  if (tool.rust) return "cargo test";
+  return "";
 }
 
 /** Keep the last `max` lines, saying how many were cut. */

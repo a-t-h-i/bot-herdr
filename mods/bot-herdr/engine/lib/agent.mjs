@@ -284,10 +284,13 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
     if (task) for (const e of T.board(root, task, { since: seen.boardN })) lines.push(T.boardLine(e));
     for (const c of newComments(seen)) lines.push(`Comment ${c.id}${c.step ? ` (step ${c.step})` : ""}: ${c.text}`);
     const t = task ? load(T.loadTask, task) : null;
+    const title = (n) => t?.steps.find((s) => String(s.n) === n)?.title ?? "";
     for (const [n, status] of Object.entries(now2.steps)) {
       const was = seen.steps?.[n];
-      if (was && was !== status) lines.push(`${n}. ${t?.steps.find((s) => String(s.n) === n)?.title ?? ""}: ${was} → ${status}`);
+      if (!was) lines.push(`${n}. ${title(n)}: new`);
+      else if (was !== status) lines.push(`${n}. ${title(n)}: ${was} → ${status}`);
     }
+    for (const n of Object.keys(seen.steps ?? {})) if (!Object.hasOwn(now2.steps, n)) lines.push(`${n}: removed`);
     return lines.length ? `## Brief update\n\n${lines.join("\n")}` : "";
   }
 
@@ -479,6 +482,7 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
   process.env.BH_AGENT = who;
   if (parent) process.env.BH_PARENT = parent;
   if (task) process.env.BH_TASK = task;
+  if (step) process.env.BH_STEP = String(step);
   if (mode === "lead") process.env.BH_LEAD = "1";
   for (const sig of ["SIGTERM", "SIGHUP"]) process.on(sig, quit);
   if (tty) write(`\x1b]2;${who}\x07`);

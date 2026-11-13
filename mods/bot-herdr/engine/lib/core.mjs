@@ -5,6 +5,7 @@
 // belongs to a project (tasks, plans, knowledge, scripts) is kept in the project, in .bot-herdr/.
 
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,24 +36,22 @@ export function accessOf() {
 /** The command an agent types to run bh. */
 export const bhCommand = () => `node "${BH.replace(/\\/g, "/")}"`;
 
-/** The project a command is about: the git work tree around `cwd`, else `cwd` itself. */
+/** The git work tree around `cwd` (a task's own worktree stays itself: its files are there), else `cwd`. */
 export function projectRoot(cwd = process.cwd()) {
-  let top = cwd;
   try {
-    top = execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || cwd;
+    return execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || cwd;
   } catch {
-    top = cwd;
+    return cwd;
   }
-  // A task's worktree (.bot-herdr/worktrees/<branch>) belongs to the project it was made from:
-  // its agents read and post to that project's tasks.
-  const inWorktree = /^(.*?)[\\/]\.bot-herdr[\\/]worktrees[\\/]/.exec(`${top}/`);
-  return inWorktree ? inWorktree[1] : top;
 }
 
-/** The project's .bot-herdr folder (made on first use), or a path inside it. */
+/**
+ * The project's .bot-herdr folder (made on first use), or a path inside it. A task's worktree
+ * (.bot-herdr/worktrees/<branch>) keeps its tasks and plans in the project it was made from.
+ */
 export function store(root, ...parts) {
-  const dir = join(root, ".bot-herdr", ...parts);
-  return dir;
+  const inWorktree = /^(.*?)[\\/]\.bot-herdr[\\/]worktrees[\\/]/.exec(`${root}/`);
+  return join(inWorktree ? inWorktree[1] : root, ".bot-herdr", ...parts);
 }
 
 export function ensureDir(dir) {
@@ -97,24 +96,30 @@ export function appendJsonl(path, value) {
 }
 
 const SLEEP = new Int32Array(new SharedArrayBuffer(4)); // for Atomics.wait: a synchronous sleep
-const LOCK_WAIT_MS = 5000;
+const LOCK_WAIT_MS = 15_000; // longer than a stale lock's age, so a killed command never fails the next
 const LOCK_STALE_MS = 10_000;
+// On Windows a lock file another process is deleting makes an exclusive create fail with EPERM
+// (or EACCES), not EEXIST: both mean "held, wait".
+const HELD = new Set(["EEXIST", "EPERM", "EACCES"]);
 
 /**
- * Runs `fn` holding `<path>.lock`, so two commands never read-modify-write one file at once.
- * The lock is a file made exclusively, waited on, and removed afterwards; one left by a killed
- * command (older than 10 s) is stale and is taken over. Returns what `fn` returned.
+ * Runs `fn` holding `<path>.lock`, so two commands never read-modify-write one file at once. The
+ * lock is a file made exclusively and stamped with this command's token, waited on, and removed
+ * afterwards only while it still carries that token. One older than 10 s is stale (its holder
+ * died) and is renamed away first, so two waiters can never both take it. Returns what `fn` returned.
  */
 export function withLock(path, fn) {
   const lock = `${path}.lock`;
   ensureDir(dirname(lock));
+  const token = randomUUID();
   const until = Date.now() + LOCK_WAIT_MS;
   let fd;
   while (fd === undefined) {
     try {
       fd = openSync(lock, "wx");
+      writeFileSync(fd, token);
     } catch (e) {
-      if (e.code !== "EEXIST") throw e;
+      if (!HELD.has(e.code)) throw e;
       if (clearStaleLock(lock)) continue;
       if (Date.now() >= until) throw new Error(`bh: ${path} is locked by another command; try again`);
       Atomics.wait(SLEEP, 0, 0, 25);
@@ -125,16 +130,21 @@ export function withLock(path, fn) {
   } finally {
     closeSync(fd);
     try {
-      unlinkSync(lock);
+      if (readFileSync(lock, "utf8") === token) unlinkSync(lock);
     } catch {}
   }
 }
 
-/** Removes a lock file old enough to be from a killed command; true when there is no lock left. */
+/**
+ * Takes away a lock old enough to be a dead command's: renamed to a unique name before it is
+ * removed, so two waiters cannot both take it over. True when there is no lock left.
+ */
 function clearStaleLock(lock) {
   try {
     if (Date.now() - statSync(lock).mtimeMs < LOCK_STALE_MS) return false;
-    unlinkSync(lock);
+    const stale = `${lock}.${process.pid}.${randomUUID().slice(0, 8)}.stale`;
+    renameSync(lock, stale);
+    unlinkSync(stale);
     return true;
   } catch {
     return false;

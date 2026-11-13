@@ -1,4 +1,5 @@
-import { dirname } from "node:path";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 const QA_RISKS = ["none", "low", "medium", "high"];
 import { noul, score, scoreOf, yesOf } from "./client.mjs";
 import { clip } from "./limits.mjs";
@@ -51,7 +52,7 @@ export function parseDiff(diff) {
                     removed: []
                 };
                 files.set(named[1], current);
-            } else current?.added.push(line);
+            } else current?.added.push(line.startsWith("+") ? line.slice(1) : line);
             continue;
         }
         if (line.startsWith("@@")) {
@@ -68,6 +69,35 @@ export function parseDiff(diff) {
         ...stat ? {
             total: Number(stat[2] ?? 0) + Number(stat[3] ?? 0)
         } : {}
+    };
+}
+const UNTRACKED_MAX = 200_000;
+/** Untracked files as the `New files (untracked):` block parseDiff reads; ones too big or unreadable are named back. */
+function withUntracked(input) {
+    const paths = input.root ? input.untracked ?? [] : [];
+    if (!paths.length) return { diff: input.diff, unreadable: [] };
+    const blocks = ["New files (untracked):"];
+    const unreadable = [];
+    for (const path of paths) {
+        let text;
+        try {
+            text = readFileSync(join(input.root, path), "utf8");
+        } catch {
+            unreadable.push(path);
+            continue;
+        }
+        if (text.length > UNTRACKED_MAX) {
+            unreadable.push(path);
+            continue;
+        }
+        blocks.push(`--- ${path}`, ...text.split("\n").map((line)=>`+${line}`));
+    }
+    return {
+        diff: [
+            input.diff,
+            blocks.join("\n")
+        ].filter(Boolean).join("\n"),
+        unreadable
     };
 }
 const SLASH_COMMENT = /^(?:\/\/|\/\*|\*|\*\/|\{\s*\/\*.*\*\/\s*\}$)/;
@@ -198,10 +228,12 @@ function listed(items, max = 3) {
     return items.length > max ? `${items.slice(0, max).join(", ")} and ${items.length - max} more` : items.join(", ");
 }
 export function readChange(input) {
-    const { files: parsed, total } = parseDiff(input.diff);
+    const { diff, unreadable } = withUntracked(input);
+    const { files: parsed, total } = parseDiff(diff);
+    const fresh = new Set(input.untracked ?? []);
     const kinds = input.files.map((path)=>({
             path,
-            kind: fileKind(path, [
+            kind: fresh.has(path) && MANIFEST.test(path) ? "dependency" : fileKind(path, [
                 ...parsed.get(path)?.added ?? [],
                 ...parsed.get(path)?.removed ?? []
             ])
@@ -282,6 +314,11 @@ export function readChange(input) {
     if (input.bugfix) {
         risk = higher(risk, "low");
         factors.push("a bug fix: the bug must no longer reproduce");
+    }
+    const blocked = unreadable.filter((path)=>fileKind(path) === "code");
+    if (blocked.length > 0) {
+        risk = higher(risk, "medium");
+        factors.push(`new source files that could not be read: ${listed(blocked)}`);
     }
     if (tests.length > 0 && functional.length > 0) factors.push(`tests changed with it: ${listed(tests.map(({ path })=>path))}`);
     return {
@@ -451,7 +488,7 @@ function areaFloor(area, hit, jev) {
     if (yes === undefined) return serious && hit.strong ? "high" : "medium";
     if (yes >= 0.5) return serious ? "high" : "medium";
     if (yes >= 0.2) return "medium";
-    return hit.strong ? "medium" : "none";
+    return hit.strong ? "medium" : "low";
 }
 export function combineRisk(reading, jev, at = new Date().toISOString()) {
     let risk = jev ? jev.confidence >= 0.5 ? jev.risk : higher(jev.risk, reading.risk) : reading.risk;

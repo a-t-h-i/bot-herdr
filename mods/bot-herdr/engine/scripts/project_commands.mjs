@@ -3,7 +3,7 @@
 // usage: node {script}
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { detect, projectRoot, runScript } from "./lib/common.mjs";
+import { detect, projectRoot, runScript, testCommand } from "./lib/common.mjs";
 
 const root = projectRoot();
 const tool = detect(root);
@@ -46,4 +46,6 @@ if (tool.go) section("Go", ["- go build ./...", "- go test ./...", "- go vet ./.
 if (tool.rust) section("Rust", ["- cargo build", "- cargo test", "- cargo clippy"]);
 const ci = [".github/workflows"].filter((dir) => existsSync(join(root, dir)));
 if (ci.length > 0) section("CI", ["- .github/workflows/ holds what CI runs; match it locally"]);
+const test = testCommand(root, tool);
+if (test) section("Test command (bh check falls back to it when no targeted test covers the change)", [`- ${test}`]);
 if (!any) console.log("No build, test or lint commands found. Look in README.md before running anything.");

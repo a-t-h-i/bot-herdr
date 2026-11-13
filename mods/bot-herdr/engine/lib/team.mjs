@@ -60,7 +60,7 @@ function reportSection({ parent, task, name, step = null }) {
     "## Reporting",
     `When you are done or stuck, write your report to ${file}: \`## Summary\` (two lines), \`## Changes\` (files and what changed), \`## Brief Check\` (each "Done when" criterion: met or not, with evidence), \`## Verification\` (\`- command — result\`), plus \`## Knowledge Proposals\`, \`## Script Proposals\`, \`## Blockers\` or \`## Pushback\` when you have them.`,
   ];
-  if (task) lines.push(`Then record it on the task, which is the record \`bh inbox\` reads: \`bh report ${task}${step ? ` --step ${step}` : ""} --file ${file} "<one-line summary>"\`.`);
+  if (task) lines.push(`Then record it on the task, which is the record \`bh inbox\` reads: \`bh report ${task}${step ? ` --step ${step}` : ""}${parent ? ` --to ${parent}` : ""} --file ${file} "<one-line summary>"\`.`);
   lines.push(`Then send its path with a one-line summary to ${parent ? `\`${parent}\`` : "the agent that started you"}: \`hc send ${parent ?? "<its address>"} "<summary> — ${file}"\`. Report once, when done or stuck.`);
   lines.push("The user follows every agent in the bot-herdr chat: run headless, your last message of each turn shows there; otherwise save a short plain summary with `bh reply \"<text>\"`.");
   return lines.join("\n");

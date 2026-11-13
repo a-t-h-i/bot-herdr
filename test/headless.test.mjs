@@ -333,3 +333,18 @@ test("bh agent: a turn after no change carries no brief update", async () => {
   assert.equal(agent("u2", "", "--task", task.id, "--", "two").code, 0);
   assert.deepEqual(calls("pi").slice(before).map((c) => c.prompt), ["one", "two"]);
 });
+
+test("bh agent: the brief update lists steps added and removed since the brief", async () => {
+  setTeam("pi");
+  const T = await lib("lib/tasks.mjs");
+  const task = T.newTask(PROJECT, { request: "Steps change", steps: ["One"] });
+  const before = calls("pi").length;
+  assert.equal(agent("u3", "", "--task", task.id, "--", "one").code, 0);
+  T.updateTask(PROJECT, task.id, (t) => T.setSteps(t, ["One", "Two"]));
+  assert.equal(agent("u3", "", "--task", task.id, "--", "two").code, 0);
+  T.updateTask(PROJECT, task.id, (t) => T.setSteps(t, ["One"]));
+  assert.equal(agent("u3", "", "--task", task.id, "--", "three").code, 0);
+  const prompts = calls("pi").slice(before).map((c) => c.prompt);
+  assert.match(prompts[1], /^## Brief update\n\n2\. Two: new\n\ntwo$/);
+  assert.match(prompts[2], /^## Brief update\n\n2: removed\n\nthree$/);
+});

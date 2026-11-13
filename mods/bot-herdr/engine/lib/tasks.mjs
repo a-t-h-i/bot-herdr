@@ -243,6 +243,32 @@ export function deleteComment(task, id) {
 
 export const reportsDir = (root, id) => join(dir(root, id), "reports");
 
+/** One `bh check` run, kept on the task: what ran, on which tree, and its exit (the QA gate reads these). */
+export function recordCheck(root, id, receipt) {
+  const path = join(dir(root, id), "checks.jsonl");
+  return withLock(path, () => {
+    appendJsonl(path, receipt);
+    return receipt;
+  });
+}
+
+/** The runs `bh check` kept for a task, oldest first. */
+export function checks(root, id) {
+  return readJsonl(join(dir(root, id), "checks.jsonl"));
+}
+
+/** A gate verdict on the task, and a `done` board entry for it; round defaults to one past the last. */
+export function recordGate(root, id, { verdict, round = null, file, summary, from = null, head = null }) {
+  if (!["PASS", "CHANGES_REQUIRED", "BLOCKED"].includes(verdict)) throw new Error("A gate verdict is PASS, CHANGES_REQUIRED or BLOCKED.");
+  let gate;
+  updateTask(root, id, (t) => {
+    gate = { round: round ?? ((t.gates ?? []).at(-1)?.round ?? 0) + 1, verdict, file, summary, from, at: now(), head };
+    t.gates = [...(t.gates ?? []), gate];
+  });
+  post(root, id, { kind: "done", text: summary, from, file });
+  return gate;
+}
+
 /** One line per task for `bh task list`. */
 export function taskLine(t) {
   const done = t.steps.filter((s) => s.status === "done" || s.status === "skipped").length;
@@ -276,6 +302,8 @@ export function taskText(t, entries = [], { all = false } = {}) {
   ];
   if (t.triage) lines.push("", "## Classifier triage", JSON.stringify(t.triage));
   if (t.qa) lines.push("", "## QA risk", `${t.qa.risk}: ${t.qa.reasoning ?? ""}`);
+  const gate = (t.gates ?? []).at(-1);
+  if (gate) lines.push("", "## Gate", `gate: round ${gate.round} ${gate.verdict} — ${gate.summary}`);
   if (entries.length) lines.push(...boardLines(entries, all));
   return lines.join("\n");
 }

@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,6 +18,7 @@ process.env.XDG_CONFIG_HOME = join(tmp, "xdg");
 
 const BH = fileURLToPath(new URL("../mods/bot-herdr/engine/bh.mjs", import.meta.url));
 const TASKS = new URL("../mods/bot-herdr/engine/lib/tasks.mjs", import.meta.url).href;
+const CORE = new URL("../mods/bot-herdr/engine/lib/core.mjs", import.meta.url).href;
 const lib = (name) => import(new URL(`../mods/bot-herdr/engine/${name}`, import.meta.url));
 
 /** Runs bh as the chat does (no terminal, no agent name), unless `env` says otherwise. */
@@ -125,4 +126,46 @@ test("a turn whose harness goes silent ends with the idle error", async () => {
   const r = await t.done;
   assert.equal(r.cancelled, false);
   assert.equal(r.error, "no activity for 300 ms: stopped");
+});
+
+test("eight writers, forty posts each: every writer exits 0 and the board holds all 320", async () => {
+  const T = await lib("lib/tasks.mjs");
+  const task = T.newTask(PROJECT, { request: "Contention", steps: [] });
+  const script = join(tmp, "contend.mjs");
+  writeFileSync(script, `
+    const T = await import(${JSON.stringify(TASKS)});
+    const [root, id, who] = process.argv.slice(2);
+    for (let i = 0; i < 40; i++) T.post(root, id, { kind: "note", text: \`\${who} \${i}\`, from: who });
+  `);
+  const writers = Array.from({ length: 8 }, (_, i) => child(script, [PROJECT, task.id, `w${i}`]));
+  await Promise.all(writers);
+  const entries = T.board(PROJECT, task.id);
+  assert.equal(entries.length, 320);
+  assert.deepEqual(entries.map((e) => e.n).sort((a, b) => a - b), Array.from({ length: 320 }, (_, i) => i + 1));
+});
+
+test("a holder taken over as stale does not delete the new holder's lock", async () => {
+  const target = join(tmp, "token-target.json");
+  const lock = `${target}.lock`;
+  const flag = join(tmp, "held.flag");
+  const script = join(tmp, "hold.mjs");
+  writeFileSync(script, `
+    import { appendFileSync } from "node:fs";
+    const { withLock } = await import(${JSON.stringify(CORE)});
+    const [path, flag] = process.argv.slice(2);
+    withLock(path, () => {
+      appendFileSync(flag, "held");
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1500);
+    });
+  `);
+  const holder = spawn(process.execPath, [script, target, flag], { stdio: "inherit" });
+  const closed = new Promise((resolve) => holder.on("close", resolve));
+  while (!existsSync(flag)) await new Promise((resolve) => setTimeout(resolve, 20));
+  // The takeover a waiter would make after 10 s of silence: the lock is renamed away and a new holder takes it.
+  renameSync(lock, `${lock}.taken`);
+  writeFileSync(lock, "another-holder");
+  assert.equal(await closed, 0);
+  assert.equal(readFileSync(lock, "utf8"), "another-holder");
+  unlinkSync(lock);
+  unlinkSync(`${lock}.taken`);
 });
