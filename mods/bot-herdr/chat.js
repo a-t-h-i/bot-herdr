@@ -17,8 +17,8 @@ import { colors } from "./theme.js";
 import { Composer, outboxDir, liveAgents } from "./composer.js";
 import { isQuiet, quietStatus } from "./live.js";
 import { FOCUS, OUTGOING, OPEN_TASK, activePage, openTerminal, showPage, sendFromChat } from "./pages.js";
-import { replyFile, replyBody, push, shown, scrollBy, clampScroll, isNew, isHandled, outcome, clock, segments, fold, linkFiles, fileTarget, FILE_LINK, addComment, editComment, resolveComment, deleteComment } from "./feed.js";
-import { openFile } from "./viewer.js";
+import { replyFile, replyBody, push, shown, scrollBy, clampScroll, isNew, isHandled, outcome, clock, segments, fold, linkFiles, addComment, editComment, resolveComment, deleteComment } from "./feed.js";
+import { openFile, openLink } from "./viewer.js";
 import { bh, bhJson, enc, projectDir } from "./bh.js";
 import { roleWord, roleTone, mentionTone, alpha } from "./indicators.js";
 import { indicatorFor, roleOf, onTurn, TURN_MS } from "./working.js";
@@ -962,15 +962,6 @@ export class Chat {
     });
   }
 
-  /** A link in a reply: a file it names opens over the chat; any other link opens in the browser. */
-  openLink(url) {
-    if (String(url).startsWith(FILE_LINK)) {
-      const { path, line } = fileTarget(url);
-      return openFile({ path, line, root: projectDir() });
-    }
-    if (/^https?:\/\//.test(String(url))) bh(["open", String(url)]);
-  }
-
   reply(c, e, width) {
     // Markdown, with any ```mockup block drawn as a picture.
     const parts = segments(e.text);
@@ -1005,7 +996,7 @@ export class Chat {
           .text_size(TYPE.md)
           .line_height(`${LINE.md}px`)
           .children(parts.map((p, i) => (p.kind === "md"
-            ? TextView.markdown(`bh-md-${e.id}-${i}`, linkFiles(p.text)).selectable(true).on_link_click((url) => this.openLink(url))
+            ? TextView.markdown(`bh-md-${e.id}-${i}`, linkFiles(p.text)).selectable(true).on_link_click((url) => openLink(url, projectDir()))
             : this.picture(c, e, p, pics.indexOf(p), pics, width)))),
       )
       .child(this.replyComments(c, e, show));

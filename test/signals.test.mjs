@@ -3,7 +3,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { openCounts, seatStates, awaited, RESUME_MS } from "../mods/bot-herdr/signals.js";
+import { openCounts, seatStates, awaited, RESUME_MS, boardTone, boardAge, boardRows, BOARD_SHOWN } from "../mods/bot-herdr/signals.js";
 
 test("signals: open questions split where the tabs show them, plan and chat", () => {
   const list = [
@@ -45,4 +45,39 @@ test("signals: a resume mark stands until the task's status changes, or for 10 m
   assert.deepEqual(awaited({ t1: mark }, [{ id: "t1", status: "paused" }], now), {});
   assert.deepEqual(awaited({ t1: mark }, [], now), {});
   assert.deepEqual(awaited({}, [{ id: "t1", status: "backlog" }], now), {});
+});
+
+test("signals: a board entry's tone follows its kind", () => {
+  assert.equal(boardTone("blocker"), "warning");
+  assert.equal(boardTone("question"), "warning");
+  assert.equal(boardTone("done"), "success");
+  assert.equal(boardTone("contract"), "accent");
+  assert.equal(boardTone("decision"), "accent");
+  assert.equal(boardTone("note"), "muted");
+  assert.equal(boardTone(null), "muted");
+});
+
+test("signals: a board entry's age is now, minutes, hours, then its day", () => {
+  const at = "2026-11-13T12:00:00.000Z";
+  const now = Date.parse(at);
+  assert.equal(boardAge(at, now + 30000), "now");
+  assert.equal(boardAge(at, now + 3 * 60000), "3m");
+  assert.equal(boardAge(at, now + 2 * 3600000), "2h");
+  // Past a day it is the entry's own day, not a count: 26 hours later it still reads 13 Nov.
+  assert.equal(boardAge(at, now + 26 * 3600000), "Nov 13");
+  assert.equal(boardAge("2026-01-05T08:00:00.000Z", Date.parse("2026-02-01T00:00:00.000Z")), "Jan 5");
+  assert.equal(boardAge("nonsense", now), "");
+});
+
+test("signals: the board newest first, ten at a time until asked for all of it", () => {
+  const board = Array.from({ length: 13 }, (_, i) => ({ n: i + 1, kind: "note", text: `entry ${i + 1}` }));
+  const ten = boardRows(board, false);
+  assert.equal(ten.rows.length, BOARD_SHOWN);
+  assert.deepEqual(ten.rows.map((e) => e.n), [13, 12, 11, 10, 9, 8, 7, 6, 5, 4]);
+  assert.equal(ten.rest, 3);
+  const all = boardRows(board, true);
+  assert.equal(all.rows.length, 13);
+  assert.equal(all.rows[12].n, 1);
+  assert.deepEqual(boardRows([], false), { rows: [], rest: 0 });
+  assert.deepEqual(boardRows(null, true), { rows: [], rest: 0 });
 });

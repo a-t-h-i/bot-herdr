@@ -22,7 +22,7 @@ import { activePage, sendFromChat, OPEN_TASK } from "./pages.js";
 import { ROSTER_KEY, roster, slug } from "./roster.js";
 import { bh, bhJson, enc, projectDir } from "./bh.js";
 import { outline, notesOn } from "./doc.js";
-import { hash } from "./feed.js";
+import { hash, linkFiles } from "./feed.js";
 import { alpha } from "./working.js";
 import { mentionTone } from "./indicators.js";
 import { MarkdownEditor } from "./mdedit.js";
@@ -31,8 +31,9 @@ import { Composer } from "./composer.js";
 import { messageText } from "./route.js";
 import { mockupFile, openInBrowser } from "./media.js";
 import { openLightbox } from "./lightbox.js";
+import { openFile, openLink } from "./viewer.js";
 import { OpenQuestions, publishCounts } from "./questions.js";
-import { awaited, seatStates } from "./signals.js";
+import { awaited, seatStates, boardAge, boardRows, boardTone } from "./signals.js";
 
 const TABS = [
   { id: "tasks", icon: "page-tasks", label: "Tasks" },
@@ -370,6 +371,7 @@ export class Work {
     this.open = new OpenQuestions(); // the agents' open questions, read here as the chat reads them
     this.resumeAsks = {}; // task id → when Resume asked the Orchestrator (dropped when it is active)
     this.seatSig = ""; // the panel's seat states drawn last, so a change redraws the rail
+    this.boardAll = new Set(); // task ids whose whole board is shown (else its newest ten)
     // Plans are written at length: the Plans page's box starts taller than the chat's.
     this.planComposer = pageComposer(given, cx, {
       minRows: 2,
@@ -976,6 +978,7 @@ export class Work {
       .child(this.taskFacts(c, t))
       .child(this.taskProgress(c, t))
       .child(this.taskSteps(c, t, comments))
+      .child(this.taskBoard(c, t))
       .when(Boolean(t.plan), (el) => el.child(this.taskFullPlan(c, t)))
       .child(this.taskComments(c, t, comments));
   }
@@ -1154,6 +1157,10 @@ export class Work {
     return v_flex()
       .flex_none()
       .child(this.stepLine(c, t, s, { next, on, who, live: notes.filter((x) => x.open !== false).length }))
+      // What the step's report says, under the step's title.
+      .when(Boolean(s.report?.summary), (el) => el.child(
+        div().pl(STEP_TEXT).pr(SPACE[3]).pb(SPACE[1]).text_size(TYPE.sm).text_color(c.muted).truncate().child(s.report.summary),
+      ))
       .when(who.length > 1 && this.descOpen?.has(`step:${t.id}:${s.n}`), (el) => el.children(who.map((name) => this.agentLine(c, name, s.status === "active"))))
       .children(notes.map((x) => this.commentNote(c, x, this.commentActions("task", t.id, x), STEP_TEXT)))
       .when(on, (el) => el.child(this.inlineBox(c).ml(STEP_TEXT)));
@@ -1169,11 +1176,67 @@ export class Work {
         .child(div().flex_1().min_w(0).text_size(TYPE.md).line_height(`${LINE.md}px`).text_color(done ? c.muted : c.ink).child(s.title))
         .when(next, (el) => el.child(pill(c, "next", c.accent)))
         .when(who.length > 0 && (s.status === "active" || done), (el) => el.child(this.stepWho(c, t, s, who)))
+        .when(Boolean(s.report?.file), (el) => el.child(this.reportLink(c, s.report.file, `bh-step-report-${t.id}-${s.n}`)))
         .when(Boolean(time), (el) => el.child(div().flex_none().text_size(TYPE.sm).text_color(c.muted).child(time)))
         .when(live > 0, (el) => el.child(commentCount(c, live))),
       c,
       `bh-step-${t.id}-${s.n}`,
     );
+  }
+
+  /** A quiet Report link: the file opens over the page, from the project folder; the click stays its own. */
+  reportLink(c, file, id) {
+    const open = (_e, cx) => {
+      cx.stop_propagation();
+      openFile({ path: file, root: projectDir() });
+    };
+    return focusable(
+      pressable(h_flex().flex_none().h(CHIP).px(SPACE[2]).gap(SPACE[2]).items_center().rounded(SIZE.nested)
+        .text_size(TYPE.sm).text_color(c.muted).hover((s) => s.bg(c.hover).text_color(c.ink)).on_click(open)
+        .child(svg(ICON("file")).flex_none().size(GLYPH.sm)).child("Report")),
+      id, c);
+  }
+
+  /** The board: the newest entries first (its whole length once asked), each with its kind, who and when. */
+  taskBoard(c, t) {
+    const board = Array.isArray(t.board) ? t.board : [];
+    const all = Boolean(this.boardAll?.has(t.id));
+    const { rows, rest } = boardRows(board, all);
+    return v_flex()
+      .gap(SPACE[2])
+      .child(sectionLabel(c, board.length ? `Board · ${board.length}` : "Board"))
+      .when(!board.length, (el) => el.child(mutedLine(c, "Nothing on the board yet.")))
+      .children(rows.map((e, i) => this.boardRow(c, t, e, i)))
+      .when(rest > 0 || (all && board.length > 10), (el) => el.child(this.boardMore(c, t, board.length, all)));
+  }
+
+  /** One board entry: its kind, who posted it and when, then what it says. */
+  boardRow(c, t, e, i) {
+    const text = linkFiles(String(e.text ?? ""));
+    return v_flex()
+      .flex_none()
+      .gap(SPACE[1])
+      .py(SPACE[1])
+      .opacity(this.rowsIn === false ? 0 : 1)
+      .transition("opacity", { ...MOTION.row, delay: Math.min(i, 8) * MOTION.stagger })
+      .child(h_flex().flex_wrap().gap(SPACE[2]).items_center()
+        .child(pill(c, String(e.kind ?? "note"), c[boardTone(e.kind)] ?? c.muted))
+        .child(div().text_size(TYPE.sm).font_medium().text_color(agentInk(c, e.from ?? "the team")).child(e.from ?? "the team"))
+        .when(Boolean(e.to), (el) => el.child(div().text_size(TYPE.sm).text_color(c.muted).child(`→ ${e.to}`)))
+        .child(div().text_size(TYPE.sm).text_color(c.faint).child(boardAge(e.at)))
+        .when(Boolean(e.file), (el) => el.child(this.reportLink(c, e.file, `bh-board-report-${t.id}-${e.n}`))))
+      .child(TextView.markdown(`bh-board-text-${t.id}-${e.n}`, text).on_link_click((url) => openLink(url, projectDir())));
+  }
+
+  /** The board's "Show all N", or the way back to the newest ten. */
+  boardMore(c, t, n, all) {
+    return actionButton(c, `bh-board-more-${t.id}`, all ? "Show the newest 10" : `Show all ${n}`, (_e, cx) => {
+      const next = new Set(this.boardAll ?? []);
+      if (all) next.delete(t.id);
+      else next.add(t.id);
+      this.boardAll = next;
+      cx.notify();
+    }, { tone: "quiet" });
   }
 
   /** A step's line box: its padding, the hover fill while its comment box is open, and a click that starts a comment. */

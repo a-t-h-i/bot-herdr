@@ -55,3 +55,34 @@ export function awaited(marks, tasks, now = Date.now()) {
   }
   return out;
 }
+
+/** How many board entries show before "Show all". */
+export const BOARD_SHOWN = 10;
+
+/** A board entry's colour by its kind: blockers and questions warn, done succeeds, contract and decision accent, the rest mute. */
+export function boardTone(kind) {
+  const k = String(kind ?? "").toLowerCase();
+  if (k === "blocker" || k === "question") return "warning";
+  if (k === "done") return "success";
+  if (k === "contract" || k === "decision") return "accent";
+  return "muted";
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** How old a board entry is, in one short word: "now", "3m", "2h", then its day ("Nov 12"). */
+export function boardAge(at, now = Date.now()) {
+  const ms = now - Date.parse(at ?? "");
+  if (!Number.isFinite(ms)) return "";
+  if (ms < 60000) return "now";
+  if (ms < 3600000) return `${Math.floor(ms / 60000)}m`;
+  if (ms < 86400000) return `${Math.floor(ms / 3600000)}h`;
+  const iso = String(at).slice(0, 10); // the day as the entry records it, so the text never drifts by timezone
+  return `${MONTHS[Number(iso.slice(5, 7)) - 1] ?? ""} ${Number(iso.slice(8, 10))}`.trim();
+}
+
+/** A task's board newest first: the entries to draw, and how many wait behind "Show all". */
+export function boardRows(board, all, limit = BOARD_SHOWN) {
+  const newest = [...(board ?? [])].reverse();
+  return { rows: all ? newest : newest.slice(0, limit), rest: Math.max(0, newest.length - limit) };
+}

@@ -13,6 +13,7 @@ import { actionButton } from "./button.js";
 import { segmented } from "./switch.js";
 import { colors } from "./theme.js";
 import { bh } from "./bh.js";
+import { FILE_LINK, fileTarget } from "./feed.js";
 import { splitBlocks } from "./mdblocks.js";
 import { findMatches, around, step } from "./search.js";
 
@@ -38,6 +39,18 @@ export function openFile({ path, line = null, root = null }) {
     height: 0.86,
     props: { view: "file", path: resolvePath(path, root), shown: path, line },
   });
+}
+
+/**
+ * A link a page draws: a file it names opens in the viewer (inside `root`), any other link opens
+ * in the browser. What the chat's replies and the task page's board both do with a click.
+ */
+export function openLink(url, root = null) {
+  if (String(url).startsWith(FILE_LINK)) {
+    const { path, line } = fileTarget(url);
+    return openFile({ path, line, root });
+  }
+  if (/^https?:\/\//.test(String(url))) bh(["open", String(url)]);
 }
 
 /** A header control: an icon and, when given, a label. */
