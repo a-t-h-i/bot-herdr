@@ -33,6 +33,20 @@ export const fileKey = (address) => String(address).replace(/[\\/]/g, "_");
 /** The chat's entry for a turn that ended without any words. */
 export const NO_REPLY = "(finished without a reply)";
 
+/** What an agent answers to a child's report it has already dealt with: nothing reaches the chat. */
+export const HANDLED = "(handled)";
+
+/**
+ * What a turn leaves in the chat, or null for nothing. A turn that ended on a question card leaves
+ * nothing (the card says it); a turn on a child's report (`<hc from=…>`) that ends without words or
+ * with HANDLED leaves nothing (a late report on finished work); any other turn without words says so.
+ */
+export function toChat(input, reply, { asked = false } = {}) {
+  if (reply === HANDLED || (!reply && /^\s*<hc from=/.test(input))) return null;
+  if (!reply && asked) return null;
+  return reply || NO_REPLY;
+}
+
 /** The chat's reply file: the answer, and a stamp so the same words twice still show twice. */
 export function replyText(text) {
   return `${String(text).trim()}\n\n<!-- bh ${now()} -->\n`;
@@ -265,7 +279,7 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
     try {
       running = turn({ agent, known, state, key, brief, briefFile, prompt: text, cwd, on, access, allow, acp });
     } catch (e) {
-      return finish({ text: "", error: e.message });
+      return finish({ text: "", error: e.message }, text);
     }
     const r = await running.done;
     running = null;
@@ -274,10 +288,10 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
       save();
     }
     if (r.text && r.text !== shown) say(`\n${r.text.trim()}\n`);
-    return finish(r);
+    return finish(r, text);
   }
 
-  function finish(r) {
+  function finish(r, input = "") {
     if (address) writeJson(join(DATA, "activity", `${fileKey(address)}.json`), { line: null, at: now() });
     let reply = r.text?.trim() ?? "";
     if (r.cancelled) {
@@ -287,9 +301,10 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
       say(`${RED}${r.error}${OFF}`);
       reply = `${reply ? `${reply}\n\n` : ""}**Couldn't finish:**\n\n\`\`\`\n${String(r.error).slice(-1500)}\n\`\`\``;
     }
-    // Every agent's answer reaches the chat, a child's too (it also reports to its parent). A turn
-    // with no words still says it ended, unless it ended on a question card (the card says it).
-    if (address && (reply || !r.asked)) writeText(join(DATA, "replies", `${fileKey(address)}.md`), replyText(reply || NO_REPLY));
+    // Every agent's answer reaches the chat, a child's too (it also reports to its parent); toChat
+    // says when a turn leaves nothing there.
+    const chat = toChat(input, reply, { asked: r.asked });
+    if (address && chat) writeText(join(DATA, "replies", `${fileKey(address)}.md`), replyText(chat));
     status(r.error ? "error" : "done", r.error ? String(r.error).split("\n")[0] : undefined);
   }
 

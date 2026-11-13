@@ -17,5 +17,16 @@ test("AskUserQuestion becomes bh ask's questions", () => {
 test("a child agent's answer is written for the chat too, and a turn with no words leaves a note", () => {
   const src = readFileSync(fileURLToPath(new URL("../mods/bot-herdr/engine/lib/agent.mjs", import.meta.url)), "utf8");
   assert.match(src, /export const NO_REPLY = "\(finished without a reply\)"/);
-  assert.match(src, /if \(address && \(reply \|\| !r\.asked\)\) writeText\(join\(DATA, "replies", `\$\{fileKey\(address\)\}\.md`\), replyText\(reply \|\| NO_REPLY\)\)/);
+  assert.match(src, /const chat = toChat\(input, reply, \{ asked: r\.asked \}\);\n\s*if \(address && chat\) writeText/);
+});
+
+test("a late or handled child report leaves nothing in the chat", async () => {
+  const { toChat, HANDLED, NO_REPLY } = await import("../mods/bot-herdr/engine/lib/agent.mjs");
+  const report = '<hc from="t7 design">Done — .bot-herdr/tasks/t/reports/design.md</hc>';
+  assert.equal(toChat(report, HANDLED), null);
+  assert.equal(toChat(report, ""), null);
+  assert.equal(toChat(report, "Checked: it holds."), "Checked: it holds.");
+  assert.equal(toChat("fix the button", ""), NO_REPLY);
+  assert.equal(toChat("fix the button", "", { asked: true }), null);
+  assert.equal(toChat("fix the button", "Done."), "Done.");
 });
