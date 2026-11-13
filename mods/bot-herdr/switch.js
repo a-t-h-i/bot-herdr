@@ -12,17 +12,33 @@ import { SIZE, TYPE, LINE, SPACE, CONTROL, DOT, GLYPH, ICON, clickable, textWidt
 import { actionButton } from "./button.js";
 import { colors } from "./theme.js";
 import { PAGES, HOLD, activePage, showPage } from "./pages.js";
+import { OPEN_COUNTS } from "./signals.js";
 import { alpha } from "./working.js";
 
 const HOLD_MS = 3000;
 /** herdr's own tabs (mods/tabs) are 29px tall; the page switch's tabs match them. */
 const HERDR_TAB = 29;
 
+/** The width a tab needs at a padding: its icon, its label and, when it has one, its count. */
+const tabWidth = (p, pad, count) => pad * 2 + (p.icon ? GLYPH.sm + SPACE[2] : 0) + Math.ceil(textWidth(p.label, TYPE.sm) * 1.15) + (count ? SPACE[2] + Math.ceil(textWidth(String(count), TYPE.xs)) : 0);
+
+/**
+ * The horizontal padding every tab takes in `room`: the full one when the whole strip fits, else
+ * the narrow one. Narrower still, the strip clips — a label is never dropped for room.
+ */
+function tabPad(room, countOf) {
+  const frame = SPACE[1] * 2 + SPACE[1] * (PAGES.length - 1);
+  const need = (pad) => frame + PAGES.reduce((n, p) => n + tabWidth(p, pad, countOf(p.id)), 0);
+  return need(SPACE[4]) <= room ? SPACE[4] : SPACE[2];
+}
+
 /**
  * The one segmented control: the page switch, a task's tab strip, a plan's list choice.
- * `items` is [{ id, label, on }]; `onPick(id, cx)` receives the picked one.
+ * `items` is [{ id, label, on, count }]; `onPick(id, cx)` receives the picked one. `mark` is how
+ * the picked one stands out: "fill" (a raised tab) or "line" (a thin accent edge, no fill — the
+ * page switch's). `padX` narrows every item's padding together, so a strip can fit any window.
  */
-export function segmented(c, { id, items, onPick, grow, height }) {
+export function segmented(c, { id, items, onPick, grow, height, mark = "fill", padX = SPACE[4] }) {
   // The track insets its items by the same 2px on every side, so the picked one sits centred in
   // it. `height` is the items' own (the page switch matches herdr's 29px tabs); by default the
   // track is a control's height.
@@ -40,7 +56,7 @@ export function segmented(c, { id, items, onPick, grow, height }) {
       clickable(
         div()
           .h(itemH)
-          .px(SPACE[4])
+          .px(padX)
           .flex()
           .items_center()
           .gap(SPACE[2])
@@ -48,15 +64,17 @@ export function segmented(c, { id, items, onPick, grow, height }) {
           .text_size(TYPE.sm)
           .font_medium()
           .when(item.grow, (el) => el.flex_1().justify_center())
-          .when(item.on, (el) => el.bg(c.fill).text_color(c.ink))
-          .when(!item.on, (el) => el.text_color(c.muted).hover((s) => s.text_color(c.ink)))
+          // Every item keeps a 1px border, transparent unless it is the picked one, so nothing
+          // moves when the pick changes.
+          .when(item.on && mark === "line", (el) => el.border_1().border_color(c.accent).text_color(c.ink))
+          .when(!item.on && mark === "line", (el) => el.border_1().border_color(alpha(c.accent, 0)).text_color(c.muted).hover((s) => s.text_color(c.ink)))
+          .when(item.on && mark !== "line", (el) => el.bg(c.fill).text_color(c.ink))
+          .when(!item.on && mark !== "line", (el) => el.text_color(c.muted).hover((s) => s.text_color(c.ink)))
           .on_click((_e, cx) => onPick(item.id, cx))
-          // An icon before the label, in the label's colour (it follows the tab's state). A tab
-          // squeezed to its icon (`compact`) names itself in a tooltip.
+          // An icon before the label, in the label's colour; the label is always there.
           .when(Boolean(item.icon), (el) => el.child(svg(ICON(item.icon)).flex_none().size(GLYPH.sm)))
-          .when(Boolean(item.compact), (el) => el.px(SPACE[3]).tooltip(item.label))
-          .when(!item.compact, (el) => el.child(item.label))
-          .when(item.count != null, (el) => el.child(div().text_size(TYPE.xs).text_color(c.faint).child(String(item.count)))),
+          .child(item.label)
+          .when(item.count != null, (el) => el.child(div().text_size(TYPE.xs).font_semibold().text_color(c.accent).child(String(item.count)))),
         c,
         `${id}-${item.id}`,
       )));
@@ -196,14 +214,13 @@ export class Switch {
     const c = colors();
     const t = theme();
     const active = activePage();
-    // Every tab always shows. Where the strip is too narrow for every label, the tabs not open
-    // keep only their icon; narrower still, the open one does too.
+    // Every tab always shows its icon, label and count. Where the strip is too narrow for that,
+    // each tab's padding narrows; a label is never dropped.
     const room = (this.width ?? 9999) - SPACE[4] * 2;
-    const tab = (p, label) => SPACE[4] * 2 + (p.icon ? GLYPH.sm + SPACE[2] : 0) + (label ? Math.ceil(textWidth(p.label, TYPE.sm) * 1.15) : 0) - (label ? 0 : SPACE[4] * 2 - SPACE[3] * 2);
-    const frame = SPACE[1] * 2 + SPACE[1] * (PAGES.length - 1);
-    const full = frame + PAGES.reduce((n, p) => n + tab(p, true), 0);
-    const some = frame + PAGES.reduce((n, p) => n + tab(p, p.id === active), 0);
-    const mode = full <= room ? "full" : some <= room ? "some" : "icons";
+    // A tab's open-question count, so a question is never missed from another page.
+    const counts = shared(OPEN_COUNTS) ?? {};
+    const countOf = (id) => (Number(counts[id]) > 0 ? Number(counts[id]) : null);
+    const padX = tabPad(room, countOf);
     // Drawn as one bar with herdr's tabs beside it: the same ground and bottom line on the strip,
     // the control itself in our own palette.
     return h_flex()
@@ -227,7 +244,15 @@ export class Switch {
       .child(segmented(c, {
         id: "bh-pages",
         height: HERDR_TAB,
-        items: PAGES.map((p) => ({ id: p.id, icon: p.icon, label: p.label, on: p.id === active, compact: mode === "icons" || (mode === "some" && p.id !== active) })),
+        mark: "line",
+        padX,
+        items: PAGES.map((p) => ({
+          id: p.id,
+          icon: p.icon,
+          label: p.label,
+          on: p.id === active,
+          count: countOf(p.id),
+        })),
         onPick: (id) => showPage(id),
       }));
   }

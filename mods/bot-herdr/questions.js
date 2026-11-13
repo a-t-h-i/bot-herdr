@@ -3,12 +3,20 @@
 // through the same `bh answer`, so a card answered on one page goes from the others on their next poll.
 
 import * as fs from "fs/promises";
-import { readTextFile } from "herdr";
+import { readTextFile, shared, setShared } from "herdr";
 import { outboxDir } from "./composer.js";
 import { bh, enc } from "./bh.js";
+import { openCounts, OPEN_COUNTS } from "./signals.js";
 
 /** Where agents' questions for the user wait (bh ask writes them; answered ones move aside). */
 const questionsDir = () => `${outboxDir().replace(/\/replies$/, "")}/questions`;
+
+/** Writes the open questions' count where every page's tab bar reads it; any page's poll may call it. */
+export function publishCounts(list) {
+  const counts = openCounts(list);
+  if (JSON.stringify(shared(OPEN_COUNTS) ?? null) === JSON.stringify(counts)) return;
+  setShared(OPEN_COUNTS, counts);
+}
 
 /** One question file, or null when it is not an open questionnaire. */
 async function questionAt(name) {

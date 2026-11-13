@@ -71,7 +71,7 @@ function row(c, r, model) {
     .when(needs, (el) => el.bg(alpha(c.warning, 0.1)).border_1().border_color(alpha(c.warning, 0.34)))
     .child(badge(c, r.name))
     .child(rowText(c, r, model));
-  return clickable(body.on_click(() => model.acts.open(r)), c, `bh-rail-${r.address}`, {
+  return clickable(body.on_click((_e, cx) => model.acts.open(r, cx)), c, `bh-rail-${r.address}`, {
     fill: needs ? alpha(c.warning, 0.18) : null,
   })
     .role("button")

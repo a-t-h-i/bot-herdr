@@ -12,7 +12,7 @@
 
 import { div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextView, InputState, Input } from "gpui-base";
-import { settings, shared } from "herdr";
+import { settings, shared, terminals } from "herdr";
 import { SIZE, ICON, TYPE, LINE, SPACE, CONTROL, CHIP, GLYPH, MARK, DOT, PIP, HAIR, MOTION, mix, agentHue, agentInk, agentInkOn, isLight, clickable, pressable, focusable } from "./look.js";
 import { actionButton } from "./button.js";
 import { segmented, stateView, pill } from "./switch.js";
@@ -31,7 +31,8 @@ import { Composer } from "./composer.js";
 import { messageText } from "./route.js";
 import { mockupFile, openInBrowser } from "./media.js";
 import { openLightbox } from "./lightbox.js";
-import { OpenQuestions } from "./questions.js";
+import { OpenQuestions, publishCounts } from "./questions.js";
+import { awaited, seatStates } from "./signals.js";
 
 const TABS = [
   { id: "tasks", icon: "page-tasks", label: "Tasks" },
@@ -297,6 +298,19 @@ function waitingFor(p, seat) {
     .reduce((n, q) => n + (q.questions ?? []).filter((x) => String(x.seat ?? "").toLowerCase() === seat).length, 0);
 }
 
+/** A seat's state in words, as its pill reads it out. */
+const SEAT_STATE = { working: "working", done: "done", none: "not started" };
+
+/** A seat's state from its terminal: a breathing dot at work, a check once it answered, a quiet ring before it starts. */
+function seatMark(c, state) {
+  if (state === "working") {
+    return div().flex_none().size(DOT).rounded_full().bg(c.success).opacity(0.45)
+      .loop("opacity", { from: 0.25, to: 0.9, period: 1600, easing: "ease-in-out" });
+  }
+  if (state === "done") return svg(ICON("check")).flex_none().size(GLYPH.xs).text_color(c.muted);
+  return div().flex_none().size(DOT).rounded_full().border_1().border_color(c.faint);
+}
+
 /** What the user answered to question `i` of a set: the options picked, and the words typed. */
 function answerOf(q, i) {
   const a = q.answers?.[i] ?? {};
@@ -354,6 +368,8 @@ export class Work {
     this.noteAddedAt = shared(NOTE_ADDED)?.at ?? 0;
     this.handle = cx.focus_handle(); // holds the keyboard while the Plans box is folded
     this.open = new OpenQuestions(); // the agents' open questions, read here as the chat reads them
+    this.resumeAsks = {}; // task id → when Resume asked the Orchestrator (dropped when it is active)
+    this.seatSig = ""; // the panel's seat states drawn last, so a change redraws the rail
     // Plans are written at length: the Plans page's box starts taller than the chat's.
     this.planComposer = pageComposer(given, cx, {
       minRows: 2,
@@ -412,6 +428,7 @@ export class Work {
     const got = await bhJson(["task", "list", "--all"], { cwd: dir });
     if (dir !== projectDir()) return;
     this.tasks = got ?? [];
+    this.resumeAsks = awaited(this.resumeAsks, this.tasks ?? []);
     this.problem = got ? null : "Couldn't read the tasks. Is node on your PATH?";
   }
 
@@ -455,10 +472,25 @@ export class Work {
 
   // ── Questions ──────────────────────────────────────────────────────────────────────────────
 
-  /** Reads the agents' open questions; the page's box shows them, as the chat's does. */
+  /** Reads the agents' open questions and the panel's live seats; the page redraws when either changes. */
   async readQuestions(cx) {
     if (!this.hasComposer()) return;
-    if (await this.open.poll()) cx.notify();
+    const changed = await this.open.poll();
+    publishCounts(this.open.list);
+    if (changed || this.trackSeats()) cx.notify();
+  }
+
+  /** Each seat's state from the live terminal named `<seat>-panel`. */
+  seatsNow() {
+    return seatStates(terminals(), SEATS);
+  }
+
+  /** Whether a seat's state changed since the last draw (the rail's pills follow their terminals). */
+  trackSeats() {
+    const now = JSON.stringify(this.seatsNow());
+    if (now === this.seatSig) return false;
+    this.seatSig = now;
+    return true;
   }
 
   /** Your answers to an agent's questions, from the page's box: the chat's bh answer, sent from here. */
@@ -958,6 +990,9 @@ export class Work {
       .items_center()
       .when(running, (el) => el.child(this.pauseButton(c, t)))
       .when(!running && !finished && t.status !== "paused", (el) => el.child(this.resumeButton(c, t)))
+      .when(Boolean((this.resumeAsks ?? {})[t.id]), (el) => el.child(
+        div().text_size(TYPE.xs).text_color(c.faint).child("resume asked"),
+      ))
       .child(this.archiveButton(c, t))
       .when(!running, (el) => el.child(this.taskDelete(c, t)));
   }
@@ -969,11 +1004,13 @@ export class Work {
     }), { icon: "pause" });
   }
 
-  /** Resume asks the Orchestrator to pick the task up again; the toast says the ask went out. */
+  /** Resume asks the Orchestrator to pick the task up again: the toast says it was asked, and a mark stands until it is active. */
   resumeButton(c, t) {
     return actionButton(c, `bh-resume-${t.id}`, "Resume", (_e, cx) => {
       sendFromChat(`Resume task ${t.id}`);
-      this.taskComposer.say(`Resumed ${t.title ?? t.id}`, cx);
+      this.resumeAsks = { ...this.resumeAsks, [t.id]: { at: Date.now(), status: t.status } };
+      this.taskComposer.say(`Asked the Orchestrator to resume ${t.title ?? t.id}`, cx);
+      cx.notify();
     }, { icon: "play" });
   }
 
@@ -1520,10 +1557,7 @@ export class Work {
       .flex_none()
       .gap(SPACE[4])
       .child(this.ideaBubble(c, p, width))
-      .children(asked.map((q, i) => (i === newest ? this.questionSet(c, q) : this.answeredSet(c, q))))
-      .when(!asked.length && !p.markdown, (el) => el.child(h_flex().gap(SPACE[3]).items_center()
-        .child(div().size(DOT).rounded_full().bg(c.accent).loop("opacity", { from: 0.3, to: 1, period: 1200, easing: "ease-in-out" }))
-        .child(mutedLine(c, "Reading the code…"))));
+      .children(asked.map((q, i) => (i === newest ? this.questionSet(c, q) : this.answeredSet(c, q))));
   }
 
   /** An older round of questions: one line each, as the auto-answered line in the GIF. */
@@ -1597,7 +1631,7 @@ export class Work {
       .when((x.options ?? []).length > 0, (el) => el.child(this.optionRow(c, x, picked)))
       .when(mocks, (el) => el.child(this.mockupRow(c, q, x, i)))
       .when(Boolean(typed), (el) => el.child(mutedLine(c, `You: ${typed}`)))
-      .when(q.status === "open" && !picked.length && !typed, (el) => el.child(mutedLine(c, "Waiting for your answer in the chat")));
+      .when(q.status === "open" && !picked.length && !typed, (el) => el.child(mutedLine(c, "Answer below")));
   }
 
   /** The options as text runs: "Label — meaning", the picked one with a check, the rest muted. */
@@ -1680,24 +1714,25 @@ export class Work {
   planRail(c, p, { horizontal }) {
     const off = new Set(p.off ?? []);
     const round = Math.max(1, p.round ?? 0);
+    const states = this.seatsNow();
     return (horizontal ? h_flex().flex_wrap().w_full() : v_flex().flex_none().w(RAIL_W))
       .items_center()
       .gap(SPACE[2])
       .when(!horizontal, (el) => el.gap(SPACE[3]))
       .child(div().tooltip(`Round ${round}`).flex_none().size(32).rounded_full().border_1().border_color(c.edge).flex().items_center().justify_center()
         .text_size(TYPE.sm).font_semibold().child(String(round)))
-      .children(SEATS.map((seat) => this.seatPill(c, p, seat, off.has(seat.id))))
+      .children(SEATS.map((seat) => this.seatPill(c, p, seat, off.has(seat.id), states[seat.id])))
       .child(div().flex_none().bg(c.edge)
         .when(horizontal, (el) => el.w(HAIR).h(CONTROL))
         .when(!horizontal, (el) => el.w(CONTROL + SPACE[2]).h(HAIR)))
       .children(this.railActions(c, p));
   }
 
-  /** A seat's pill: its three letters in the seat's colour on a tint when on, faint with no fill when off, and a badge of its open questions. */
-  seatPill(c, p, seat, off) {
+  /** A seat's pill: its state and three letters in the seat's colour on a tint when on, faint with no fill when off, and a badge of its open questions. */
+  seatPill(c, p, seat, off, state = "none") {
     const hue = agentHue(seat.id, c.accent);
     const on = !off;
-    const el = this.seatFace(c, seat, { hue, on, waiting: waitingFor(p, seat.id) });
+    const el = this.seatFace(c, seat, { hue, on, state, waiting: waitingFor(p, seat.id) });
     if (seat.fixed) return el;
     return focusable(
       pressable(el.hover((s) => s.bg(on ? alpha(hue, 0.22) : c.hover)).on_click((_e, cx) => {
@@ -1709,12 +1744,13 @@ export class Work {
   }
 
   /** A seat's three letters on its pill: in the seat's colour on a tint when on, faint with no fill when off. */
-  seatFace(c, seat, { hue, on, waiting }) {
+  seatFace(c, seat, { hue, on, state, waiting }) {
     return h_flex()
       .relative()
       .flex_none()
       .w(40)
       .h(CONTROL)
+      .gap(SPACE[1])
       .justify_center()
       .items_center()
       .rounded(SIZE.control)
@@ -1724,7 +1760,8 @@ export class Work {
       .text_size(TYPE.xs)
       .font_semibold()
       .text_color(on ? agentInk(c, seat.id) : c.faint)
-      .tooltip(`${seat.name}${on ? "" : " (off)"}`)
+      .tooltip(`${seat.name}${on ? "" : " (off)"} · ${SEAT_STATE[state] ?? state}`)
+      .child(seatMark(c, state))
       .child(seat.short)
       .when(waiting > 0, (x) => x.child(seatBadge(c, waiting)));
   }

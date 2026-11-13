@@ -27,7 +27,7 @@ import { summary } from "./drawer.js";
 import { mockup, openInBrowser, previews, isImage } from "./media.js";
 import { commentRow } from "./plandoc.js";
 import { openLightbox } from "./lightbox.js";
-import { OpenQuestions } from "./questions.js";
+import { OpenQuestions, publishCounts } from "./questions.js";
 import { RAIL_W, RAIL_GAP, showsRail, groups, workingCount } from "./rail.js";
 import { railBeside, railPopover, railButton } from "./railview.js";
 
@@ -252,7 +252,8 @@ export class Chat {
       .child(
         actionButton(c, `bh-e-c-${e.id}`, "Comment", (_ev, cx) => this.startComment(e, null, cx), { icon: "comment", tone: "quiet" })
           .self_start()
-          .opacity(show ? 1 : 0)
+          // Readable enough to Tab to; it lights fully under the pointer or the keyboard.
+          .opacity(show ? 1 : 0.5)
           .transition("opacity", MOTION.hover),
       )
       .when(Boolean(w && !w.edit), (el) => el.child(this.commentInput(c, e)));
@@ -394,13 +395,14 @@ export class Chat {
     });
   }
 
-  /** Set a task's status from the chat widget. */
+  /** Set a task's status from the chat widget; a failure says why, in the chat. */
   actTask(id, status, cx) {
+    const title = this.tasks.find((t) => t.id === id)?.title ?? id;
     cx.spawn(async (cx) => {
-      try {
-        await bhJson(["task", "status", id, status], { cwd: projectDir() });
-      } catch {
-        // ignore; the widget refreshes on the next poll
+      const r = await bh(["task", "status", id, status], { cwd: projectDir() });
+      if (r.code !== 0) {
+        const why = (r.stderr || r.stdout || "it failed").trim().split("\n")[0];
+        this.composer.say(`Couldn't ${status === "paused" ? "pause" : "resume"} ${title}: ${why}`, cx, "error");
       }
       this.loadingTasks = false;
       this.loadTasks(cx);
@@ -519,9 +521,10 @@ export class Chat {
         })));
   }
 
-  /** Reads new question files; a file that went (answered) drops its card. */
+  /** Reads new question files; a file that went (answered) drops its card; the tabs keep the count. */
   async readQuestions(cx) {
     if (await this.open.poll()) cx.notify();
+    publishCounts(this.open.list);
   }
 
   /** Your answers to an agent's questions (from the composer's drawer), sent back with bh answer. */
@@ -653,8 +656,9 @@ export class Chat {
   /** What a rail row does: open an agent's terminal, open the question it asks, close the rail. */
   railActs() {
     return {
-      open: (r) => {
-        this.railOpen = false;
+      // Like Esc: the popover goes, the keyboard goes back, then the agent's terminal shows.
+      open: (r, cx) => {
+        this.closeRail(cx);
         openTerminal(r.address);
       },
       answer: (r, cx) => this.answerFromRail(r, cx),
@@ -1092,9 +1096,10 @@ export class Chat {
       .when(Boolean(e.address), (el) => el.child(this.link(c, `bh-open-${e.id}`, "Open terminal", () => openTerminal(e.address))));
   }
 
+  /** A reply's quiet action: always readable, and fully lit while its reply is under the pointer or the keyboard. */
   link(c, id, label, onClick, show = true) {
     return actionButton(c, id, label, onClick, { tone: "quiet" })
-      .opacity(show ? 1 : 0)
+      .opacity(show ? 1 : 0.5)
       .transition("opacity", MOTION.hover);
   }
 
