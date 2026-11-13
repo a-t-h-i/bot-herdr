@@ -1,0 +1,41 @@
+{
+  "id": "t-20261113-x1do",
+  "title": "Toggle sizing and tab height",
+  "request": "Fix the sizing of the segmented toggles in Settings (Run agents Headless/CLI, Permissions, Git per task, Repo history: the selected segment sits off-centre in its track with a dark sliver on its left, tracks inconsistent). Increase the height of bot-herdr's top bar tabs (Settings with map/book icons) to match herdr's own tabs (Orchestrator tab is taller). Screenshots: C:/Users/athenkosi.hlubi/.config/herdr-app/data/bot-herdr/pasted/pasted-20261113-094951.png and pasted-20261113-094959.png",
+  "status": "done",
+  "track": "fast",
+  "plan": null,
+  "by": "t43",
+  "created": "2026-11-13T09:51:05.294Z",
+  "updated": "2026-11-13T09:53:42.371Z",
+  "archived": false,
+  "steps": [
+    {
+      "n": 1,
+      "title": "Segmented toggles: picked segment centred in its track; page switch tabs at herdr's 29px",
+      "agent": null,
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-13T09:53:42.268Z",
+      "workedMs": 0,
+      "note": ""
+    }
+  ],
+  "triage": {
+    "size": "small",
+    "sizeConfidence": 0.85,
+    "kind": "bugfix",
+    "domains": {
+      "design": 0.96,
+      "dev": 0.06,
+      "qa": 0.1
+    },
+    "research": 0.24,
+    "ambiguous": 0.29,
+    "solo": 0.78,
+    "by": "classifier"
+  },
+  "qa": null,
+  "summary": "",
+  "base": "694c7217b9496ce3b1789d2e8d99242eab1da68c"
+}

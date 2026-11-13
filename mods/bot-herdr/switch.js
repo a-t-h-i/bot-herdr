@@ -15,17 +15,21 @@ import { PAGES, HOLD, activePage, showPage } from "./pages.js";
 import { alpha } from "./working.js";
 
 const HOLD_MS = 3000;
+/** herdr's own tabs (mods/tabs) are 29px tall; the page switch's tabs match them. */
+const HERDR_TAB = 29;
 
 /**
  * The one segmented control: the page switch, a task's tab strip, a plan's list choice.
  * `items` is [{ id, label, on }]; `onPick(id, cx)` receives the picked one.
  */
-export function segmented(c, { id, items, onPick, grow }) {
-  // The track is the items' height: each item is a 28px button, inset from the track's sides only.
+export function segmented(c, { id, items, onPick, grow, height }) {
+  // The track insets its items by the same 2px on every side, so the picked one sits centred in
+  // it. `height` is the items' own (the page switch matches herdr's 29px tabs); by default the
+  // track is a control's height.
+  const itemH = height ?? CONTROL - SPACE[1] * 2;
   return h_flex()
     .id(id)
-    .h(CONTROL)
-    .px(SPACE[1])
+    .p(SPACE[1])
     .gap(SPACE[1])
     .items_center()
     .rounded(SIZE.control)
@@ -35,7 +39,7 @@ export function segmented(c, { id, items, onPick, grow }) {
     .children(items.map((item) =>
       clickable(
         div()
-          .h(CONTROL)
+          .h(itemH)
           .px(SPACE[4])
           .flex()
           .items_center()
@@ -222,6 +226,7 @@ export class Switch {
       .border_color(t.border)
       .child(segmented(c, {
         id: "bh-pages",
+        height: HERDR_TAB,
         items: PAGES.map((p) => ({ id: p.id, icon: p.icon, label: p.label, on: p.id === active, compact: mode === "icons" || (mode === "some" && p.id !== active) })),
         onPick: (id) => showPage(id),
       }));
