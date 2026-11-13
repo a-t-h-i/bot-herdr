@@ -113,7 +113,6 @@ export class PlanDoc {
     this.in = false; // the sheet has slid in (the first frame draws it off the right edge)
     this.sized = false; // the window is measured: the slide can start
     this.leaving = false; // Close: the sheet slides out, then the overlay goes
-    this.cx = null;
     this.inline = TextareaState.new({ placeholder: "Your comment", rows: 2 });
     // Enter sends; Shift+Enter is a new line (as the composer does).
     this.inline.on("submit", (e, cx) => {
@@ -133,14 +132,14 @@ export class PlanDoc {
   }
 
   /** Close: the sheet slides back out, then the overlay goes (Esc and the scrim take this path too). */
-  closeSelf() {
+  closeSelf(cx) {
     const overlay = props()?.overlay ?? this.p.overlay;
     if (this.leaving) return;
-    if (!this.cx) return closeOverlay(overlay);
+    if (!cx) return closeOverlay(overlay);
     this.leaving = true;
     this.in = false;
-    this.cx.notify();
-    this.cx.timer.after(MOTION.arrive.duration, () => closeOverlay(overlay));
+    cx.notify();
+    cx.timer.after(MOTION.arrive.duration, () => closeOverlay(overlay));
   }
 
   /** The plan as it is now (a comment, an archive change): re-read from bh. */
@@ -163,7 +162,7 @@ export class PlanDoc {
     cx.spawn(async (cx) => {
       const r = await bh(args, { cwd: projectDir() });
       this.problem = r.code === 0 ? null : (r.stderr || r.stdout).trim().split("\n")[0];
-      done?.(r);
+      done?.(r, cx);
       this.reload(cx);
       cx.notify();
     });
@@ -215,7 +214,7 @@ export class PlanDoc {
   onKey(e, cx) {
     if (e.key !== "escape") return;
     if (this.commenting) this.cancelComment(cx);
-    else this.closeSelf();
+    else this.closeSelf(cx);
     cx.stop_propagation();
   }
 
@@ -230,8 +229,7 @@ export class PlanDoc {
     return Math.max(SPACE[4], this.width - this.sheetW() - SPACE[4]);
   }
 
-  render(cx) {
-    this.cx = cx;
+  render() {
     const c = colors();
     const p = this.plan;
     if (!p) return div().size_full().bg(c.ground).child(div().p(SPACE[5]).text_size(TYPE.md).text_color(c.muted).child("This plan is gone."));
@@ -252,7 +250,7 @@ export class PlanDoc {
       .child(div().absolute().inset_0().bg(isLight(c) ? SCRIM.light : SCRIM.dark)
         .opacity(inPlace ? 1 : 0)
         .transition("opacity", MOTION.arrive)
-        .on_click(() => this.closeSelf()))
+        .on_click((_e, cx) => this.closeSelf(cx)))
       .child(v_flex()
         .absolute()
         .top(SPACE[4])
@@ -315,7 +313,7 @@ export class PlanDoc {
       .when(ready, (el) => el.child(actionButton(c, "bh-plan-start", "Start task", () => sendFromChat(`The plan ${p.id} ("${p.title}") is agreed: make it a task (bh plan task ${p.id}) and start it.`), { tone: "primary", icon: "play" })))
       .child(actionButton(c, "bh-plan-arch", archived ? "Unarchive" : "Archive", (_e, cx) => this.act(["plan", archived ? "unarchive" : "archive", p.id], cx), { icon: "archive" }))
       .child(this.discardButton(c, p))
-      .child(actionButton(c, "bh-plan-doc-close", "Close", () => this.closeSelf(), { hint: "Esc" }));
+      .child(actionButton(c, "bh-plan-doc-close", "Close", (_e, cx) => this.closeSelf(cx), { hint: "Esc" }));
   }
 
   /** Discard: the first click asks again; the second deletes the plan and its open questions, then closes the sheet. */
@@ -324,8 +322,8 @@ export class PlanDoc {
     return actionButton(c, "bh-plan-discard", sure ? "Discard for good?" : "Discard", (_e, cx) => {
       if (!sure) return arm(this, "armed", "discard", cx);
       this.armed = null;
-      this.act(["plan", "delete", p.id], cx, (r) => {
-        if (r.code === 0) this.closeSelf();
+      this.act(["plan", "delete", p.id], cx, (r, cx) => {
+        if (r.code === 0) this.closeSelf(cx);
       });
     }, { icon: "trash", tone: "danger" });
   }
