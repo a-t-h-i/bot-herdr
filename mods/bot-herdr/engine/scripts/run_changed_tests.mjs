@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // purpose: run only the tests that cover the files changed on this branch (or given files), with a timeout; prints the command, the tail of its output and the exit code, and with --json how many ran and which files no test names
 // usage: node {script} [files…] [--base <ref>] [--timeout <seconds>] [--dry-run] [--json]
-import { baseRef, changedFiles, countTests, detect, isCode, isTest, parseArgs, projectRoot, sh, tail, testsFor } from "./lib/common.mjs";
+import { baseRef, changedFiles, detect, isCode, isTest, parseArgs, projectRoot, sh, tail, testCounts, testsFor } from "./lib/common.mjs";
 
 const { flags, rest } = parseArgs();
 const root = projectRoot();
@@ -59,4 +59,4 @@ const result = sh(run.cmd, run.args, { cwd: root, timeout: seconds * 1000, env: 
 const output = `${result.out}${result.err ? `\n${result.err}` : ""}`;
 say(tail(output));
 say(result.code === 0 ? "PASS" : `FAIL (exit ${result.code})`);
-finish({ ran: true, tests: countTests(output) || tests.length, command, exit: result.code, untested }, result.code === 0 ? 0 : 1);
+finish({ ran: true, tests: testCounts(output).total || tests.length, counts: testCounts(output), command, exit: result.code, untested }, result.code === 0 ? 0 : 1);

@@ -136,10 +136,14 @@ export function testsFor(root, files, all = lines(sh("git", ["ls-files", "--cach
   return new Map([...found].map(([file, hits]) => [file, [...hits].sort()]));
 }
 
-/** How many tests a runner said it ran: node --test, vitest, mocha, jest or pytest. */
-export function countTests(text) {
-  const m = /(?:^|\n)\s*ℹ tests\s+(\d+)/.exec(text) ?? /Tests:\s+(\d+)\s+passed/.exec(text) ?? /(\d+)\s+passing\b/.exec(text) ?? /(\d+)\s+passed\b/.exec(text);
-  return m ? Number(m[1]) : 0;
+/** What a runner's summary said: total, pass, fail and skipped (zeros when it does not say). */
+export function testCounts(text) {
+  const find = (...patterns) => patterns.map((re) => re.exec(text)?.[1]).find((n) => n !== undefined);
+  const total = find(/(?:^|\n)\s*ℹ tests\s+(\d+)/, /\bTests:\s+(\d+)\b/, /\b(\d+)\s+passing\b/);
+  const pass = find(/(?:^|\n)\s*ℹ pass\s+(\d+)/, /\bTests:\s+(\d+)\s+passed/, /\b(\d+)\s+passing\b/, /\b(\d+)\s+passed\b/);
+  const fail = find(/(?:^|\n)\s*ℹ fail\s+(\d+)/, /\bTests:\s+(\d+)\s+failed/, /\b(\d+)\s+failing\b/, /\b(\d+)\s+failed\b/);
+  const skipped = find(/(?:^|\n)\s*ℹ skipped\s+(\d+)/);
+  return { total: Number(total ?? 0), pass: Number(pass ?? total ?? 0), fail: Number(fail ?? 0), skipped: Number(skipped ?? 0) };
 }
 
 /** The project's own test command ("" when it has none): what `bh check` falls back to. */

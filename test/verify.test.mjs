@@ -187,3 +187,42 @@ test("the review brief says each rule once and trusts a matching receipt", async
   assert.doesNotMatch(r.out, /Do not re-run a check the worker ran/);
   assert.doesNotMatch(r.out, /Do not blindly trust/);
 });
+
+test("a receipt's tree hash names the commit: two commits never share one", async () => {
+  const T = await lib("lib/tasks.mjs");
+  const dir = project({ "src/a.mjs": "export const a = 1;\n" });
+  const task = T.newTask(dir, { request: "Hash", steps: [] });
+  const first = JSON.parse(run(["check", "--task", task.id, "--json"], dir).out);
+  writeFileSync(join(dir, "src", "a.mjs"), "export const a = 2;\n");
+  git(dir, "add", "-A");
+  assert.equal(git(dir, "commit", "-q", "-m", "second").status, 0);
+  const second = JSON.parse(run(["check", "--task", task.id, "--json"], dir).out);
+  assert.notEqual(first.head, second.head);
+  assert.notEqual(first.diff, second.diff);
+});
+
+test("the verdict counts failures and skips, and shows no command that did not run", async () => {
+  const T = await lib("lib/tasks.mjs");
+  const dir = project({
+    "package.json": JSON.stringify({ name: "p", private: true, scripts: { test: "node --test tests/a.test.mjs" } }),
+    "lib/a.mjs": "export const a = 1;\n",
+    "lib/thing.mjs": "export const x = 1;\n",
+    "tests/a.test.mjs": [
+      "// covers lib/a.mjs",
+      "import { test } from \"node:test\";",
+      "import assert from \"node:assert/strict\";",
+      "test(\"ok\", () => assert.equal(1, 1));",
+      "test(\"bad\", () => assert.equal(1, 2));",
+      "test(\"later\", { skip: true }, () => {});",
+      "",
+    ].join("\n"),
+  });
+  writeFileSync(join(dir, "lib", "a.mjs"), "export const a = 2;\n");
+  writeFileSync(join(dir, "lib", "thing.mjs"), "export const x = 2;\n");
+  const task = T.newTask(dir, { request: "Counts", steps: [] });
+  const r = run(["check", "--task", task.id], dir);
+  assert.equal(r.code, 1, r.out + r.err);
+  assert.match(r.out, /No targeted test covered the change: ran the full suite \(npm run test\)/);
+  assert.doesNotMatch(r.out, /\$ node --test/);
+  assert.match(r.out, /FAIL: 1 tests pass, 1 failed, 1 skipped; no lint or typecheck is set up/);
+});

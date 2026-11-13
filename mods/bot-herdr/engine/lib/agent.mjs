@@ -13,7 +13,7 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { slug } from "../../roster.js";
-import { DATA, accessOf, ensureDir, now, projectRoot, readJson, writeJson, writeText } from "./core.mjs";
+import { DATA, accessOf, ensureDir, now, projectRoot, readJson, readText, writeJson, writeText } from "./core.mjs";
 import * as team from "./team.mjs";
 import * as T from "./tasks.mjs";
 import * as P from "./plans.mjs";
@@ -54,6 +54,19 @@ export function toChat(input, reply, { asked = false } = {}) {
 /** The chat's reply file: the answer, and a stamp so the same words twice still show twice. */
 export function replyText(text) {
   return `${String(text).trim()}\n\n<!-- bh ${now()} -->\n`;
+}
+
+/** The most turns a reply log keeps; past it the oldest half goes. */
+export const REPLY_LOG_MAX = 400;
+
+/**
+ * Every turn's reply, one JSON line each (`replies/<key>.jsonl`: `{ at, name, text }`), so the chat
+ * can show each one even when two turns end between its polls or the agent exits first.
+ */
+export function logReply(file, entry) {
+  const lines = readText(file).split("\n").filter(Boolean);
+  const kept = lines.length >= REPLY_LOG_MAX ? lines.slice(-(REPLY_LOG_MAX / 2)) : lines;
+  writeText(file, [...kept, JSON.stringify(entry)].join("\n") + "\n");
 }
 
 /**
@@ -295,7 +308,8 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
   }
 
   function makeBrief() {
-    brief = team.brief(agent, { mode, root, parent, task, plan, step, name: name ?? null, headless: true });
+    const child = task ? (load(T.loadTask, task)?.children ?? []).find((c) => c.state === "open" && c.name === who) : null;
+    brief = team.brief(agent, { mode, root, parent, task, plan, step, name: name ?? null, headless: true, worktree: child ? { path: child.path, branch: child.branch } : null });
     writeText(briefFile, brief);
     state.seen = seenNow();
     save();
@@ -358,7 +372,10 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
     // Every agent's answer reaches the chat, a child's too (it also reports to its parent); toChat
     // says when a turn leaves nothing there.
     const chat = toChat(input, reply, { asked: r.asked });
-    if (address && chat) writeText(join(DATA, "replies", `${fileKey(address)}.md`), replyText(chat));
+    if (address && chat) {
+      writeText(join(DATA, "replies", `${fileKey(address)}.md`), replyText(chat));
+      logReply(join(DATA, "replies", `${fileKey(address)}.jsonl`), { at: now(), name: who, text: chat });
+    }
     status(r.error ? "error" : "done", r.error ? String(r.error).split("\n")[0] : undefined);
   }
 

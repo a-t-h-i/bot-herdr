@@ -70,7 +70,7 @@ function reportSection({ parent, task, name, step = null }) {
  * Everything an agent is told when it starts. `mode`: "lead" (the Orchestrator, or an agent the
  * user talks to in its own tab), "child" (started by another agent), "panel" or "review".
  */
-export function brief(agent, { mode = "child", parent = null, task = null, plan = null, step = null, root = process.cwd(), name = null, headless = false } = {}) {
+export function brief(agent, { mode = "child", parent = null, task = null, plan = null, step = null, worktree = null, root = process.cwd(), name = null, headless = false } = {}) {
   const { agents } = team();
   const r = roleOf(agent.role);
   const lead = agent.role === "orchestrator";
@@ -116,6 +116,11 @@ export function brief(agent, { mode = "child", parent = null, task = null, plan 
   } else {
     parts.push(reportSection({ parent, task, name: name ?? slug(agent.name), step }));
   }
+
+  if (worktree?.path) parts.push([
+    "## Your worktree",
+    `You work in your own git worktree ${worktree.path} on branch ${worktree.branch}. Do not commit; the Orchestrator merges your work with \`bh merge ${name ?? slug(agent.name)} --task ${task}\`. Run \`bh check\` there: it checks your change against your base.`,
+  ].join("\n\n"));
 
   const known = knowledge.forBrief(root, knowledgeName(agent));
   if (known) parts.push(`## What you know about this project\n\n${known}`);

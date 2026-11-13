@@ -8,7 +8,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { argvOf, effortsOf, slug, withPrompt } from "../roster.js";
+import { argvOf, effortsOf, roleOf, slug, withPrompt } from "../roster.js";
 import { APP_HOME, BH, BOOLEANS, DATA, UsageError, accessOf, bodyText, ensureDir, myAddress, need, now, parseArgs, projectRoot, readJson, readText, sh, store, withLock, writeJson, writeText } from "./lib/core.mjs";
 import * as T from "./lib/tasks.mjs";
 import * as P from "./lib/plans.mjs";
@@ -19,7 +19,7 @@ import * as team from "./lib/team.mjs";
 import * as W from "./lib/workspace.mjs";
 import * as C from "./classifier/index.mjs";
 import { fileKind } from "./classifier/qa-risk.mjs";
-import { countTests, tail, testCommand } from "./scripts/lib/common.mjs";
+import { tail, testCommand, testCounts } from "./scripts/lib/common.mjs";
 import { fileKey, replyText } from "./lib/agent.mjs";
 
 const HELP = `bh: bot-herdr's tools. Run from the project folder. Add --json for machine-readable output.
@@ -64,7 +64,8 @@ The user
 
 The team
   bh team                         who is set up, with harness, model and effort
-  bh spawn <agent> --name <short> [--task T --step N] [--effort auto|<level>] [--panel P] [--review] "<brief>"
+  bh spawn <agent> --name <short> [--task T --step N] [--effort auto|<level>] [--panel P] [--review] [--shared] "<brief>"
+  bh merge <name> --task <id> [--drop]    bring a child's worktree work into the task's tree (staged, uncommitted); --drop discards it
   bh agent <agent> [--mode lead|child] [--name N] [-- "<first message>"]   run an agent headless in this terminal
   bh classify route|triage|effort|qa-risk "<text>" [--task T]
   bh brief <agent> [--mode lead|child|panel|review]        bh sync   (write the hc templates)
@@ -156,13 +157,15 @@ function scriptSummary(run) {
 
 /** The project's own test command, run whole: `npm test` is not one binary, so it gets a shell. */
 function runSuite(cwd, command) {
-  const r = spawnSync(command, { cwd, shell: true, encoding: "utf8", timeout: 600000 });
+  const env = { ...process.env, FORCE_COLOR: "0" };
+  delete env.NODE_TEST_CONTEXT; // the project's tests are their own run, not part of a caller's
+  const r = spawnSync(command, { cwd, shell: true, encoding: "utf8", timeout: 600000, env });
   return { code: r.status ?? 1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
 
-/** The tree a check saw: its diff from HEAD plus every untracked file's path and content. */
+/** The tree a check saw: HEAD's sha, its diff from HEAD, and every untracked file's path and content. */
 function changeHash(cwd) {
-  const parts = [git(cwd, ["diff", "HEAD", "--binary"]).out];
+  const parts = [git(cwd, ["rev-parse", "HEAD"]).out.trim(), git(cwd, ["diff", "HEAD", "--binary"]).out];
   for (const file of git(cwd, ["ls-files", "--others", "--exclude-standard"]).out.split("\n").filter(Boolean)) parts.push(file, readText(join(cwd, file)));
   return createHash("sha1").update(parts.join("\n")).digest("hex");
 }
@@ -178,28 +181,31 @@ function changes(root, base) {
 }
 
 /** The check scripts' outcome: lint and typecheck what changed, then either targeted tests or, when a changed file has none, the full suite. */
-function runChecks(root, task, base) {
-  const cwd = W.taskCwd(task, root);
+function runChecks(cwd, base) {
   const extra = [...(base ? ["--base", base] : []), "--json"];
   const lint = scriptSummary(S.run(cwd, "check_changed", extra, { capture: true }));
   const plan = scriptSummary(S.run(cwd, "run_changed_tests", [...extra, "--dry-run"], { capture: true }));
   const uncovered = (plan.untested ?? []).filter((file) => !file.startsWith(".bot-herdr/") && fileKind(file) === "code");
   const command = uncovered.length ? testCommand(cwd) : "";
-  const targeted = command ? plan : scriptSummary(S.run(cwd, "run_changed_tests", extra, { capture: true }));
+  // Falling back runs the whole suite: the targeted command must not read as if it ran too.
+  const planned = { ...plan, report: (plan.report ?? "").split("\n").filter((line) => !line.startsWith("$ ")).join("\n") };
+  const targeted = command ? planned : scriptSummary(S.run(cwd, "run_changed_tests", extra, { capture: true }));
   const full = command ? runSuite(cwd, command) : null;
-  const tests = full ? countTests(full.out) : targeted.tests ?? 0;
-  const ran = { lint: lint.lint ?? 0, typecheck: lint.typecheck ?? 0, tests };
+  const counts = full ? testCounts(full.out) : targeted.counts ?? { total: targeted.tests ?? 0, pass: targeted.tests ?? 0, fail: 0, skipped: 0 };
+  const ran = { lint: lint.lint ?? 0, typecheck: lint.typecheck ?? 0, tests: counts.total || (targeted.tests ?? 0) };
   const anything = (lint.checks ?? []).length > 0 || Boolean(full) || Boolean(targeted.ran);
   const codes = [lint.code, full?.code, command ? undefined : targeted.code].filter((code) => code !== undefined);
-  return { cwd, lint, targeted, full, command, ran, anything, exit: !anything ? 0 : codes.some((code) => code !== 0) ? 1 : 0 };
+  return { cwd, lint, targeted, full, command, ran, counts, anything, exit: !anything ? 0 : codes.some((code) => code !== 0) ? 1 : 0 };
 }
 
 /** What ran, in one line before the verdict. */
 const ranLine = (ran, full) => `Ran: ${ran.lint} lint, ${ran.typecheck} typecheck, ${ran.tests} tests (${full ? "full suite" : "targeted"})`;
 
-/** The verdict in its own words: what ran, and that nothing is set up when no lint or typecheck exists. */
-function verdictLine(exit, ran, lint, testsOk) {
-  const parts = [`${ran.tests} tests ${testsOk ? "pass" : "fail"}`];
+/** The verdict in its own words: what ran, how many passed, failed and skipped, and what is set up. */
+function verdictLine(exit, ran, counts, lint) {
+  const parts = [`${counts.pass} tests pass`];
+  if (counts.fail) parts.push(`${counts.fail} failed`);
+  if (counts.skipped) parts.push(`${counts.skipped} skipped`);
   const kinds = [ran.lint ? "lint" : "", ran.typecheck ? "typecheck" : ""].filter(Boolean);
   if (kinds.length) parts.push(`${kinds.join(" and ")} ${lint.code === 0 ? (kinds.length > 1 ? "pass" : "passes") : kinds.length > 1 ? "fail" : "fails"}`);
   return `${exit === 0 ? "PASS" : "FAIL"}: ${parts.join(", ")}${kinds.length ? "" : "; no lint or typecheck is set up"}`;
@@ -247,7 +253,7 @@ async function main(argv) {
   const [cmd = "help", sub, ...more] = argv;
   const root = projectRoot();
   const c = C.makeClassifier();
-  const { flags, rest } = parseArgs(argv.slice(1), ["option", "kinds"], [...BOOLEANS, "refresh", "peek", "board"]);
+  const { flags, rest } = parseArgs(argv.slice(1), ["option", "kinds"], [...BOOLEANS, "refresh", "peek", "board", "shared", "drop"]);
   const args = rest.slice(1);
 
   switch (cmd) {
@@ -507,8 +513,10 @@ async function main(argv) {
 
     case "check": {
       const task = flags.task ? T.loadTask(root, flags.task) : T.currentTask(root);
-      const base = flags.base ?? task?.base ?? null;
-      const { cwd, lint, targeted, full, command, ran, anything, exit } = runChecks(root, task, base);
+      const child = task ? W.childWorktree(task, process.cwd()) : null;
+      const cwd = child ? child.path : W.taskCwd(task, root);
+      const base = flags.base ?? child?.base ?? task?.base ?? null;
+      const { lint, targeted, full, command, ran, counts, anything, exit } = runChecks(cwd, base);
       const receipt = { at: now(), from: flags.from ?? actor(), step: process.env.BH_STEP ? Number(process.env.BH_STEP) : null, command: "bh check", base, head: git(cwd, ["rev-parse", "HEAD"]).out.trim() || null, diff: changeHash(cwd), ran, fallback: command || null, exit };
       if (task) T.recordCheck(root, task.id, receipt);
       if (flags.json) {
@@ -525,7 +533,7 @@ async function main(argv) {
         process.exit(0);
       }
       console.log(`\n${ranLine(ran, full)}`);
-      console.log(verdictLine(exit, ran, lint, full ? full.code === 0 : targeted.code === 0));
+      console.log(verdictLine(exit, ran, counts, lint));
       process.exit(exit);
     }
 
@@ -609,8 +617,17 @@ async function main(argv) {
       const agent = { ...a, ...(flags.model ? { model: flags.model } : {}) };
       const parent = myAddress();
       const current = task ? T.loadTask(root, task) : null;
-      // A task with a worktree: its agents run there.
-      const cwd = flags.cwd ?? (current ? W.taskCwd(current, root) : root);
+      const editing = mode === "child" && Boolean(roleOf(a.role)?.edits) && !flags.shared;
+      const open = editing ? (current?.children ?? []).find((c) => c.state === "open" && c.agent === a.name) : null;
+      if (open) throw new Error(`${a.name} already has an open worktree ${open.name}: merge or drop it first`);
+      const made = editing ? W.createChildWorktree({ task: current, name, cwd: W.taskCwd(current, root), root }) : "";
+      const worktree = made && typeof made === "object" ? made : null;
+      if (worktree) T.updateTask(root, task, (t) => {
+        t.children = [...(t.children ?? []), { name, agent: a.name, step: flags.step ? Number(flags.step) : null, branch: worktree.branch, path: worktree.path, base: worktree.base, state: "open", at: now() }];
+      });
+      // A task with a worktree: its agents run there; one of them, in its own.
+      const cwd = worktree ? worktree.path : flags.cwd ?? (current ? W.taskCwd(current, root) : root);
+      const isolation = worktree ? `${name} works in its own worktree ${worktree.path} (branch ${worktree.branch}); merge it with bh merge ${name} --task ${task}` : typeof made === "string" ? made : "";
       const review = mode === "review" && current ? await reviewContext(root, current, cwd) : "";
       const report = task ? `.bot-herdr/tasks/${task}/reports/${name}.md` : `.bot-herdr/reports/${name}.md`;
       const plan = flags.panel ?? flags.plan ?? null;
@@ -630,7 +647,7 @@ async function main(argv) {
       } else {
         // The template carries the generic brief (role, team, knowledge); this run's specifics go
         // with the task, so one template per agent and mode serves every spawn.
-        const body = team.brief(agent, { mode, root, parent, task, plan, step: flags.step ?? null, name });
+        const body = team.brief(agent, { mode, root, parent, task, plan, step: flags.step ?? null, name, worktree });
         const variant = [slug(a.name), mode !== "child" ? mode : "", flags.model ? slug(flags.model) : "", effort !== a.effort ? effort : ""].filter(Boolean).join("-");
         // hc runs a template's `command:` through `sh -c`, which Windows doesn't have: there the
         // command goes to hc run as argv instead.
@@ -641,7 +658,34 @@ async function main(argv) {
       }
       if (task && flags.step) T.updateTask(root, task, (t) => T.moveStep(t, flags.step, "start", { agent: name }));
       if (r.code !== 0) throw new Error(`hc run failed: ${(r.err || r.out).trim()}`);
-      return out(flags, { name, agent: a.name, effort, routed, hc: r.out.trim() }, (x) => `Started ${x.name} (${x.agent}${x.effort ? `, effort ${x.effort}` : ""}${x.routed ? `; routed: ${x.routed}` : ""}). Wait with hc wait --children any.`);
+      return out(flags, { name, agent: a.name, effort, routed, isolation, hc: r.out.trim() }, (x) => `Started ${x.name} (${x.agent}${x.effort ? `, effort ${x.effort}` : ""}${x.routed ? `; routed: ${x.routed}` : ""}). Wait with hc wait --children any.${x.isolation ? `\n${x.isolation}` : ""}`);
+    }
+
+    case "merge": {
+      const name = need(sub, "bh merge <name> --task <id> [--drop]");
+      const id = need(flags.task, "bh merge <name> --task <id> [--drop]");
+      const task = T.loadTask(root, id);
+      const child = (task.children ?? []).find((c) => c.name === name);
+      if (!child) throw new Error(`Task ${id} has no child ${name}.`);
+      const cwd = W.taskCwd(task, root);
+      if (flags.drop) {
+        const gone = W.removeChildWorktree({ child, cwd });
+        T.updateTask(root, id, (t) => {
+          const c = (t.children ?? []).find((x) => x.name === name);
+          if (c) Object.assign(c, { state: "dropped", droppedAt: now() });
+        });
+        return out(flags, { ...child, state: "dropped", error: gone || null }, (x) => (gone ? `${x.error}: ${name} is dropped.` : `Dropped ${name}: its worktree and branch are gone.`));
+      }
+      const merged = W.mergeChild({ child, cwd });
+      if (merged.refused) throw new Error(`Not merged: ${merged.refused}. The task's tree is unchanged.`);
+      if (merged.message) return out(flags, { ...child, message: merged.message }, () => merged.message);
+      T.updateTask(root, id, (t) => {
+        const c = (t.children ?? []).find((x) => x.name === name);
+        if (c) Object.assign(c, { state: "merged", mergedAt: now(), stat: merged.stat });
+      });
+      T.post(root, id, { kind: "done", text: `Merged ${name}: ${merged.stat.files} files, +${merged.stat.added} −${merged.stat.removed}`, from: flags.from ?? actor(), step: child.step ?? null });
+      const gone = W.removeChildWorktree({ child, cwd });
+      return out(flags, { ...child, state: "merged", stat: merged.stat, error: gone || null }, (x) => `Merged ${name}: ${merged.stat.files} files, +${merged.stat.added} −${merged.stat.removed}. ${gone ? gone : "Its worktree and branch are gone; the changes are staged in the task's tree."}`);
     }
 
     case "classify": {
@@ -657,8 +701,9 @@ async function main(argv) {
       }
       if (sub === "qa-risk") {
         const task = flags.task ? T.loadTask(root, flags.task) : null;
-        const cwd = task ? W.taskCwd(task, root) : root;
-        const { files, diff, untracked } = changes(cwd, flags.base ?? task?.base);
+        const child = task ? W.childWorktree(task, process.cwd()) : null;
+        const cwd = child ? child.path : task ? W.taskCwd(task, root) : root;
+        const { files, diff, untracked } = changes(cwd, flags.base ?? child?.base ?? task?.base);
         const risk = await C.qaRisk(c, { files, diff, untracked, root: cwd, request: task?.request, bugfix: task?.triage?.kind === "bugfix" });
         if (task) T.updateTask(root, flags.task, (t) => {
           t.qa = risk;

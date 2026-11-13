@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -168,4 +168,46 @@ test("a holder taken over as stale does not delete the new holder's lock", async
   assert.equal(readFileSync(lock, "utf8"), "another-holder");
   unlinkSync(lock);
   unlinkSync(`${lock}.taken`);
+});
+
+test("thirty rounds of two writers starting steps: no update ever lost", async () => {
+  const T = await lib("lib/tasks.mjs");
+  const steps = Array.from({ length: 40 }, (_, i) => `Step ${i + 1}`);
+  const script = join(tmp, "steps-load.mjs");
+  writeFileSync(script, `
+    const T = await import(${JSON.stringify(TASKS)});
+    const [root, id, from, to] = process.argv.slice(2);
+    for (let n = Number(from); n <= Number(to); n++) T.updateTask(root, id, (t) => T.moveStep(t, n, "start", { agent: "dev" }));
+  `);
+  for (let round = 0; round < 30; round++) {
+    const task = T.newTask(PROJECT, { request: `Load ${round}`, steps });
+    await Promise.all([child(script, [PROJECT, task.id, "1", "20"]), child(script, [PROJECT, task.id, "21", "40"])]);
+    assert.deepEqual(T.loadTask(PROJECT, task.id).steps.map((s) => s.status), Array(40).fill("active"), `round ${round}`);
+  }
+});
+
+test("eight waiters on a pre-aged lock, three rounds: nothing lost", async () => {
+  const target = join(tmp, "stress.json");
+  const lock = `${target}.lock`;
+  const counter = join(tmp, "stress.count");
+  const script = join(tmp, "wait.mjs");
+  writeFileSync(script, `
+    import { readFileSync, writeFileSync } from "node:fs";
+    const { withLock } = await import(${JSON.stringify(CORE)});
+    const [target, counter] = process.argv.slice(2);
+    withLock(target, () => {
+      const n = Number(readFileSync(counter, "utf8") || "0");
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+      writeFileSync(counter, String(n + 1));
+    });
+  `);
+  for (let round = 0; round < 3; round++) {
+    writeFileSync(counter, "0");
+    writeFileSync(lock, "a-dead-holder");
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lock, old, old);
+    await Promise.all(Array.from({ length: 8 }, () => child(script, [target, counter])));
+    assert.equal(readFileSync(counter, "utf8"), "8", `round ${round}`);
+    assert.equal(existsSync(lock), false, `round ${round} left the lock`);
+  }
 });

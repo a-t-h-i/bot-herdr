@@ -11,6 +11,7 @@ import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { store } from "./core.mjs";
 
 export const ISOLATIONS = ["off", "branch", "worktree"];
 
@@ -25,7 +26,8 @@ export function runGit(cwd, args, env) {
   return String(r.stdout ?? "").trim();
 }
 
-export const worktreesRoot = (root) => join(root, ".bot-herdr", "worktrees");
+/** <project>/.bot-herdr/worktrees, through the store so a worktree made from inside one never nests. */
+export const worktreesRoot = (root) => store(root, "worktrees");
 
 /** A branch name git accepts, made from a task's title. */
 export function branchName(name) {
@@ -267,6 +269,86 @@ export function createWorkspace({ cwd, root = cwd, name, mode, git = runGit }) {
 export function taskCwd(task, cwd) {
   const g = task?.git;
   return g?.mode === "worktree" && g.path && existsSync(g.path) ? g.path : cwd;
+}
+
+/** The child worktree of a task that `cwd` is (the child checking its own work), or null. */
+export function childWorktree(task, cwd) {
+  const here = canon(cwd).toLowerCase();
+  return (task?.children ?? []).find((child) => child.path && existsSync(child.path) && canon(child.path).toLowerCase() === here) ?? null;
+}
+
+/**
+ * One child's own checkout: a new worktree at `.bot-herdr/worktrees/<task>-<name>` on a branch
+ * from the task's tree at its HEAD. Returns { path, branch, base }, or one line saying why not
+ * (no git, no commit yet, the branch already taken); the child then works in the task's tree.
+ */
+export function createChildWorktree({ task, name, cwd, root = cwd, git = runGit }) {
+  let top;
+  let base;
+  try {
+    top = git(cwd, ["rev-parse", "--show-toplevel"]);
+    base = git(top, ["rev-parse", "--verify", "HEAD"]);
+  } catch {
+    return "this project has no commit yet: the child works in the task's own tree";
+  }
+  const branch = branchName(`${task.git?.branch ?? `bh/${task.id}`}-${name}`);
+  const path = join(worktreesRoot(root), `${task.id}-${name}`);
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    git(top, ["worktree", "add", "-b", branch, path, base]);
+  } catch (e) {
+    return `could not create a worktree for ${name}: ${e.message}`;
+  }
+  excludeWorktrees(git, top, root);
+  return { path, branch, base };
+}
+
+/** Removes a child's worktree and deletes its branch; a failure comes back as one line. */
+export function removeChildWorktree({ child, cwd, git = runGit }) {
+  try {
+    if (child.path && existsSync(child.path)) git(cwd, ["worktree", "remove", "--force", child.path]);
+    git(cwd, ["branch", "-D", child.branch]);
+    return "";
+  } catch (e) {
+    return e.message;
+  }
+}
+
+/** `+1 −1` style numbers from `git diff --shortstat`. */
+function statOf(text) {
+  const m = /(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?/.exec(String(text ?? ""));
+  return { files: Number(m?.[1] ?? 0), added: Number(m?.[2] ?? 0), removed: Number(m?.[3] ?? 0) };
+}
+
+/**
+ * Commits a child's work in its worktree, then stages it into the task's tree (`git merge
+ * --squash`, uncommitted). Returns { stat } once staged; { refused } when the task's tree holds
+ * changes to the same files or the merge conflicts (nothing in it changed); or { message } when
+ * there was nothing to merge or git failed. The caller removes the worktree.
+ */
+export function mergeChild({ child, cwd, git = runGit }) {
+  try {
+    if (git(child.path, ["status", "--porcelain"])) {
+      git(child.path, ["add", "-A"]);
+      git(child.path, ["-c", "user.name=bot-herdr", "-c", "user.email=bot-herdr@localhost", "commit", "-q", "-m", `${child.name}: step ${child.step ?? "?"}`]);
+    }
+    const changed = git(child.path, ["diff", "--name-only", `${child.base}..${child.branch}`]).split("\n").filter(Boolean);
+    if (!changed.length) return { message: `${child.name} has no changes to merge` };
+    // Changed in the task's tree already: tracked against HEAD (staged or not) and new files.
+    const local = new Set([...git(cwd, ["diff", "--name-only", "HEAD"]).split("\n"), ...git(cwd, ["ls-files", "--others", "--exclude-standard"]).split("\n")].filter(Boolean));
+    const clash = changed.filter((file) => local.has(file));
+    if (clash.length) return { refused: `the task's tree has uncommitted changes to ${clash.join(", ")}` };
+    try {
+      git(cwd, ["merge-tree", "--write-tree", "HEAD", child.branch]);
+    } catch (e) {
+      return { refused: `merging ${child.branch} conflicts (${e.message})` };
+    }
+    const stat = statOf(git(child.path, ["diff", "--shortstat", `${child.base}..${child.branch}`]));
+    git(cwd, ["merge", "--squash", child.branch]);
+    return { stat };
+  } catch (e) {
+    return { message: `${child.name}: ${e.message}` };
+  }
 }
 
 /** Why a task's worktree can't be used (it was removed), or "" when it is there or the task has none. */

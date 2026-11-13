@@ -99,14 +99,15 @@ const SLEEP = new Int32Array(new SharedArrayBuffer(4)); // for Atomics.wait: a s
 const LOCK_WAIT_MS = 15_000; // longer than a stale lock's age, so a killed command never fails the next
 const LOCK_STALE_MS = 10_000;
 // On Windows a lock file another process is deleting makes an exclusive create fail with EPERM
-// (or EACCES), not EEXIST: both mean "held, wait".
+// (or EACCES); EBUSY is what a delete of a file still open comes back as. All mean "held, wait".
 const HELD = new Set(["EEXIST", "EPERM", "EACCES"]);
+const BUSY = new Set(["EPERM", "EBUSY", "EACCES"]);
 
 /**
  * Runs `fn` holding `<path>.lock`, so two commands never read-modify-write one file at once. The
- * lock is a file made exclusively and stamped with this command's token, waited on, and removed
- * afterwards only while it still carries that token. One older than 10 s is stale (its holder
- * died) and is renamed away first, so two waiters can never both take it. Returns what `fn` returned.
+ * lock is a file made exclusively and stamped with this command's token; it is removed only while
+ * it still carries that token, and a lock older than 10 s (its holder died) is cleared by one
+ * waiter at a time under a `<lock>.takeover` mutex. Returns what `fn` returned.
  */
 export function withLock(path, fn) {
   const lock = `${path}.lock`;
@@ -116,8 +117,7 @@ export function withLock(path, fn) {
   let fd;
   while (fd === undefined) {
     try {
-      fd = openSync(lock, "wx");
-      writeFileSync(fd, token);
+      fd = take(lock, token);
     } catch (e) {
       if (!HELD.has(e.code)) throw e;
       if (clearStaleLock(lock)) continue;
@@ -129,26 +129,94 @@ export function withLock(path, fn) {
     return fn();
   } finally {
     closeSync(fd);
+    release(lock, token);
+  }
+}
+
+/** Makes `<lock>` and stamps it; a write that fails closes and removes it rather than leaving it behind. */
+function take(lock, token) {
+  const fd = openSync(lock, "wx");
+  try {
+    writeFileSync(fd, token);
+    return fd;
+  } catch (e) {
+    closeSync(fd);
     try {
-      if (readFileSync(lock, "utf8") === token) unlinkSync(lock);
+      unlinkSync(lock);
     } catch {}
+    throw e;
+  }
+}
+
+/** Removes the lock while it is still ours; a delete another process is holding open is retried for 1 s. */
+function release(lock, token) {
+  const until = Date.now() + 1000;
+  for (;;) {
+    try {
+      if (readFileSync(lock, "utf8") !== token) return; // taken over: not ours to remove
+      unlinkSync(lock);
+      return;
+    } catch (e) {
+      if (e.code === "ENOENT" || !BUSY.has(e.code) || Date.now() >= until) return;
+      Atomics.wait(SLEEP, 0, 0, 25);
+    }
   }
 }
 
 /**
- * Takes away a lock old enough to be a dead command's: renamed to a unique name before it is
- * removed, so two waiters cannot both take it over. True when there is no lock left.
+ * Clears a lock older than 10 s from a dead command, one waiter at a time: it must hold
+ * `<lock>.takeover` first, so two waiters can never rename each other's fresh lock. The lock is
+ * renamed away and its token compared; a fresh lock renamed by mistake is given back. True when
+ * there is no lock left to wait for.
  */
 function clearStaleLock(lock) {
+  const guard = `${lock}.takeover`;
+  let fd;
   try {
+    fd = openSync(guard, "wx");
+  } catch (e) {
+    if (!HELD.has(e.code)) return false;
+    removeIfOld(guard); // a cleaner that died never blocks the next one
+    return false;
+  }
+  try {
+    let token;
+    try {
+      token = readFileSync(lock, "utf8");
+    } catch {
+      return true; // gone already: try to create it at once
+    }
     if (Date.now() - statSync(lock).mtimeMs < LOCK_STALE_MS) return false;
     const stale = `${lock}.${process.pid}.${randomUUID().slice(0, 8)}.stale`;
     renameSync(lock, stale);
+    if (readFileSync(stale, "utf8") !== token) {
+      // Not the file we inspected: give it back and wait for its holder.
+      try {
+        renameSync(stale, lock);
+      } catch {
+        try {
+          unlinkSync(stale);
+        } catch {}
+      }
+      return false;
+    }
     unlinkSync(stale);
     return true;
   } catch {
     return false;
+  } finally {
+    closeSync(fd);
+    try {
+      unlinkSync(guard);
+    } catch {}
   }
+}
+
+/** Removes a file older than the stale age: a takeover mutex whose holder died must not block forever. */
+function removeIfOld(file) {
+  try {
+    if (Date.now() - statSync(file).mtimeMs >= LOCK_STALE_MS) unlinkSync(file);
+  } catch {}
 }
 
 export function readJsonl(path) {
