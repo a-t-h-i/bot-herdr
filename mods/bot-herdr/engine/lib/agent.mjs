@@ -10,10 +10,14 @@
 // harness's full interactive CLI on the same conversation; /new starts a fresh one; /team
 // sends the brief again.
 
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { slug } from "../../roster.js";
 import { DATA, accessOf, ensureDir, now, projectRoot, readJson, writeJson, writeText } from "./core.mjs";
 import * as team from "./team.mjs";
+import * as T from "./tasks.mjs";
+import * as P from "./plans.mjs";
+import * as knowledge from "./knowledge.mjs";
 import { HEADLESS, agentUser, asRoot, headless, interactive, launch, turn } from "./runner.mjs";
 import * as Q from "./ask.mjs";
 
@@ -196,7 +200,7 @@ function askCard(e, { address, who, cwd, say }) {
 }
 
 /** Runs the agent until the user quits. `first`: a message to start with. */
-export async function runAgent({ word, mode = "lead", name = null, parent = null, task = null, model = null, effort = null, first = "" }) {
+export async function runAgent({ word, mode = "lead", name = null, parent = null, task = null, step = null, plan = null, model = null, effort = null, first = "" }) {
   const root = projectRoot();
   const cwd = process.cwd();
   const address = process.env.HC_TERMINAL_ID || null;
@@ -242,9 +246,56 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
     say();
   }
 
+  /** The task and plan as they are now, or null when one is gone. */
+  function load(read, id) {
+    try {
+      return read(root, id);
+    } catch {
+      return null;
+    }
+  }
+
+  /** What the brief told the agent that can change: its knowledge, board, open comments and steps. */
+  function seenNow() {
+    const t = task ? load(T.loadTask, task) : null;
+    const p = plan ? load(P.loadPlan, plan) : null;
+    const known = knowledge.forBrief(root, team.knowledgeName(agent));
+    return {
+      knowledge: createHash("sha1").update(known).digest("hex"),
+      boardN: t ? (T.board(root, task).at(-1)?.n ?? 0) : 0,
+      comments: [...T.openComments(t ?? {}), ...P.openComments(p ?? {})].map((c) => c.id),
+      steps: Object.fromEntries((t?.steps ?? []).map((s) => [s.n, s.status])),
+    };
+  }
+
+  /** The open comments this agent has not seen yet: its task's and its plan's. */
+  function newComments(seen) {
+    const ids = new Set(seen.comments ?? []);
+    const t = task ? load(T.loadTask, task) : null;
+    const p = plan ? load(P.loadPlan, plan) : null;
+    return [...T.openComments(t ?? {}), ...P.openComments(p ?? {})].filter((c) => !ids.has(c.id));
+  }
+
+  /** `## Brief update`: only what changed since `seen`, and "" when nothing did. */
+  function briefUpdate(seen) {
+    const now2 = seenNow();
+    const lines = [];
+    if (seen.knowledge !== now2.knowledge) lines.push(`Your project knowledge changed: run \`bh knowledge ${team.knowledgeName(agent)}\` to read it.`);
+    if (task) for (const e of T.board(root, task, { since: seen.boardN })) lines.push(T.boardLine(e));
+    for (const c of newComments(seen)) lines.push(`Comment ${c.id}${c.step ? ` (step ${c.step})` : ""}: ${c.text}`);
+    const t = task ? load(T.loadTask, task) : null;
+    for (const [n, status] of Object.entries(now2.steps)) {
+      const was = seen.steps?.[n];
+      if (was && was !== status) lines.push(`${n}. ${t?.steps.find((s) => String(s.n) === n)?.title ?? ""}: ${was} → ${status}`);
+    }
+    return lines.length ? `## Brief update\n\n${lines.join("\n")}` : "";
+  }
+
   function makeBrief() {
-    brief = team.brief(agent, { mode, root, parent, task, name: name ?? null, headless: true });
+    brief = team.brief(agent, { mode, root, parent, task, plan, step, name: name ?? null, headless: true });
     writeText(briefFile, brief);
+    state.seen = seenNow();
+    save();
   }
 
   async function runTurn(text) {
@@ -260,6 +311,7 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
       return finish({ text: "", error: `${agent.harness} has no headless mode here: open ${who}'s terminal and type /cli.` });
     }
     if (!state.session && !acp.current) makeBrief();
+    const update = state.seen ? briefUpdate(state.seen) : "";
     const { access, allow } = accessOf();
     status("working", text.split("\n")[0]);
     let shown = "";
@@ -277,16 +329,15 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
       }
     };
     try {
-      running = turn({ agent, known, state, key, brief, briefFile, prompt: text, cwd, on, access, allow, acp });
+      running = turn({ agent, known, state, key, brief, briefFile, prompt: update ? `${update}\n\n${text}` : text, cwd, on, access, allow, acp });
     } catch (e) {
       return finish({ text: "", error: e.message }, text);
     }
     const r = await running.done;
     running = null;
-    if (r.session && (r.text || !r.error)) {
-      state.session = r.session;
-      save();
-    }
+    if (r.session && (r.text || !r.error)) state.session = r.session;
+    state.seen = seenNow(); // the next turn's update starts from here
+    save();
     if (r.text && r.text !== shown) say(`\n${r.text.trim()}\n`);
     return finish(r, text);
   }
@@ -426,6 +477,9 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
 
   // Everything the harness runs knows it is an agent: bh then refuses the user's settings.
   process.env.BH_AGENT = who;
+  if (parent) process.env.BH_PARENT = parent;
+  if (task) process.env.BH_TASK = task;
+  if (mode === "lead") process.env.BH_LEAD = "1";
   for (const sig of ["SIGTERM", "SIGHUP"]) process.on(sig, quit);
   if (tty) write(`\x1b]2;${who}\x07`);
   if (address) team.hc(["label", address, "bot-herdr.briefed3=1", "bot-herdr.headless=1"]);

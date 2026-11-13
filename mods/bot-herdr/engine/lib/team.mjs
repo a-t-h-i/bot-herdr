@@ -52,22 +52,25 @@ export function templatesDir(env = process.env) {
 
 const role = (name) => readText(join(ENGINE, "roles", `${name}.md`)).trim();
 
-/** The report a child sends back, and where. */
-function reportSection({ parent, task, name }) {
-  const file = task && name ? `.bot-herdr/tasks/${task}/reports/${name}.md` : "the report file your first message names";
-  return [
+/** The report a child writes, records on the task with `bh report`, and sends its parent. */
+function reportSection({ parent, task, name, step = null }) {
+  const who = name ?? "you";
+  const file = task ? `.bot-herdr/tasks/${task}/reports/${who}.md` : `.bot-herdr/reports/${who}.md`;
+  const lines = [
     "## Reporting",
     `When you are done or stuck, write your report to ${file}: \`## Summary\` (two lines), \`## Changes\` (files and what changed), \`## Brief Check\` (each "Done when" criterion: met or not, with evidence), \`## Verification\` (\`- command — result\`), plus \`## Knowledge Proposals\`, \`## Script Proposals\`, \`## Blockers\` or \`## Pushback\` when you have them.`,
-    `Then send its path with a one-line summary to ${parent ? `\`${parent}\`` : "the agent that started you"}: \`hc send ${parent ?? "<its address>"} "<summary> — <report path>"\`. Report once, when done or stuck.`,
-    "The user follows every agent in the bot-herdr chat: run headless, your last message of each turn shows there; otherwise save a short plain summary with `bh reply \"<text>\"`.",
-  ].join("\n");
+  ];
+  if (task) lines.push(`Then record it on the task, which is the record \`bh inbox\` reads: \`bh report ${task}${step ? ` --step ${step}` : ""} --file ${file} "<one-line summary>"\`.`);
+  lines.push(`Then send its path with a one-line summary to ${parent ? `\`${parent}\`` : "the agent that started you"}: \`hc send ${parent ?? "<its address>"} "<summary> — ${file}"\`. Report once, when done or stuck.`);
+  lines.push("The user follows every agent in the bot-herdr chat: run headless, your last message of each turn shows there; otherwise save a short plain summary with `bh reply \"<text>\"`.");
+  return lines.join("\n");
 }
 
 /**
  * Everything an agent is told when it starts. `mode`: "lead" (the Orchestrator, or an agent the
  * user talks to in its own tab), "child" (started by another agent), "panel" or "review".
  */
-export function brief(agent, { mode = "child", parent = null, task = null, plan = null, root = process.cwd(), name = null, headless = false } = {}) {
+export function brief(agent, { mode = "child", parent = null, task = null, plan = null, step = null, root = process.cwd(), name = null, headless = false } = {}) {
   const { agents } = team();
   const r = roleOf(agent.role);
   const lead = agent.role === "orchestrator";
@@ -87,7 +90,7 @@ export function brief(agent, { mode = "child", parent = null, task = null, plan 
     `- \`bh\` below means \`${bh}\`. \`bh help\` lists its commands. Run it from the project folder.`,
     "- `hc` is herdr-core: `hc --skill` is its manual.",
   ];
-  tools.push(task ? `- Your task is \`${task}\`: \`bh task show ${task}\` has its request and steps, \`bh board read ${task}\` its board. Post with \`bh board post ${task} <kind> "<text>" --from ${name ?? slug(agent.name)}\`.` : "- When you work on a task, `bh task show <task>` has its request and steps and `bh board read <task>` its board; post with `bh board post <task> <kind> \"<text>\" --from <your name>`.");
+  tools.push(task ? `- Your task is \`${task}\`: \`bh task show ${task}\` has its request and steps, \`bh board read ${task}\` its board (\`--since <n>\` reads what is new since entry n; a brief update gives you n). Post with \`bh board post ${task} <kind> "<text>" --from ${name ?? slug(agent.name)}\`.` : "- When you work on a task, `bh task show <task>` has its request and steps and `bh board read <task>` its board (`--since <n>` reads what is new since entry n); post with `bh board post <task> <kind> \"<text>\" --from <your name>`.");
   if (plan) tools.push(`- The plan is \`${plan}\`: \`bh plan show ${plan}\`.`);
   tools.push("- `bh scripts` lists shared scripts; run one with `bh scripts run <name>`. `bh check` runs the project's lint, typecheck and tests for what changed.");
   tools.push("- Ask the user with `bh ask --file <questions.md>` (numbered questions, `- Label — meaning` options, optional fenced `mockup` blocks) and end your turn: the answers reach you as a message. Ask whenever a choice is theirs (scope, look, behaviour, trade-offs) instead of guessing, never in your reply text; your harness's own question tool becomes the same card.");
@@ -111,7 +114,7 @@ export function brief(agent, { mode = "child", parent = null, task = null, plan 
       "At the end of every turn, save what you want to tell the user (Markdown, short and plain) with `bh reply --file <reply.md>` (or `bh reply \"<text>\"`). The bot-herdr chat shows it as your reply; without it the user sees nothing unless they open your terminal.",
     ].join("\n"));
   } else {
-    parts.push(reportSection({ parent, task, name: name ?? slug(agent.name) }));
+    parts.push(reportSection({ parent, task, name: name ?? slug(agent.name), step }));
   }
 
   const known = knowledge.forBrief(root, knowledgeName(agent));
@@ -159,10 +162,11 @@ const MARK = "managed: bot-herdr";
 export const runsHeadless = (agent) => headless(agent.harness) && accessOf().headless;
 
 /** `bh agent …`: the agent terminal that runs a headless harness (agent.mjs). */
-export function agentArgv(agent, { mode = "child", name = null, parent = null, task = null, effort = null, model = null } = {}) {
+export function agentArgv(agent, { mode = "child", name = null, parent = null, task = null, step = null, plan = null, effort = null, model = null } = {}) {
   return [
     "node", BH.replace(/\\/g, "/"), "agent", slug(agent.name), "--mode", mode,
     ...(name ? ["--name", name] : []), ...(parent ? ["--parent", parent] : []), ...(task ? ["--task", task] : []),
+    ...(step ? ["--step", String(step)] : []), ...(plan ? ["--plan", plan] : []),
     ...(effort && effort !== agent.effort ? ["--effort", effort] : []), ...(model ? ["--model", model] : []),
   ];
 }

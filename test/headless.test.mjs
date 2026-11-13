@@ -307,3 +307,29 @@ test("bh agent: an ACP agent's bh ask is allowed and the turn waits for the card
   assert.ok(gs.findIndex((c) => c.got === "cancel") > gs.findIndex((c) => c.askPermission));
   assert.equal(existsSync(join(APP, "data", "bot-herdr", "replies", "g2.md")), false);
 });
+
+test("bh agent: a resumed turn carries only what changed since its brief", async () => {
+  setTeam("pi");
+  const T = await lib("lib/tasks.mjs");
+  const task = T.newTask(PROJECT, { request: "Brief update", steps: ["First", "Second"] });
+  const before = calls("pi").length;
+  assert.equal(agent("u1", "", "--task", task.id, "--", "one").code, 0);
+  T.post(PROJECT, task.id, { kind: "note", text: "the schema changed", from: "qa" });
+  T.updateTask(PROJECT, task.id, (t) => T.moveStep(t, 1, "start", { agent: "dev" }));
+  assert.equal(agent("u1", "", "--task", task.id, "--", "two").code, 0);
+  const prompts = calls("pi").slice(before).map((c) => c.prompt);
+  assert.equal(prompts.length, 2);
+  assert.equal(prompts[0], "one");
+  assert.match(prompts[1], /^## Brief update\n\n1\. \[note\] qa: the schema changed\n1\. First: todo → active\n\ntwo$/);
+  assert.doesNotMatch(prompts[1], /## Child agents|bot-herdr brief/);
+});
+
+test("bh agent: a turn after no change carries no brief update", async () => {
+  setTeam("pi");
+  const T = await lib("lib/tasks.mjs");
+  const task = T.newTask(PROJECT, { request: "No change", steps: ["One"] });
+  const before = calls("pi").length;
+  assert.equal(agent("u2", "", "--task", task.id, "--", "one").code, 0);
+  assert.equal(agent("u2", "", "--task", task.id, "--", "two").code, 0);
+  assert.deepEqual(calls("pi").slice(before).map((c) => c.prompt), ["one", "two"]);
+});

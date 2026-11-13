@@ -8,7 +8,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { argvOf, effortsOf, slug, withPrompt } from "../roster.js";
-import { APP_HOME, BH, BOOLEANS, DATA, UsageError, accessOf, bodyText, ensureDir, myAddress, need, parseArgs, projectRoot, readJson, readText, sh, store, writeJson, writeText } from "./lib/core.mjs";
+import { APP_HOME, BH, BOOLEANS, DATA, UsageError, accessOf, bodyText, ensureDir, myAddress, need, parseArgs, projectRoot, readJson, readText, sh, store, withLock, writeJson, writeText } from "./lib/core.mjs";
 import * as T from "./lib/tasks.mjs";
 import * as P from "./lib/plans.mjs";
 import * as K from "./lib/knowledge.mjs";
@@ -17,14 +17,14 @@ import * as Q from "./lib/ask.mjs";
 import * as team from "./lib/team.mjs";
 import * as W from "./lib/workspace.mjs";
 import * as C from "./classifier/index.mjs";
-import { replyText } from "./lib/agent.mjs";
+import { fileKey, replyText } from "./lib/agent.mjs";
 
 const HELP = `bh: bot-herdr's tools. Run from the project folder. Add --json for machine-readable output.
 
 Tasks
   bh task new "<request>" [--title T] [--track fast|full] [--plan P] [--branch|--worktree|--no-git]
                                   start a task (prints its triage, and its branch or worktree when Settings isolates tasks)
-  bh task list [--all]            bh task show [<id>]            bh task current
+  bh task list [--all]            bh task show [<id>] [--board]            bh task current
   bh task steps <id> "<step>" "<step>" …   (or --file plan.md: its ## Steps list)
   bh task step <id> <n> start|done|block|skip [--agent A] [--note N]
   bh task status <id> active|paused|done|abandoned     bh task archive <id>   bh task delete <id>  (not while active; its worktree goes, its branch stays)
@@ -32,6 +32,8 @@ Tasks
   bh task resolve <id> [--comment <cid>]       (the user's comments; all of them without --comment)
   bh board post <task> contract|decision|blocker|question|done|note "<text>" [--from A] [--to B]
   bh board read <task> [--kinds a,b] [--since N]
+  bh report <task> [--step N] --file <path> "<summary>"   record a report on the task (the board entry is the record)
+  bh inbox [--task T] [--peek]    reports addressed to me that I have not seen yet
 
 Plans
   bh plan new "<idea>"            bh plan list            bh plan show <id>
@@ -111,6 +113,9 @@ function changeOne(M, owner, flags, words) {
 /** Who a command speaks for: BH_AGENT (a child says its name), else the terminal it runs in. */
 const actor = () => process.env.BH_AGENT || myAddress() || null;
 
+/** One inbox line: the task and entry, whose step, who reported, and where the report is. */
+const inboxLine = (e) => `${e.task} #${e.n}${e.step ? ` step ${e.step}` : ""} ${e.from ?? "someone"}: ${e.text} — ${e.file}`;
+
 /** Who a step start is by: --agent, else the actor; a done or a block only takes --agent. */
 function stepAgent(flags, task, n, to) {
   if (flags.agent) return flags.agent;
@@ -148,7 +153,7 @@ async function main(argv) {
   const [cmd = "help", sub, ...more] = argv;
   const root = projectRoot();
   const c = C.makeClassifier();
-  const { flags, rest } = parseArgs(argv.slice(1), ["option", "kinds"], [...BOOLEANS, "refresh"]);
+  const { flags, rest } = parseArgs(argv.slice(1), ["option", "kinds"], [...BOOLEANS, "refresh", "peek", "board"]);
   const args = rest.slice(1);
 
   switch (cmd) {
@@ -181,7 +186,8 @@ async function main(argv) {
       if (sub === "show" || sub === undefined) {
         const task = T.loadTask(root, id);
         const where = [W.gitLine(task.git), W.missingWorktree(task)].filter(Boolean).join("\n");
-        return out(flags, { ...task, worked: T.worked(task), board: T.board(root, id), cwd: W.taskCwd(task, root) }, () => T.taskText(task, T.board(root, id)).replace(/\n/, `\n${where ? `${where}\n` : ""}`));
+        const entries = T.board(root, id);
+        return out(flags, { ...task, worked: T.worked(task), board: entries, cwd: W.taskCwd(task, root) }, () => T.taskText(task, entries, { all: Boolean(flags.board) }).replace(/\n/, `\n${where ? `${where}\n` : ""}`));
       }
       if (sub === "steps") {
         const titles = typeof flags.file === "string" ? T.stepsFromMarkdown(bodyText(flags, [])) : rest2;
@@ -239,7 +245,34 @@ async function main(argv) {
         return out(flags, entry, (e) => `Posted ${e.kind} #${e.n}.`);
       }
       const kinds = flags.kinds ? String(flags.kinds).split(",") : null;
-      return out(flags, T.board(root, id, { kinds, since: Number(flags.since ?? 0) }), (l) => l.map((e) => `${e.n}. [${e.kind}]${e.from ? ` ${e.from}` : ""}${e.to ? ` → ${e.to}` : ""}: ${e.text}`).join("\n") || "The board is empty.");
+      return out(flags, T.board(root, id, { kinds, since: Number(flags.since ?? 0) }), (l) => l.map(T.boardLine).join("\n") || "The board is empty.");
+    }
+
+    case "report": {
+      const id = need(sub, 'bh report <task> [--step <n>] --file <path> "<summary>"');
+      const summary = need(args.join(" "), 'bh report <task> [--step <n>] --file <path> "<summary>"');
+      const file = need(typeof flags.file === "string" ? flags.file : "", 'bh report <task> --file <path> "<summary>"');
+      const step = flags.step === undefined ? null : Number(flags.step);
+      const entry = T.report(root, id, { step, file, summary, from: flags.from ?? actor(), to: flags.to ?? (process.env.BH_PARENT || null) });
+      return out(flags, entry, (e) => `${e.step ? `Reported step ${e.step}` : "Reported"}: ${e.text}`);
+    }
+
+    case "inbox": {
+      const key = `${slug(process.env.BH_AGENT || "agent")}${myAddress() ? `-${fileKey(myAddress())}` : ""}`;
+      const cursorFile = join(DATA, "inbox", `${key}.json`);
+      const seen = readJson(cursorFile, {}) ?? {};
+      const me = [myAddress(), process.env.BH_AGENT || null].filter(Boolean);
+      const lead = Boolean(process.env.BH_LEAD);
+      const tasks = flags.task ? [T.loadTask(root, flags.task)] : T.listTasks(root).filter((t) => t.status === "active" || t.status === "paused");
+      const fresh = tasks.flatMap((t) => T.board(root, t.id, { kinds: ["done"] })
+        .filter((e) => e.file && e.n > (seen[t.id] ?? 0) && (me.includes(e.to) || (lead && !e.to)))
+        .map((e) => ({ task: t.id, ...e })));
+      if (fresh.length && !flags.peek) withLock(cursorFile, () => {
+        const cursor = readJson(cursorFile, {}) ?? {};
+        for (const e of fresh) cursor[e.task] = Math.max(cursor[e.task] ?? 0, e.n);
+        writeJson(cursorFile, cursor);
+      });
+      return out(flags, fresh, (l) => l.map(inboxLine).join("\n") || "No new reports.");
     }
 
     case "plan": {
@@ -438,7 +471,7 @@ async function main(argv) {
 
     case "brief": {
       const a = team.findMember(need(sub, "bh brief <agent>"));
-      return console.log(team.brief(a, { mode: flags.mode ?? (a.lead ? "lead" : "child"), parent: flags.parent ?? null, task: flags.task ?? null, plan: flags.panel ?? flags.plan ?? null, root, name: flags.name ?? null }));
+      return console.log(team.brief(a, { mode: flags.mode ?? (a.lead ? "lead" : "child"), parent: flags.parent ?? null, task: flags.task ?? null, plan: flags.panel ?? flags.plan ?? null, step: flags.step ?? null, root, name: flags.name ?? null }));
     }
 
     case "spawn": {
@@ -463,6 +496,7 @@ async function main(argv) {
         if (t.qa) risk = (await import("./classifier/qa-risk.mjs")).qaRiskBrief(t.qa);
       }
       const report = task ? `.bot-herdr/tasks/${task}/reports/${name}.md` : `.bot-herdr/reports/${name}.md`;
+      const plan = flags.panel ?? flags.plan ?? null;
       const about = [
         `You are ${name}.`,
         task ? `Your task is ${task} (bh task show ${task}); post on its board with --from ${name}.` : "",
@@ -476,12 +510,12 @@ async function main(argv) {
       if (team.runsHeadless(agent)) {
         // The agent terminal: it runs the harness headless, writes its own brief, and reports
         // its status, so hc wait sees each turn end.
-        const argv = team.agentArgv(agent, { mode, name, parent, task, effort, model: flags.model ?? null });
+        const argv = team.agentArgv(agent, { mode, name, parent, task, step: flags.step ?? null, plan, effort, model: flags.model ?? null });
         r = team.hc(["run", "--bg", "--name", name, "--cwd", cwd, "--", ...argv, "--", risk ? `${first}\n\n${risk}` : first]);
       } else {
         // The template carries the generic brief (role, team, knowledge); this run's specifics go
         // with the task, so one template per agent and mode serves every spawn.
-        const body = team.brief(agent, { mode, root }) + (risk ? `\n\n${risk}` : "");
+        const body = team.brief(agent, { mode, root, parent, task, plan, step: flags.step ?? null, name }) + (risk ? `\n\n${risk}` : "");
         const variant = [slug(a.name), mode !== "child" ? mode : "", flags.model ? slug(flags.model) : "", effort !== a.effort ? effort : ""].filter(Boolean).join("-");
         // hc runs a template's `command:` through `sh -c`, which Windows doesn't have: there the
         // command goes to hc run as argv instead.
@@ -616,8 +650,8 @@ async function main(argv) {
 
     case "agent": {
       const { runAgent } = await import("./lib/agent.mjs");
-      const word = need(sub, 'bh agent <agent> [--mode lead|child|panel|review] [--name N] [--parent T] [--task T] [--model M] [--effort E] [-- "<first message>"]');
-      return runAgent({ word, mode: flags.mode ?? "lead", name: flags.name ?? null, parent: flags.parent ?? null, task: flags.task ?? null, model: flags.model ?? null, effort: flags.effort ?? null, first: args.join(" ") });
+      const word = need(sub, 'bh agent <agent> [--mode lead|child|panel|review] [--name N] [--parent T] [--task T] [--step N] [--plan P] [--model M] [--effort E] [-- "<first message>"]');
+      return runAgent({ word, mode: flags.mode ?? "lead", name: flags.name ?? null, parent: flags.parent ?? null, task: flags.task ?? null, step: flags.step ?? null, plan: flags.plan ?? null, model: flags.model ?? null, effort: flags.effort ?? null, first: args.join(" ") });
     }
 
     case "access": {

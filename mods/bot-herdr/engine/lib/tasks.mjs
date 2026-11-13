@@ -155,14 +155,41 @@ export function worked(task, at = Date.now()) {
   return task.steps.reduce((sum, s) => sum + (s.workedMs ?? 0) + (s.status === "active" && s.started ? at - Date.parse(s.started) : 0), 0);
 }
 
-export function post(root, id, { kind, text, from = null, to = null }) {
+export function post(root, id, { kind, text, from = null, to = null, step = null, file = null }) {
   if (!BOARD_KINDS.includes(kind)) throw new Error(`A board post is one of: ${BOARD_KINDS.join(", ")}.`);
   const path = join(dir(root, id), "board.jsonl");
   return withLock(path, () => {
     const entry = { n: board(root, id).length + 1, at: now(), kind, from, to, text: String(text ?? "").trim() };
+    // A report's entry names its step (null when it has none) and its file; other kinds keep their shape.
+    if (file !== null || step !== null) Object.assign(entry, { step, file });
     appendJsonl(path, entry);
     return entry;
   });
+}
+
+/** A board entry as `bh board read` prints it. */
+export const boardLine = (e) => `${e.n}. [${e.kind}]${e.from ? ` ${e.from}` : ""}${e.to ? ` → ${e.to}` : ""}: ${e.text}`;
+
+/** A child's report: an entry on the board (the record) and, for a step, its own report on the task. */
+export function report(root, id, { step = null, summary, file, from = null, to = null }) {
+  const text = String(summary ?? "").trim();
+  if (!text) throw new Error("A report needs a one-line summary.");
+  const n = step === null || step === undefined ? null : Number(step);
+  updateTask(root, id, (t) => {
+    if (n === null) return;
+    const s = t.steps.find((x) => x.n === n);
+    if (!s) throw new Error(`Task ${t.id} has no step ${step}. It has ${t.steps.length}.`);
+    stopClock(s, now());
+    s.report = { file, summary: text, from, at: now() };
+  });
+  return post(root, id, { kind: "done", text, from, to, step: n, file });
+}
+
+/** Ends a step's running clock, keeping its status: only the Orchestrator marks a step done. */
+function stopClock(step, at) {
+  if (step.status !== "active" || !step.started) return;
+  step.workedMs = (step.workedMs ?? 0) + (Date.parse(at) - Date.parse(step.started));
+  step.started = null;
 }
 
 export function board(root, id, { kinds = null, since = 0 } = {}) {
@@ -222,7 +249,19 @@ export function taskLine(t) {
   return `${t.id}  ${t.status.padEnd(9)} ${t.steps.length ? `${done}/${t.steps.length} steps  ` : ""}${t.title}`;
 }
 
-export function taskText(t, entries = []) {
+/** One step as `bh task show` prints it, with its report under it. */
+function stepLine(s) {
+  const line = `${s.n}. [${s.status}] ${s.title}${s.agent ? ` (${s.agent})` : ""}${s.note ? ` — ${s.note}` : ""}`;
+  return s.report ? [line, `   report: ${s.report.file} — ${s.report.summary} (${s.report.from ?? "unknown"})`] : [line];
+}
+
+/** The board's counts by kind, then its last five entries (`all`: every entry). */
+function boardLines(entries, all) {
+  const counts = BOARD_KINDS.map((k) => [k, entries.filter((e) => e.kind === k).length]).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k}`);
+  return ["", "## Board", `board: ${counts.join(", ")}`, ...(all ? entries : entries.slice(-5)).map(boardLine)];
+}
+
+export function taskText(t, entries = [], { all = false } = {}) {
   const mins = Math.round(worked(t) / 60000);
   const lines = [
     `# ${t.title}`,
@@ -232,11 +271,11 @@ export function taskText(t, entries = []) {
     t.request || "(none)",
     "",
     "## Steps",
-    ...(t.steps.length ? t.steps.map((s) => `${s.n}. [${s.status}] ${s.title}${s.agent ? ` (${s.agent})` : ""}${s.note ? ` — ${s.note}` : ""}`) : ["(none yet: `bh task steps`)"]),
+    ...(t.steps.length ? t.steps.flatMap(stepLine) : ["(none yet: `bh task steps`)"]),
     ...(openComments(t).length ? ["", "## Open comments from the user", ...openComments(t).map((c) => `- ${c.step ? `step ${c.step} ("${c.quote}")` : "the task"}: ${c.text}`)] : []),
   ];
   if (t.triage) lines.push("", "## Classifier triage", JSON.stringify(t.triage));
   if (t.qa) lines.push("", "## QA risk", `${t.qa.risk}: ${t.qa.reasoning ?? ""}`);
-  if (entries.length) lines.push("", "## Board", ...entries.map((e) => `${e.n}. [${e.kind}]${e.from ? ` ${e.from}` : ""}${e.to ? ` → ${e.to}` : ""}: ${e.text}`));
+  if (entries.length) lines.push(...boardLines(entries, all));
   return lines.join("\n");
 }
