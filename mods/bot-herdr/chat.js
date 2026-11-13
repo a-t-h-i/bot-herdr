@@ -28,6 +28,8 @@ import { mockup, openInBrowser, previews, isImage } from "./media.js";
 import { commentRow } from "./plandoc.js";
 import { openLightbox } from "./lightbox.js";
 import { OpenQuestions } from "./questions.js";
+import { RAIL_W, RAIL_GAP, showsRail, groups, workingCount } from "./rail.js";
+import { railBeside, railPopover, railButton } from "./railview.js";
 
 /** What an agent run headless is doing right now (agent.mjs writes it on each tool call). */
 const activityDir = () => `${outboxDir().replace(/\/replies$/, "")}/activity`;
@@ -100,6 +102,7 @@ export class Chat {
     this.page = null;
     this.reading = false;
     this.open = new OpenQuestions();
+    this.askFor = null; // the question the rail's Answer picked: the drawer shows that one first
     this.unfolded = new Set(); // your long messages opened with Show more
     this.turn = null; // the agent on the working line when several work (its address)
     this.turnShown = true; // the line's first frame is drawn low and clear, then slides up
@@ -110,6 +113,13 @@ export class Chat {
     this.primed = false; // the first draw is not an arrival
     this.arriving = new Set(); // ids drawn at rest for their one arrival frame
     this.commenting = null; // the reply with its comment box open: { entry, edit: cid | null }
+    this.since = {}; // address → { status, at }: when that agent's status last changed (the rail's elapsed)
+    this.railSeen = new Set(); // addresses the rail has drawn once
+    this.railFresh = new Set(); // addresses drawn at rest for their arrival frame
+    this.railPrimed = false; // the first rail draw is not an arrival
+    this.railOpen = false; // the rail as a popover over the feed (a narrow window)
+    this.railHandle = cx.focus_handle(); // holds the keyboard while that popover is open
+    this.railMinute = Math.floor(Date.now() / 60000); // the minute the rail's elapsed times show
     this.commentBoxes = new Map(); // agent name → its comment box (a placeholder is fixed when made)
     this.composer = new Composer({
       sent: (message, cx) => this.sent(message, cx),
@@ -321,6 +331,13 @@ export class Chat {
       try {
         const now = Date.now();
         const live = this.live();
+        if (this.trackSince(live, now)) cx.notify();
+        // The elapsed times the rail shows change by the minute: one redraw when that minute turns.
+        const minute = Math.floor(now / 60000);
+        if (minute !== this.railMinute) {
+          this.railMinute = minute;
+          if (live.length) cx.notify();
+        }
         for (const a of live) {
           if (a.address.includes("/")) continue; // another machine: its reply file is not here
           let text = null;
@@ -548,6 +565,103 @@ export class Chat {
     });
   }
 
+  // ── The agents rail ───────────────────────────────────────────────────────────────────────
+
+  /** Records when each live agent's status last changed; true when one did (the rail's elapsed). */
+  trackSince(live, now) {
+    const since = {};
+    let changed = false;
+    for (const a of live) {
+      const was = this.since[a.address];
+      const same = was && was.status === a.status;
+      since[a.address] = same ? was : { status: a.status, at: now };
+      if (!same) changed = true;
+    }
+    if (Object.keys(this.since).some((k) => !since[k])) changed = true;
+    this.since = since;
+    return changed;
+  }
+
+  /** The oldest open question each agent asks, by its address. */
+  questionsBy() {
+    const out = {};
+    for (const q of this.open.list) if (q.from && !out[q.from]) out[q.from] = q;
+    return out;
+  }
+
+  /** This space's live agents as the rail lists them: name, lead, status, question, what it does. */
+  railRows() {
+    const space = this.space();
+    const asks = this.questionsBy();
+    return this.live().filter((a) => a.space === space).map((a) => ({
+      address: a.address,
+      name: this.composer.nameOf(a.address),
+      lead: Boolean(this.composer.entryAt(a.address)?.lead),
+      status: a.status,
+      question: asks[a.address] ?? null,
+      doing: this.doing[a.address] ?? (a.quiet ? "Its terminal shows its progress" : null),
+      since: this.since[a.address]?.at ?? null,
+    }));
+  }
+
+  /** This frame's rail: its groups, how many are live, and the rows drawn at rest as they join. */
+  railModel(cx) {
+    const rows = this.railRows();
+    const fresh = this.railPrimed ? rows.filter((r) => !this.railSeen.has(r.address)) : [];
+    this.railPrimed = true;
+    this.railSeen = new Set(rows.map((r) => r.address));
+    if (fresh.length) {
+      this.railFresh = new Set(fresh.map((r) => r.address));
+      cx.timer.after(16, (cx) => {
+        this.railFresh = new Set();
+        cx.notify();
+      });
+    }
+    return { rows, groups: groups(rows), live: rows.length, fresh: this.railFresh };
+  }
+
+  /** The open questions, the rail's Answer's one first (the drawer shows the list's first). */
+  asked(list) {
+    const at = list.findIndex((q) => q.id === this.askFor);
+    return at <= 0 ? list : [list[at], ...list.slice(0, at), ...list.slice(at + 1)];
+  }
+
+  /** The rail's Answer: the composer's drawer opens on that question and takes the keyboard. */
+  answerFromRail(r, cx) {
+    this.askFor = r.question.id;
+    this.railOpen = false;
+    this.composer.pane = null;
+    this.composer.putAway.delete(r.question.id);
+    this.composer.focus();
+    cx.notify();
+  }
+
+  openRail(cx) {
+    this.railOpen = true;
+    cx.notify();
+    cx.timer.after(16, () => this.railHandle.focus()); // Esc reaches the popover once it has the keyboard
+  }
+
+  closeRail(cx) {
+    this.railOpen = false;
+    // The keyboard goes back where it was: the slim bar's root when the composer was folded, else its box.
+    if (this.composer.isFolded()) this.handle.focus();
+    else this.composer.focus();
+    cx.notify();
+  }
+
+  /** What a rail row does: open an agent's terminal, open the question it asks, close the rail. */
+  railActs() {
+    return {
+      open: (r) => {
+        this.railOpen = false;
+        openTerminal(r.address);
+      },
+      answer: (r, cx) => this.answerFromRail(r, cx),
+      close: (cx) => this.closeRail(cx),
+    };
+  }
+
   // ── Drawing ────────────────────────────────────────────────────────────────────────────────
 
   render(cx) {
@@ -567,6 +681,12 @@ export class Chat {
     const c = colors();
     const width = Math.max(320, Math.min(SIZE.maxWidth, this.size.width - SIZE.gutter * 2));
     const space = this.space();
+    // The rail moves the chat column left by half the rail and its gap, so the pair is centred;
+    // the feed's own measurements stay as they are, since the rail sits outside its column.
+    const beside = showsRail(this.size.width);
+    if (beside && this.railOpen) this.railOpen = false; // beside the chat, there is no popover to keep
+    const shift = beside ? (RAIL_W + RAIL_GAP) / 2 : 0;
+    const columnLeft = Math.round((this.size.width - width) / 2 - shift);
     const foot = SIZE.foot + this.composer.height(width) + SPACE[4];
     // The feed's height. Heights measured since the last wheel, or the composer folding to its
     // slim bar, can change how far up the feed goes: never leave empty space above the oldest.
@@ -591,7 +711,12 @@ export class Chat {
     });
     const up = this.back > 0 || this.px > 0;
     const working = this.workers();
-    this.composer.questions = this.open.list;
+    if (this.askFor && !this.open.list.some((q) => q.id === this.askFor)) this.askFor = null;
+    this.composer.questions = this.asked(this.open.list);
+    const rail = this.railModel(cx);
+    const railModel = { groups: rail.groups, live: rail.live, fresh: rail.fresh, acts: this.railActs() };
+    const railRight = Math.round(this.size.width - columnLeft - width); // the chat column's right edge
+    const popoverTop = SPACE[4] + CONTROL + SPACE[2]; // under the folded button
     // A pane with nothing to draw (a suggestion list that matches nothing) dims nothing either.
     const pane = this.composer.paneShown() ? this.composer.paneNow() : null;
 
@@ -631,14 +756,14 @@ export class Chat {
             this.handle.focus(); // the text box is not drawn while folded: typing comes here
           })
           .on_scroll_wheel((e, cx) => this.scroll(e, view.total, cx))
-          .when(view.total === 0, (el) => el.child(this.empty(c, width)))
+          .when(view.total === 0, (el) => el.child(this.empty(c, width, shift)))
           .when(view.total > 0, (el) =>
             el.child(
               // Bottom-anchored and shifted down by the pixel offset, so its foot is clipped.
               v_flex()
                 .absolute()
                 .bottom(-this.px)
-                .left(Math.round((this.size.width - width) / 2))
+                .left(columnLeft)
                 .flex_none()
                 .w(width)
                 .gap(SPACE[4])
@@ -649,8 +774,27 @@ export class Chat {
           // Stays put over the feed while the column scrolls under it.
           .when(up, (el) => el.child(this.newer(c, view.back))),
       )
+      // The agents: beside the chat on a window with room for both; a button over the chat's top
+      // right, opening the same rail as a popover, below that.
+      .when(beside, (el) => el.child(railBeside(c, {
+        ...railModel,
+        left: columnLeft + width + RAIL_GAP,
+        top: SPACE[5],
+        maxH: Math.max(160, this.size.height - SPACE[5] * 2),
+      })))
+      .when(!beside, (el) => el.child(
+        div().absolute().top(SPACE[4]).right(railRight)
+          .child(railButton(c, workingCount(rail.rows), (_e, cx) => this.openRail(cx))),
+      ))
+      .when(!beside && this.railOpen, (el) => el.child(railPopover(c, {
+        ...railModel,
+        right: railRight,
+        top: popoverTop,
+        maxH: Math.max(160, this.size.height - popoverTop - SPACE[5]),
+        handle: this.railHandle,
+      })))
       // The tasks under way, top left, when the window has room for them beside the chat.
-      .when(this.tasks.length > 0 && (this.size.width - width) / 2 >= WIDGET_W + 28, (el) => el.child(this.taskWidget(c)))
+      .when(this.tasks.length > 0 && (this.size.width - width) / 2 - shift >= WIDGET_W + 28, (el) => el.child(this.taskWidget(c)))
       // An open pane on the composer dims the feed and the tasks widget behind it, and takes
       // their clicks and wheel. gpui has no blur, so the scrim stands in for one. A press on it
       // puts the pane away; question cards stay until answered or dismissed. It is drawn whether
@@ -671,12 +815,13 @@ export class Chat {
             this.composer.close(cx);
           })
           .on_scroll_wheel((_e, cx) => cx.stop_propagation())))
-      // The composer, bottom centre. Its suggestions grow upward over the feed.
+      // The composer, bottom centre of the chat column (shifted with it beside the rail). Its
+      // suggestions grow upward over the feed.
       .child(
         v_flex()
           .absolute()
-          .left(0)
-          .right(0)
+          .left(-shift)
+          .right(shift)
           .bottom(SIZE.foot)
           .items_center()
           .child(this.composer.render(cx, this.size.width, this.size.height)),
@@ -705,9 +850,11 @@ export class Chat {
     return mine.map((_, i) => this.heights.get(mine[mine.length - 1 - i].id));
   }
 
-  empty(c, width) {
+  empty(c, width, shift = 0) {
     const lead = this.composer.leadEntry().name;
     return v_flex()
+      .relative()
+      .left(-shift)
       .w(width)
       .flex_1()
       .items_center()
