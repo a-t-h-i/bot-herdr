@@ -9,6 +9,55 @@ export function replyFile(outbox, address) {
   return `${outbox}/${String(address).replace(/[\\/]/g, "_")}.md`;
 }
 
+/** The key of an address in the replies folder (the same rule as engine/lib/agent.mjs `fileKey`). */
+export const fileKey = (address) => String(address).replace(/[\\/]/g, "_");
+
+/** A directory entry's name, whether `readdir` hands back a name or a Dirent. */
+export const entryName = (entry) => (typeof entry === "string" ? entry : String(entry?.name ?? ""));
+
+/** An agent's reply log (`replies/<key>.jsonl`): one { at, name, text } per turn, oldest first; unreadable lines dropped. */
+export function logEntries(text) {
+  const out = [];
+  for (const line of String(text ?? "").split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const got = JSON.parse(line);
+      if (got && typeof got.text === "string" && Number.isFinite(Date.parse(got.at))) out.push({ at: got.at, name: got.name ?? null, text: got.text });
+    } catch {
+      // half a line the engine had not finished writing, or one that was never one
+    }
+  }
+  return out;
+}
+
+/**
+ * What a reply log adds to the feed: the turns later than `sinceAt` (an ISO time), and the newest
+ * time the log holds, for the caller to keep. A log never read before (`sinceAt` null or empty)
+ * adds nothing — the history behind it is not the feed's — and only its newest time is recorded.
+ */
+export function logNew(text, sinceAt) {
+  const lines = logEntries(text);
+  const newest = lines.length ? lines[lines.length - 1].at : sinceAt ?? null;
+  if (!sinceAt) return { entries: [], at: newest };
+  const since = Date.parse(sinceAt);
+  return { entries: lines.filter((line) => Date.parse(line.at) > since), at: newest };
+}
+
+/**
+ * The feed with a run of child replies folded: consecutive child entries between two other entries
+ * become one item ({ id, kind: "kids", at, space, children }) the feed draws as one row.
+ */
+export function groupChildren(list, isChild) {
+  const out = [];
+  for (const e of list ?? []) {
+    const last = out[out.length - 1];
+    if (!isChild(e)) out.push(e);
+    else if (last?.kind === "kids") out[out.length - 1] = { ...last, children: [...last.children, e], space: last.space ?? e.space ?? null };
+    else out.push({ id: `kids-${e.id}`, kind: "kids", at: e.at, space: e.space ?? null, children: [e] });
+  }
+  return out;
+}
+
 /** Adds an entry, dropping the oldest beyond KEEP. */
 export function push(entries, entry) {
   const next = [...entries, { id: `${entry.at.toString(36)}-${entries.length.toString(36)}`, ...entry }];

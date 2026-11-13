@@ -7,6 +7,7 @@ import { readTextFile, shared, setShared } from "herdr";
 import { outboxDir } from "./composer.js";
 import { bh, enc } from "./bh.js";
 import { openCounts, OPEN_COUNTS } from "./signals.js";
+import { entryName } from "./feed.js";
 
 /** Where agents' questions for the user wait (bh ask writes them; answered ones move aside). */
 const questionsDir = () => `${outboxDir().replace(/\/replies$/, "")}/questions`;
@@ -42,7 +43,7 @@ export class OpenQuestions {
   async poll() {
     let names = [];
     try {
-      names = (await fs.readdir(questionsDir())).map((d) => (typeof d === "string" ? d : d.name)).filter((n) => /^q-.*\.json$/.test(n));
+      names = (await fs.readdir(questionsDir())).map(entryName).filter((n) => /^q-.*\.json$/.test(n));
     } catch {
       names = [];
     }

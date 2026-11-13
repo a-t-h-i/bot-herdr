@@ -17,7 +17,7 @@ import { colors } from "./theme.js";
 import { Composer, outboxDir, liveAgents } from "./composer.js";
 import { isQuiet, quietStatus } from "./live.js";
 import { FOCUS, OUTGOING, OPEN_TASK, activePage, openTerminal, showPage, sendFromChat } from "./pages.js";
-import { replyFile, replyBody, push, shown, scrollBy, clampScroll, isNew, isHandled, outcome, clock, segments, fold, linkFiles, addComment, editComment, resolveComment, deleteComment } from "./feed.js";
+import { replyFile, replyBody, push, shown, scrollBy, clampScroll, isNew, isHandled, outcome, clock, segments, fold, linkFiles, addComment, editComment, resolveComment, deleteComment, fileKey, logNew, groupChildren, entryName } from "./feed.js";
 import { openFile, openLink } from "./viewer.js";
 import { bh, bhJson, enc, projectDir } from "./bh.js";
 import { roleWord, roleTone, mentionTone, alpha } from "./indicators.js";
@@ -29,7 +29,7 @@ import { commentRow } from "./plandoc.js";
 import { openLightbox } from "./lightbox.js";
 import { OpenQuestions, publishCounts } from "./questions.js";
 import { RAIL_W, RAIL_GAP, showsRail, groups, workingCount } from "./rail.js";
-import { railBeside, railPopover, railButton } from "./railview.js";
+import { railBeside, railPopover, railButton, agentBadge } from "./railview.js";
 
 /** What an agent run headless is doing right now (agent.mjs writes it on each tool call). */
 const activityDir = () => `${outboxDir().replace(/\/replies$/, "")}/activity`;
@@ -37,6 +37,8 @@ const activityDir = () => `${outboxDir().replace(/\/replies$/, "")}/activity`;
 const POLL_MS = 2500;
 const TASKS_MS = 5000;
 const WIDGET_W = 260;
+const KID_LINES = 3; // a child report's first lines, folded
+const KID_BADGES = 4; // child badges on a folded row before "+n"
 
 const load = (key, fallback) => {
   try {
@@ -91,6 +93,9 @@ export class Chat {
     this.size = { width: 960, height: 640 };
     this.entries = load("feed", []).filter((e) => !(e.kind === "agent" && isHandled(e.text)));
     this.seen = load("seen", {}); // address → the last reply text shown
+    this.logSeen = load("logSeen", {}); // a reply log's key → the last turn time shown from it
+    this.kidsOpen = new Set(); // child groups opened in place (item ids)
+    this.kidsHeights = new Map(); // child group item id → its drawn height, so opening animates to it
     this.waits = {}; // address → { name, worked, stopped, blocked }: agents we wrote to
     this.doing = {}; // address → what a headless agent is doing ("Read src/app.tsx")
     this.back = 0; // whole entries scrolled up from the newest
@@ -339,8 +344,12 @@ export class Chat {
           this.railMinute = minute;
           if (live.length) cx.notify();
         }
+        // Every turn in every agent's reply log first, live or not: an agent killed right after
+        // its turn still said what it said.
+        const logged = await this.readLogs(live, cx);
         for (const a of live) {
           if (a.address.includes("/")) continue; // another machine: its reply file is not here
+          if (logged.has(fileKey(a.address))) continue; // its log holds every turn it took
           let text = null;
           try {
             text = await readTextFile(replyFile(outboxDir(), a.address));
@@ -519,6 +528,51 @@ export class Chat {
                   else this.actTask(t.id, "paused", cx);
                 }, { tone: "secondary" })))));
         })));
+  }
+
+  /**
+   * Every turn in every reply log (`replies/<key>.jsonl`), whether or not its agent is still
+   * live: a reply reaches the feed even when the agent was killed before the next poll. A log
+   * seen for the first time is history — its newest line is recorded and nothing is added.
+   * Returns the keys that have a log, so their `.md` is left alone.
+   */
+  async readLogs(live, cx) {
+    let names = [];
+    try {
+      names = (await fs.readdir(outboxDir())).map(entryName).filter((n) => n.endsWith(".jsonl"));
+    } catch {
+      names = []; // no folder yet: nothing has replied
+    }
+    for (const name of names) {
+      const key = name.slice(0, -".jsonl".length);
+      const { entries, at } = logNew(await this.logText(key), this.logSeen[key]);
+      if (at !== this.logSeen[key]) {
+        this.logSeen[key] = at;
+        save("logSeen", this.logSeen);
+      }
+      for (const line of entries) this.addLogged(key, line, live, cx);
+    }
+    return new Set(names.map((n) => n.slice(0, -".jsonl".length)));
+  }
+
+  /** One reply log's text, or "" when it cannot be read. */
+  async logText(key) {
+    try {
+      return (await readTextFile(replyFile(outboxDir(), key).replace(/\.md$/, ".jsonl"))) ?? "";
+    } catch {
+      return "";
+    }
+  }
+
+  /** One turn of a reply log, added as a reply is: in the agent's space while it is still live. */
+  addLogged(key, line, live, cx) {
+    const agent = live.find((a) => fileKey(a.address) === key);
+    const address = agent?.address ?? key;
+    delete this.waits[address];
+    const text = replyBody(String(line.text ?? ""));
+    if (!text || isHandled(text)) return;
+    const name = line.name ?? this.composer.nameOf(address);
+    this.add({ kind: "agent", space: agent?.space ?? this.space(), text, from: { address, name, tile: agent?.tile ?? null } }, cx);
   }
 
   /** Reads new question files; a file that went (answered) drops its card; the tabs keep the count. */
@@ -701,7 +755,7 @@ export class Chat {
       this.back = next.back;
       this.px = next.px;
     }
-    const view = shown(this.entries, space, this.back);
+    const view = shown(this.items(space), space, this.back);
     this.back = view.back;
     if (view.total === 0) this.px = 0;
     // A new message lands rather than appears: drawn at rest for one frame, then faded in.
@@ -848,9 +902,22 @@ export class Chat {
     cx.notify();
   }
 
+  /** The feed of this space as it is drawn: a run of child replies folded into one row of reports. */
+  items(space) {
+    const mine = this.entries.filter((x) => (x.space ?? null) === (space ?? null));
+    return groupChildren(mine, (e) => this.childEntry(e));
+  }
+
+  /** Whether an entry is a child's reply: an agent's that is not the Orchestrator's, gone or not. */
+  childEntry(e) {
+    if (e.kind !== "agent" || !e.from?.address) return false;
+    const entry = this.composer.entryAt(e.from.address);
+    return !(entry ? entry.lead : e.from.name === "Orchestrator");
+  }
+
   /** This space's entries' drawn heights (gap included), newest first; undefined until measured. */
   feedHeights(space) {
-    const mine = this.entries.filter((x) => (x.space ?? null) === (space ?? null));
+    const mine = this.items(space);
     return mine.map((_, i) => this.heights.get(mine[mine.length - 1 - i].id));
   }
 
@@ -871,7 +938,7 @@ export class Chat {
   }
 
   entry(c, e, width) {
-    const el = e.kind === "me" ? this.mine(c, e, width) : e.kind === "agent" ? this.reply(c, e, width) : this.note(c, e);
+    const el = e.kind === "me" ? this.mine(c, e, width) : e.kind === "kids" ? this.kids(c, e) : e.kind === "agent" ? this.reply(c, e, width) : this.note(c, e);
     const arriving = this.arriving.has(e.id);
     // Measured for the pixel scroll: its height plus the column's gap.
     return el
@@ -1085,6 +1152,98 @@ export class Chat {
       .text_color(c.muted)
       .child(keepPress(div().min_w(0)).child(selectable(`bh-note-md-${e.id}`, e.text)))
       .when(Boolean(e.address), (el) => el.child(this.link(c, `bh-open-${e.id}`, "Open terminal", () => openTerminal(e.address))));
+  }
+
+  /** A run of child replies folded into one row: whose they were, how many, and a click that opens them. */
+  kids(c, e) {
+    const open = this.kidsOpen.has(e.id);
+    return v_flex()
+      .id(`bh-e-${e.id}`)
+      .flex_none()
+      .gap(SPACE[3])
+      .child(this.kidsHead(c, e, open))
+      .child(this.kidsBody(c, e, open));
+  }
+
+  /** The folded row: the children's badges and names, how many reports, and the chevron. */
+  kidsHead(c, e, open) {
+    const n = e.children.length;
+    const names = [...new Set(e.children.map((k) => k.from?.name ?? "Agent"))].join(", ");
+    return clickable(
+      h_flex()
+        .gap(SPACE[2])
+        .items_center()
+        .px(SPACE[3])
+        .py(SPACE[2])
+        .rounded(SIZE.radius)
+        .bg(c.fill)
+        .border_1()
+        .border_color(c.edge)
+        .on_click((_ev, cx) => this.openKids(e.id, cx))
+        .children(e.children.slice(0, KID_BADGES).map((k) => agentBadge(c, k.from?.name ?? "Agent", CHIP)))
+        .when(n > KID_BADGES, (el) => el.child(div().text_size(TYPE.xs).text_color(c.faint).child(`+${n - KID_BADGES}`)))
+        .child(div().flex_none().text_size(TYPE.sm).font_medium().text_color(c.ink).child(`${n} child report${n === 1 ? "" : "s"}`))
+        .child(div().flex_1().min_w(0).truncate().text_size(TYPE.sm).text_color(c.muted).child(`· ${names}`))
+        .child(svg(ICON(open ? "chevron-down" : "chevron-right")).flex_none().size(GLYPH.sm).text_color(c.faint)),
+      c,
+      `bh-kids-${e.id}`,
+    );
+  }
+
+  /** The group's reports, in a box whose height grows to what they measured and folds to nothing. */
+  kidsBody(c, e, open) {
+    return div()
+      .overflow_hidden()
+      .opacity(open ? 1 : 0)
+      .h(open ? this.kidsHeights.get(e.id) || e.children.length * 120 : 0)
+      .transition("height", MOTION.row)
+      .transition("opacity", MOTION.row)
+      .child(v_flex()
+        .id(`bh-kids-body-${e.id}`)
+        .gap(SPACE[3])
+        .pl(SPACE[4])
+        .on_size_change((size, cx) => this.measureKids(e.id, size, cx))
+        .children(e.children.map((k) => this.kidReport(c, k))));
+  }
+
+  /** Records a group's drawn height, so opening it starts from the size it ends at. */
+  measureKids(id, size, cx) {
+    const h = size.height / (Number(settings().zoom) || 1);
+    if (Math.abs((this.kidsHeights.get(id) ?? -1) - h) < 1) return;
+    this.kidsHeights.set(id, h);
+    cx.notify();
+  }
+
+  openKids(id, cx) {
+    if (this.kidsOpen.has(id)) this.kidsOpen.delete(id);
+    else this.kidsOpen.add(id);
+    cx.notify();
+  }
+
+  /** One child's report in an opened group: who, when, its first lines and Show all. */
+  kidReport(c, k) {
+    const lines = String(k.text ?? "").split("\n");
+    const open = this.unfolded.has(k.id);
+    const text = open || lines.length <= KID_LINES ? String(k.text ?? "") : `${lines.slice(0, KID_LINES).join("\n")}…`;
+    return v_flex()
+      .id(`bh-kid-${k.id}`)
+      .flex_none()
+      .gap(SPACE[1])
+      .child(h_flex().gap(SPACE[3]).items_center()
+        .child(div().text_size(TYPE.sm).font_semibold().text_color(agentInk(c, k.from?.name ?? "Agent")).child(k.from?.name ?? "Agent"))
+        .child(div().text_size(TYPE.xs).text_color(c.faint).child(clock(k.at))))
+      .child(div().text_size(TYPE.sm).line_height(`${LINE.sm}px`)
+        .child(TextView.markdown(`bh-kid-md-${k.id}-${open ? "o" : "c"}`, linkFiles(text)).selectable(true).on_link_click((url) => openLink(url, projectDir()))))
+      .when(lines.length > KID_LINES, (el) => el.child(
+        actionButton(c, `bh-kid-more-${k.id}`, open ? "Show less" : "Show all", (_ev, cx) => this.showKidFull(k.id, cx), { tone: "quiet" }).self_start(),
+      ));
+  }
+
+  /** A child report whole, or folded back to its first lines. */
+  showKidFull(id, cx) {
+    if (this.unfolded.has(id)) this.unfolded.delete(id);
+    else this.unfolded.add(id);
+    cx.notify();
   }
 
   /** A reply's quiet action: always readable, and fully lit while its reply is under the pointer or the keyboard. */
