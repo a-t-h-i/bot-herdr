@@ -6,7 +6,7 @@
 
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -190,14 +190,14 @@ function clearStaleLock(lock) {
     const stale = `${lock}.${process.pid}.${randomUUID().slice(0, 8)}.stale`;
     renameSync(lock, stale);
     if (readFileSync(stale, "utf8") !== token) {
-      // Not the file we inspected: give it back and wait for its holder.
+      // Not the file we inspected: give it back, but a link fails when another waiter took the lock,
+      // so never replace a fresh holder's lock with this one.
       try {
-        renameSync(stale, lock);
-      } catch {
-        try {
-          unlinkSync(stale);
-        } catch {}
-      }
+        linkSync(stale, lock);
+      } catch {}
+      try {
+        unlinkSync(stale);
+      } catch {}
       return false;
     }
     unlinkSync(stale);

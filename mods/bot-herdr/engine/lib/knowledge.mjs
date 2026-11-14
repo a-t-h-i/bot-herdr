@@ -105,12 +105,47 @@ export function search(root, words) {
   return out;
 }
 
-/** What goes in a brief: the file with notes, cut at `max` characters with a pointer to the rest. */
+/** A file split into the part before its first `## ` section and the sections themselves, in order. */
+function sectionsOf(md) {
+  const lines = md.split("\n");
+  const at = lines.findIndex((l) => l.startsWith("## "));
+  if (at < 0) return [md, []];
+  return [lines.slice(0, at).join("\n"), lines.slice(at).join("\n").split(/(?=^## )/m).filter(Boolean)];
+}
+
+const sectionName = (section) => section.split("\n")[0].replace(/^##\s+/, "").trim();
+
+/** The section cut to the last whole `- ` entry that fits in `budget` characters (its heading always stays). */
+function entriesThatFit(section, budget) {
+  const lines = section.split("\n");
+  let end = 1;
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].startsWith("- ") && lines.slice(0, i + 1).join("\n").length <= budget) end = i + 1;
+  }
+  return lines.slice(0, end).join("\n");
+}
+
+/** What goes in a brief: the file with notes, whole sections up to `max` characters, and the names of those left out. */
 export function forBrief(root, agent, max = 8000) {
   const md = withNotes(root, agent).trim();
-  if (!md) return "";
-  if (md.length <= max) return md;
-  return `${md.slice(0, max)}\n\n[… cut: the whole file is in \`bh knowledge ${agent}\`]`;
+  if (!md || md.length <= max) return md;
+  const [head, sections] = sectionsOf(md);
+  if (!sections.length) return `${md.slice(0, max)}\n\n[… cut: the whole file is in \`bh knowledge ${agent}\`]`;
+  const kept = [head];
+  let size = head.length + 1; // the newline between the head and the first section
+  let at = sections.length;
+  for (const [i, section] of sections.entries()) {
+    if (size + section.length > max) {
+      at = i;
+      break;
+    }
+    kept.push(section);
+    size += section.length;
+  }
+  if (at === 0 && sections[0].length > max - size) kept.push(entriesThatFit(sections[0], max - size));
+  const left = sections.slice(at).map(sectionName).join(", ");
+  const cut = left ? `[… cut: ${left}; the whole file is in \`bh knowledge ${agent}\`]` : "";
+  return `${kept.join("\n").trim()}${cut ? `\n\n${cut}` : ""}`;
 }
 
 export { join };

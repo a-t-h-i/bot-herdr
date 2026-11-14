@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -116,7 +116,7 @@ const FAKES = {
       }, 300);
     } else {
       out({ type: "assistant", message: { content: [{ type: "tool_use", name: "Read", input: { file_path: "src/x.js" } }] } });
-      out({ type: "result", subtype: "success", result: "Claude says: " + prompt.trim() });
+      out({ type: "result", subtype: "success", result: "Claude says: " + prompt.trim(), usage: { input_tokens: 120, output_tokens: 30, cache_read_input_tokens: 5 }, total_cost_usd: 0.012 });
     }
   `),
   codex: fake("codex", `
@@ -132,7 +132,7 @@ const FAKES = {
     } else {
       out({ type: "item.started", item: { type: "command_execution", command: "ls" } });
       out({ type: "item.completed", item: { type: "agent_message", text: "Codex says: " + prompt.trim().split("\\n").pop() } });
-      out({ type: "turn.completed" });
+      out({ type: "turn.completed", usage: { input_tokens: 40, output_tokens: 8, cached_input_tokens: 2 } });
     }
   `),
   pi: fake("pi", `
@@ -347,4 +347,55 @@ test("bh agent: the brief update lists steps added and removed since the brief",
   const prompts = calls("pi").slice(before).map((c) => c.prompt);
   assert.match(prompts[1], /^## Brief update\n\n2\. Two: new\n\ntwo$/);
   assert.match(prompts[2], /^## Brief update\n\n2: removed\n\nthree$/);
+});
+
+// ── usage: what each turn cost ─────────────────────────────────────────────────────────────
+
+const usageDir = join(APP, "data", "bot-herdr", "usage");
+const recorded = (key) => (existsSync(join(usageDir, `${key}.jsonl`)) ? readFileSync(join(usageDir, `${key}.jsonl`), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
+const bhOut = (...args) => spawnSync(process.execPath, [BH, ...args], { cwd: PROJECT, encoding: "utf8", env: { ...process.env, BH_APP_HOME: APP, HC_TERMINAL_ID: "", PATH: "" } }).stdout;
+
+test("bh agent: a turn's reported usage is kept per agent and on its task", async () => {
+  const T = await lib("lib/tasks.mjs");
+  const task = T.newTask(PROJECT, { request: "Usage", steps: ["One"] });
+  setTeam("claude");
+  assert.equal(agent("c5", "", "--task", task.id, "--step", "1", "--", "hello").code, 0);
+  const [turn] = recorded("dev-c5");
+  assert.equal(turn.agent, "Dev");
+  assert.equal(turn.harness, "claude");
+  assert.equal(turn.model, "claude-sonnet-5-5");
+  assert.equal(turn.task, task.id);
+  assert.equal(turn.step, 1);
+  assert.deepEqual([turn.input, turn.output, turn.cacheRead, turn.costUsd], [120, 30, 5, 0.012]);
+  assert.equal(typeof turn.ms, "number");
+  assert.deepEqual(T.usageOf(PROJECT, task.id).map((r) => [r.agent, r.input, r.costUsd]), [["Dev", 120, 0.012]]);
+
+  setTeam("codex");
+  assert.equal(agent("x5", "", "--task", task.id, "--step", "1", "--", "hello").code, 0);
+  const [cx] = recorded("dev-x5");
+  assert.deepEqual([cx.input, cx.output, cx.cacheRead], [38, 8, 2]); // cached input is inside input_tokens
+  assert.equal(cx.costUsd, undefined);
+
+  setTeam("pi");
+  assert.equal(agent("p5", "", "--task", task.id, "--step", "1", "--", "hello").code, 0);
+  const [pi] = recorded("dev-p5");
+  assert.equal(pi.input, undefined); // no token report: time only
+  assert.equal(pi.output, undefined);
+  assert.equal(typeof pi.ms, "number");
+  assert.equal(T.usageOf(PROJECT, task.id).length, 3);
+});
+
+test("bh usage: tokens where the harness reports them, minutes only elsewhere", async () => {
+  rmSync(usageDir, { recursive: true, force: true });
+  assert.equal(bhOut("usage").trim(), "No usage recorded.");
+  const T = await lib("lib/tasks.mjs");
+  const task = T.newTask(PROJECT, { request: "Usage lines", steps: ["One"] });
+  setTeam("claude");
+  assert.equal(agent("c6", "", "--task", task.id, "--", "hello").code, 0);
+  setTeam("pi");
+  assert.equal(agent("p6", "", "--task", task.id, "--", "hello").code, 0);
+  const lines = bhOut("usage", "--task", task.id).trim().split("\n").sort();
+  assert.equal(lines.length, 2);
+  assert.match(lines[0], /^Dev \(claude-sonnet-5-5\): 1 turns, 120 input, 30 output, 5 cache, \$0\.012, [\d.]+ min$/);
+  assert.match(lines[1], /^Dev: 1 turns, [\d.]+ min$/);
 });

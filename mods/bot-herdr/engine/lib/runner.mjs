@@ -305,9 +305,14 @@ function claudeTurn({ agent, known, state, briefFile, prompt, cwd, on, access, a
     } else if (event.type === "result") {
       if (event.is_error || (event.subtype && event.subtype !== "success")) turn.error = event.result?.trim() || (event.errors ?? []).join("; ") || `stopped: ${event.subtype}`;
       else if (typeof event.result === "string" && event.result.trim()) turn.text = event.result;
+      const u = event.usage ?? {};
+      on({ kind: "usage", ...numbers({ input: u.input_tokens, output: u.output_tokens, cacheRead: u.cache_read_input_tokens, cacheWrite: u.cache_creation_input_tokens, costUsd: event.total_cost_usd, ms: event.duration_ms }) });
     }
   }, { session: id, idleMs });
 }
+
+/** The numbers of a usage report that are really there: missing ones are left out, never zero-filled. */
+const numbers = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => typeof v === "number" && Number.isFinite(v)));
 
 /** Codex: `codex exec --json`, resumed by thread id; the brief leads the first prompt. */
 function codexTurn({ agent, known, state, brief, prompt, cwd, on, access, idleMs }) {
@@ -337,6 +342,13 @@ function codexTurn({ agent, known, state, brief, prompt, cwd, on, access, idleMs
       if (item.type === "file_change") for (const ch of item.changes ?? []) on({ kind: "tool", line: toolLine(ch.kind === "add" ? "write" : "edit", { path: ch.path }) });
       if (item.type === "web_search") on({ kind: "tool", line: toolLine("WebSearch", { query: item.query }) });
       if (item.type === "mcp_tool_call") on({ kind: "tool", line: `${item.server ?? "mcp"}: ${item.tool ?? "tool"}` });
+    }
+    if (event.type === "turn.completed") {
+      const u = event.usage ?? {};
+      const counts = numbers({ input: u.input_tokens, output: u.output_tokens, cacheRead: u.cached_input_tokens });
+      // Codex counts cached input inside input_tokens: keeping both would count it twice.
+      if (typeof counts.input === "number" && typeof counts.cacheRead === "number") counts.input = Math.max(0, counts.input - counts.cacheRead);
+      on({ kind: "usage", ...counts });
     }
     if (event.type === "turn.failed") turn.error = event.error?.message ?? "Codex reported a failed turn";
   }, { session: state.session, idleMs });

@@ -1,0 +1,367 @@
+{
+  "id": "t-20261113-n9rt",
+  "title": "Make the team hand off, verify and show its work reliably",
+  "request": "Based on how the bot-herdr mod works right now, what changes would bring meaningful improvements that help the agents (Orchestrator, Design, Dev, QA, Research, Scout) work better and collaborate better? Discuss, research, then create a detailed improvement plan.\n\nThe agreed plan: bh plan show p-20261113-bkli",
+  "status": "done",
+  "track": "planned",
+  "plan": "p-20261113-bkli",
+  "by": "t4n",
+  "created": "2026-11-13T13:13:17.774Z",
+  "updated": "2026-11-14T08:48:27.636Z",
+  "archived": false,
+  "steps": [
+    {
+      "n": 1,
+      "title": "Board posts and step updates record who made them by default (Dev)",
+      "agent": "dev-store",
+      "status": "done",
+      "started": "2026-11-13T13:14:48.479Z",
+      "finished": "2026-11-13T13:22:52.532Z",
+      "workedMs": 484053,
+      "note": ""
+    },
+    {
+      "n": 2,
+      "title": "Task file and board writes are locked, with board numbers that never repeat (Dev)",
+      "agent": null,
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-13T13:22:52.738Z",
+      "workedMs": 0,
+      "note": ""
+    },
+    {
+      "n": 3,
+      "title": "`hc` calls and harness turns get timeouts, so one stuck agent cannot stall the Orchestrator (Dev)",
+      "agent": null,
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-13T13:22:52.912Z",
+      "workedMs": 0,
+      "note": ""
+    },
+    {
+      "n": 4,
+      "title": "`bh report` files a child's report on the task with a `done` board entry and closes its step; `bh inbox` lists unread reports; `bh task show` lists reports (Dev)",
+      "agent": "dev",
+      "status": "done",
+      "started": "2026-11-13T13:23:26.966Z",
+      "finished": "2026-11-13T13:30:30.314Z",
+      "workedMs": 423348,
+      "note": ""
+    },
+    {
+      "n": 5,
+      "title": "A child's own brief carries its task, plan, parent and report path, and each resumed turn gets a short \"brief update\" with only what changed (Dev)",
+      "agent": "dev",
+      "status": "done",
+      "started": "2026-11-13T13:23:27.159Z",
+      "finished": "2026-11-13T13:30:30.562Z",
+      "workedMs": 423403,
+      "note": ""
+    },
+    {
+      "n": 6,
+      "title": "`bh task show` prints a bounded board (counts, last five entries), and briefs teach `bh board read --since` (Dev)",
+      "agent": "dev",
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-13T13:30:30.825Z",
+      "workedMs": 342258,
+      "note": "",
+      "report": {
+        "file": ".bot-herdr/tasks/t-20261113-n9rt/reports/dev-store.md",
+        "summary": "Steps 4-6: report recorded on the task, bh inbox, brief update, bounded board; 205 tests pass, bh check PASS",
+        "from": "dev-store",
+        "at": "2026-11-13T13:29:09.642Z"
+      }
+    },
+    {
+      "n": 7,
+      "title": "`bh check` says how many checks and tests it ran, writes a receipt per run, and when nothing targeted covers the change it runs the project's full test command instead (Dev)",
+      "agent": "dev",
+      "status": "done",
+      "started": "2026-11-13T13:31:21.060Z",
+      "finished": "2026-11-13T13:51:13.163Z",
+      "workedMs": 1192103,
+      "note": ""
+    },
+    {
+      "n": 8,
+      "title": "`bh check` and `bh classify qa-risk` read the task's own worktree and the content of untracked files; the classifier can no longer lower a flagged area to NONE (Dev)",
+      "agent": "dev",
+      "status": "done",
+      "started": "2026-11-13T13:31:21.285Z",
+      "finished": "2026-11-13T13:51:13.417Z",
+      "workedMs": 1192132,
+      "note": ""
+    },
+    {
+      "n": 9,
+      "title": "Test selection finds the mod's own tests, which load through `lib(...)` and `new URL(...)` (Dev)",
+      "agent": "dev",
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-13T13:51:13.628Z",
+      "workedMs": 612581,
+      "note": "",
+      "report": {
+        "file": ".bot-herdr/tasks/t-20261113-n9rt/reports/dev-verify.md",
+        "summary": "Steps 7-9: bh check counts, receipts and full-suite fallback; worktree + untracked content + area floor in qa-risk; test selection by path tail; 217 tests pass, bh check PASS",
+        "from": "dev-store",
+        "at": "2026-11-13T13:41:34.112Z"
+      }
+    },
+    {
+      "n": 10,
+      "title": "The QA gate gets the plan's acceptance criteria, the task's report paths and a fallback risk when none was classified; `qa.md` and `reviewer.md` merge into one rule set; the verdict is stored on the task (Dev, QA review)",
+      "agent": "dev",
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-13T13:51:13.814Z",
+      "workedMs": 214703,
+      "note": "",
+      "report": {
+        "file": ".bot-herdr/tasks/t-20261113-n9rt/reports/dev-gate.md",
+        "summary": "Step 10: review context (criteria, reports, receipts, risk) + bh gate verdicts; bh check falls back to the suite only and names what ran; roles merged; 223 tests pass, bh check PASS",
+        "from": "dev-store",
+        "at": "2026-11-13T13:49:52.264Z"
+      }
+    },
+    {
+      "n": 11,
+      "title": "Each writing child (Dev, Design) runs in its own worktree on a branch from the task's current head; `bh merge <child>` commits the child's changes on its branch, merges them into the task's tree, then removes that worktree and branch; read-only seats (Scout, Research, panel, QA review) stay in the task's tree (Dev)",
+      "agent": "dev",
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-13T14:07:52.828Z",
+      "workedMs": 277950,
+      "note": "",
+      "report": {
+        "file": ".bot-herdr/tasks/t-20261113-n9rt/reports/dev-worktree.md",
+        "summary": "Gate 2 fixes: guarded stale takeover + token-verified release (30x2x20 and 3x8 stress), commit-aware changeHash, verdict counts fail/skipped, no phantom command, store-based worktree paths; five suite runs pass, bh check PASS",
+        "from": "dev-store",
+        "at": "2026-11-13T14:05:42.144Z"
+      }
+    },
+    {
+      "n": 12,
+      "title": "Every agent turn's reply is kept (one entry per turn), and the feed reads them all, so no reply is lost when an agent exits (Dev engine, Design feed)",
+      "agent": "design",
+      "status": "done",
+      "started": "2026-11-13T13:58:28.204Z",
+      "finished": "2026-11-13T14:07:53.019Z",
+      "workedMs": 564815,
+      "note": ""
+    },
+    {
+      "n": 13,
+      "title": "An agents rail beside the chat lists every agent grouped needs-you, working and idle, each with what it is doing now and for how long; a click opens its terminal (Design)",
+      "agent": "design-rail",
+      "status": "done",
+      "started": "2026-11-13T13:14:48.790Z",
+      "finished": "2026-11-13T13:24:11.029Z",
+      "workedMs": 562239,
+      "note": ""
+    },
+    {
+      "n": 14,
+      "title": "`bh task show --json` gives each step its events in order: board posts, the report summary, `bh check` receipts (tests passed of run), the merge's diff stat (+added −removed) and the owning agent's current action (Dev)",
+      "agent": "dev-fix3",
+      "status": "todo",
+      "started": null,
+      "finished": "2026-11-14T08:27:04.471Z",
+      "workedMs": 650797,
+      "note": "",
+      "report": {
+        "file": ".bot-herdr/tasks/t-20261113-n9rt/reports/dev-fix3.md",
+        "summary": "Gate 3 fixes: report/merge shown once per step, usage in bh task list, best-effort usage capture, Codex input minus cache, link-based lock give-back, forBrief newline; 253 pass, bh check PASS",
+        "from": "dev-fix3",
+        "at": "2026-11-14T08:39:58.567Z"
+      }
+    },
+    {
+      "n": 15,
+      "title": "A live task tracker card in the chat, after your mockup: title, the working agents' chip and done/total; a timeline of steps joined by a line, each with its agent's icon, title and time; a step opens to show its events on a branch of the line; the active step carries a live action word (\"Writing\", \"Running tests\") and its elapsed time; a step that needs you shows a dashed amber ring and a \"Needs you\" pill that opens its question (Design)",
+      "agent": "design-tracker",
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-14T08:27:04.920Z",
+      "workedMs": 399139,
+      "note": "",
+      "report": {
+        "file": ".bot-herdr/tasks/t-20261113-n9rt/reports/design-tracker.md",
+        "summary": "Steps 15 + 20 UI done: live tracker card in chat (timeline, branch events, live word/time, Needs you) and usageText on tracker header, task page and step rows; 8 steps tests, bh check PASS, herdr-app check ok, tsc clean",
+        "from": "design-tracker",
+        "at": "2026-11-14T08:25:21.197Z"
+      }
+    },
+    {
+      "n": 16,
+      "title": "Child reports are grouped under the team turn they answered, behind an \"N child reports\" row (Design)",
+      "agent": "design",
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-13T14:04:01.324Z",
+      "workedMs": 301405,
+      "note": "",
+      "report": {
+        "file": ".bot-herdr/tasks/t-20261113-n9rt/reports/design-feed.md",
+        "summary": "Steps 12 feed + 16: chat reads every replies/*.jsonl (all turns, live or dead; first sight records history only) with logSeen kept per key, .md only for agents without a log; child runs fold into one 'N child reports' row drawn as one measured entry, opening with a height transition to its reports (3 lines + Show all); 5 pure tests; herdr-app check ok, tsc clean, bh check PASS",
+        "from": "design-rail",
+        "at": "2026-11-13T14:03:29.928Z"
+      }
+    },
+    {
+      "n": 17,
+      "title": "Every page tab keeps its label and shows its open-question count; the active tab is marked by a thin border instead of a filled, expanded tab (Design)",
+      "agent": "design",
+      "status": "done",
+      "started": "2026-11-13T13:24:31.569Z",
+      "finished": "2026-11-13T13:36:09.995Z",
+      "workedMs": 698426,
+      "note": ""
+    },
+    {
+      "n": 18,
+      "title": "The task page shows the board and links each step's reports (Design)",
+      "agent": "design",
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-13T13:41:42.571Z",
+      "workedMs": 286066,
+      "note": "",
+      "report": {
+        "file": ".bot-herdr/tasks/t-20261113-n9rt/reports/design-rail.md",
+        "summary": "Step 18: step report link opens the file with its summary under the title; Board section newest-first (10, then Show all N) with kind tones, agent ink, age and Report links; pure helpers in signals.js tested (6 pass); herdr-app check ok, tsc clean, bh check PASS 77 tests",
+        "from": "design-rail",
+        "at": "2026-11-13T13:41:18.591Z"
+      }
+    },
+    {
+      "n": 19,
+      "title": "Copy and state fixes: \"Asked the Orchestrator to resume\" until it does, a failed Pause is shown, plan seats show working/waiting/done, reply actions reachable from the keyboard (Design)",
+      "agent": "design",
+      "status": "done",
+      "started": "2026-11-13T13:24:31.785Z",
+      "finished": "2026-11-13T13:36:10.240Z",
+      "workedMs": 698455,
+      "note": ""
+    },
+    {
+      "n": 20,
+      "title": "Per-turn token and time usage is captured where the harness reports it; `bh usage` totals it per agent and task, and the task page and tracker show it (Dev, Design)",
+      "agent": "dev",
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-14T08:27:05.550Z",
+      "workedMs": 65817827,
+      "note": "",
+      "report": {
+        "file": ".bot-herdr/tasks/t-20261113-n9rt/reports/dev-finish.md",
+        "summary": "Step 20: per-turn usage captured for Claude and Codex, bh usage totals with minutes-only lines for harnesses without tokens",
+        "from": "dev-finish",
+        "at": "2026-11-14T08:25:24.601Z"
+      }
+    },
+    {
+      "n": 21,
+      "title": "Knowledge proposals in reports are listed by `bh knowledge inbox`, and the brief's knowledge budget cuts by section, not mid-file (Dev)",
+      "agent": "dev",
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-14T08:27:06.467Z",
+      "workedMs": 65817713,
+      "note": "",
+      "report": {
+        "file": ".bot-herdr/tasks/t-20261113-n9rt/reports/dev-finish.md",
+        "summary": "Step 21: bh knowledge inbox lists new report proposals; forBrief cuts knowledge by whole sections and names the cut ones",
+        "from": "dev-finish",
+        "at": "2026-11-14T08:25:24.747Z"
+      }
+    },
+    {
+      "n": 22,
+      "title": "Role texts updated for all of the above, then a live two-agent run on a throwaway task proves the path end to end (Orchestrator, QA)",
+      "agent": null,
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-14T08:48:27.442Z",
+      "workedMs": 0,
+      "note": ""
+    }
+  ],
+  "triage": null,
+  "qa": {
+    "risk": "high",
+    "qaRequired": true,
+    "testBudget": {
+      "min": 0,
+      "max": 6
+    },
+    "focusAreas": [
+      "security boundaries: the wrong user, no user and an expired session are refused, and no secret leaks",
+      "destructive operations: they touch only what they should, and a failure halfway leaves things recoverable",
+      "concurrency: races, ordering, double runs, and a lock or claim that is never released",
+      "state transitions and recovery: no illegal or stuck state, and a crash or failed step recovers",
+      "isolation: work stays inside its branch, worktree and permission boundaries"
+    ],
+    "riskFactors": [
+      "security: .bot-herdr/tasks/t-20261113-n9rt/task.json (\"secret\")",
+      "destructive operations: mods/bot-herdr/chat.js (\"truncate\")",
+      "concurrency: .bot-herdr/plans/p-20261111-9dkc/comments.json (\"locks\")",
+      "orchestration and state: mods/bot-herdr/chat.js (\"transition(\")",
+      "isolation: mods/bot-herdr/engine/bh.mjs (\"worktree\")",
+      "a wide change: 30 files, 2782 changed lines across 4 modules (mods/bot-herdr, mods/bot-herdr/engine, .bot-herdr/tasks/t-20261113-n9rt and 1 more)",
+      "tests changed with it: test/agents-reply.test.mjs, test/feed-thread.test.mjs, test/headless.test.mjs and 9 more"
+    ],
+    "existingTestsLikelySufficient": true,
+    "reasoning": "HIGH: security: .bot-herdr/tasks/t-20261113-n9rt/task.json (\"secret\"); destructive operations: mods/bot-herdr/chat.js (\"truncate\"); concurrency: .bot-herdr/plans/p-20261111-9dkc/comments.json (\"locks\"). the engine's rules (Jev is off or had nothing to read).",
+    "source": "rules",
+    "at": "2026-11-14T08:27:08.338Z"
+  },
+  "summary": "",
+  "base": "4c41fb3af1783ce3c8cdec78cfda0e45c5827ad1",
+  "gates": [
+    {
+      "round": 1,
+      "verdict": "CHANGES_REQUIRED",
+      "file": ".bot-herdr/tasks/t-20261113-n9rt/reports/qa-gate2.md",
+      "summary": "Gate 2 CHANGES_REQUIRED: gate-1 fixes in; a step start was still lost under contention (1 of 3 runs, stale-lock rename race) and receipt hash ignores HEAD (clean trees at any commit match); 2 minors",
+      "from": "qa-gate2",
+      "at": "2026-11-13T13:56:23.671Z",
+      "head": "6227e3f4650b6303f04187fe32ed1cf2453e5fe0"
+    },
+    {
+      "round": 3,
+      "verdict": "CHANGES_REQUIRED",
+      "file": ".bot-herdr/tasks/t-20261113-n9rt/reports/qa-gate3.md",
+      "summary": "Gate 3 CHANGES_REQUIRED: gate-2 majors closed (5/5 suite runs pass, HEAD in receipt hash); new majors: reports/merges duplicated on step timelines, task page never gets usage",
+      "from": "qa-gate3",
+      "at": "2026-11-14T08:34:41.782Z",
+      "head": "2cd89b18a4d9754c0a8bf22dc98b06cc02766985"
+    },
+    {
+      "round": 4,
+      "verdict": "PASS",
+      "file": ".bot-herdr/tasks/t-20261113-n9rt/reports/qa-gate4.md",
+      "summary": "Gate 4 PASS: all round-3 findings addressed; bh check 3/3 PASS (253/254, 1 skipped); new minor: forBrief throws on a headingless file over 8000 chars",
+      "from": "qa-gate4",
+      "at": "2026-11-14T08:44:38.389Z",
+      "head": "2cd89b18a4d9754c0a8bf22dc98b06cc02766985"
+    }
+  ],
+  "children": [
+    {
+      "name": "dev-fix3",
+      "agent": "Dev",
+      "step": 14,
+      "branch": "bh/t-20261113-n9rt-dev-fix3",
+      "path": "C:\\Users\\athenkosi.hlubi\\Desktop\\bot-herdr\\.bot-herdr\\worktrees\\t-20261113-n9rt-dev-fix3",
+      "base": "2cd89b18a4d9754c0a8bf22dc98b06cc02766985",
+      "state": "dropped",
+      "at": "2026-11-14T08:35:33.305Z",
+      "droppedAt": "2026-11-14T08:35:39.246Z"
+    }
+  ]
+}

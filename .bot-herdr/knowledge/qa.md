@@ -4,6 +4,7 @@
 - herdr-app check <mod> always renders with the default graphite theme; to read a preset's real theme() values, run a second app instance on a temp HERDR_APP_HOME with a layout whose mod calls writeTextFile, then herdr-app do app.theme {name}.
 
 ## Standards
+- Build timeline and store fixtures through the real commands (T.report, bh merge, bh board post); hand-written store files hide duplicates the commands create.
 
 ## Decisions
 

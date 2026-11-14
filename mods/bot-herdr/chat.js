@@ -30,6 +30,8 @@ import { openLightbox } from "./lightbox.js";
 import { OpenQuestions, publishCounts } from "./questions.js";
 import { RAIL_W, RAIL_GAP, showsRail, groups, workingCount } from "./rail.js";
 import { railBeside, railPopover, railButton, agentBadge } from "./railview.js";
+import { trackerModel, trackerFolds, actionWord, taskRows } from "./steps.js";
+import { tracker } from "./tracker.js";
 
 /** What an agent run headless is doing right now (agent.mjs writes it on each tool call). */
 const activityDir = () => `${outboxDir().replace(/\/replies$/, "")}/activity`;
@@ -142,6 +144,9 @@ export class Chat {
     });
     cx.timer.every(POLL_MS, (cx) => this.poll(cx));
     this.tasks = []; // the project's tasks under way, for the widget beside the chat
+    this.taskShown = {}; // task id → the whole task behind a tracker card (its steps, board, events)
+    this.trackerOpen = new Map(); // task id → whether its card is open (else the task's finished state decides)
+    this.stepOpen = new Set(); // "<task id>:<n>" of the steps whose events are open
     this.taskOpen = undefined; // the task row open in it (undefined: the first; null: none)
     this.loadTasks(cx);
     cx.timer.every(TASKS_MS, (cx) => {
@@ -418,7 +423,7 @@ export class Chat {
     });
   }
 
-  /** The tasks under way in this space's project, for the widget. */
+  /** The tasks under way in this space's project, for the widget; and a card for each seen active. */
   loadTasks(cx) {
     if (this.loadingTasks) return;
     this.loadingTasks = true;
@@ -430,10 +435,33 @@ export class Chat {
           this.tasks = now;
           cx.notify();
         }
+        for (const t of now) if (t.status === "active") this.trackTask(t, cx);
+        await this.loadTrackers(cx);
       } finally {
         this.loadingTasks = false;
       }
     });
+  }
+
+  /** A card in the feed for a task seen active for the first time: one per task, and it stays. */
+  trackTask(t, cx) {
+    if (this.entries.some((e) => e.kind === "tracker" && e.task === t.id)) return;
+    this.add({ kind: "tracker", task: t.id, text: t.title ?? t.id }, cx);
+  }
+
+  /** The whole task behind each card (its steps, its board and its events), as bh reports it now. */
+  async loadTrackers(cx) {
+    const ids = [...new Set(this.entries.filter((e) => e.kind === "tracker").map((e) => e.task))];
+    const shown = { ...(this.taskShown ?? {}) };
+    let tick = false; // a live step's time counts on even when the task's JSON has not changed
+    for (const id of ids) {
+      if (shown[id] && trackerFolds(shown[id])) continue; // a finished card does not change again
+      shown[id] = (await bhJson(["task", "show", id], { cwd: projectDir() })) ?? shown[id] ?? null;
+      tick ||= Boolean(shown[id]?.steps?.some((s) => s.status === "active"));
+    }
+    if (JSON.stringify(shown) === JSON.stringify(this.taskShown ?? {}) && !tick) return;
+    this.taskShown = shown;
+    cx.notify();
   }
 
   /**
@@ -573,6 +601,85 @@ export class Chat {
     if (!text || isHandled(text)) return;
     const name = line.name ?? this.composer.nameOf(address);
     this.add({ kind: "agent", space: agent?.space ?? this.space(), text, from: { address, name, tile: agent?.tile ?? null } }, cx);
+  }
+
+  // ── The task tracker ──────────────────────────────────────────────────────────────────────
+
+  /** A tracker card in the feed: drawn from the task as it is now, so it updates in place. */
+  trackerCard(c, e, width) {
+    const task = this.taskShown?.[e.task] ?? null;
+    if (!task) return this.note(c, { id: e.id, text: `Tracking ${e.task}…` });
+    const model = trackerModel(task, { asking: this.askingNames() });
+    return tracker(c, model, this.trackerView(task, model, width));
+  }
+
+  /** What the card needs of the chat: whether it is open, its steps' open state, and what clicks do. */
+  trackerView(task, model, width) {
+    const key = task.id;
+    const finished = trackerFolds(task);
+    const open = this.trackerOpen.has(key) ? this.trackerOpen.get(key) : !finished;
+    return {
+      key,
+      width,
+      finished,
+      open,
+      openSteps: new Set(model.steps.filter((s) => this.stepOpen.has(`${key}:${s.n}`)).map((s) => s.n)),
+      actions: this.trackerActions(),
+      acts: {
+        open: (cx) => this.toggleTracker(key, open, cx),
+        step: (n, cx) => this.toggleStep(key, n, cx),
+        needs: (s, cx) => this.openStepQuestion(s, cx),
+      },
+    };
+  }
+
+  toggleTracker(key, open, cx) {
+    this.trackerOpen.set(key, !open);
+    cx.notify();
+  }
+
+  toggleStep(key, n, cx) {
+    const id = `${key}:${n}`;
+    if (this.stepOpen.has(id)) this.stepOpen.delete(id);
+    else this.stepOpen.add(id);
+    cx.notify();
+  }
+
+  /** The word each live agent is at, by its name (a step names its agent, the rail its address). */
+  trackerActions() {
+    const out = {};
+    for (const r of this.railRows()) {
+      const line = this.doing[r.address];
+      if (line) out[r.name.toLowerCase()] = actionWord(line);
+    }
+    return out;
+  }
+
+  /** The agents with a question open for the user, by name, so a step they own needs you. */
+  askingNames() {
+    return Object.keys(this.questionsBy()).map((address) => this.composer.nameOf(address).toLowerCase());
+  }
+
+  /** A step's Needs you: its agent's question in the drawer (as the rail's Answer opens it), else its terminal. */
+  openStepQuestion(s, cx) {
+    const asks = this.questionsBy();
+    const name = String(s.agentName ?? "").toLowerCase();
+    const who = (a) => this.composer.nameOf(a).toLowerCase() === name;
+    const address = Object.keys(asks).find(who) ?? this.railRows().find((r) => r.name.toLowerCase() === name)?.address;
+    if (!address) return;
+    if (asks[address]) return this.answerFromRail({ question: asks[address] }, cx);
+    openTerminal(address);
+  }
+
+  /** Scrolls the feed to a task's card (the rail's TASKS rows call this). */
+  showTaskCard(id, cx) {
+    const all = this.items(this.space());
+    const at = all.findIndex((e) => e.kind === "tracker" && e.task === id);
+    if (at < 0) return;
+    this.back = Math.max(0, all.length - 1 - at);
+    this.px = 0;
+    this.composer.expanded = false;
+    cx.notify();
   }
 
   /** Reads new question files; a file that went (answered) drops its card; the tabs keep the count. */
@@ -716,6 +823,10 @@ export class Chat {
         openTerminal(r.address);
       },
       answer: (r, cx) => this.answerFromRail(r, cx),
+      task: (id, cx) => {
+        this.closeRail(cx);
+        this.showTaskCard(id, cx);
+      },
       close: (cx) => this.closeRail(cx),
     };
   }
@@ -772,7 +883,7 @@ export class Chat {
     if (this.askFor && !this.open.list.some((q) => q.id === this.askFor)) this.askFor = null;
     this.composer.questions = this.asked(this.open.list);
     const rail = this.railModel(cx);
-    const railModel = { groups: rail.groups, live: rail.live, fresh: rail.fresh, acts: this.railActs() };
+    const railModel = { groups: rail.groups, live: rail.live, fresh: rail.fresh, acts: this.railActs(), tasks: taskRows(this.tasks) };
     const railRight = Math.round(this.size.width - columnLeft - width); // the chat column's right edge
     const popoverTop = SPACE[4] + CONTROL + SPACE[2]; // under the folded button
     // A pane with nothing to draw (a suggestion list that matches nothing) dims nothing either.
@@ -938,7 +1049,7 @@ export class Chat {
   }
 
   entry(c, e, width) {
-    const el = e.kind === "me" ? this.mine(c, e, width) : e.kind === "kids" ? this.kids(c, e) : e.kind === "agent" ? this.reply(c, e, width) : this.note(c, e);
+    const el = e.kind === "me" ? this.mine(c, e, width) : e.kind === "kids" ? this.kids(c, e) : e.kind === "tracker" ? this.trackerCard(c, e, width) : e.kind === "agent" ? this.reply(c, e, width) : this.note(c, e);
     const arriving = this.arriving.has(e.id);
     // Measured for the pixel scroll: its height plus the column's gap.
     return el
@@ -1294,11 +1405,7 @@ export class Chat {
         .overflow_hidden()
         .opacity(this.verbShown === false ? 0 : 1)
         .transition("opacity", MOTION.verb)
-        .child(roleWord(c, { role: a.role, tone, id: `bh-rw-${a.address}` })))
-      .child(div().flex_1())
-      .when(now.count > 1, (el) => el.child(
-        actionButton(c, "bh-working-next", `${now.index + 1} of ${now.count}`, (_e, cx) => this.nextTurn(cx), { tone: "quiet" }),
-      ));
+        .child(roleWord(c, { role: a.role, tone, id: `bh-rw-${a.address}` })));
     // Not clipped: some motions reach a little past the word.
     return div().id("bh-working").relative().flex_none().w(width).h(ROW).child(line);
   }

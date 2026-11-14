@@ -115,8 +115,29 @@ function card(c, model) {
       .pb(SPACE[3])
       .overflow_y_scroll()
       .on_scroll_wheel((_e, cx) => cx.stop_propagation())
-      .when(!model.groups.length, (el) => el.child(div().px(SPACE[2]).text_size(TYPE.xs).text_color(c.faint).child("No agent in this space.")))
-      .children(model.groups.map((g) => groupBlock(c, g, model))));
+      .when(!model.groups.length && !model.tasks?.length, (el) => el.child(div().px(SPACE[2]).text_size(TYPE.xs).text_color(c.faint).child("No agent in this space.")))
+      .children(model.groups.map((g) => groupBlock(c, g, model)))
+      .when(Boolean(model.tasks?.length), (el) => el.child(taskBlock(c, model))));
+}
+
+/** The tasks under way: each one's title and how far it got; a click scrolls to its card. */
+function taskBlock(c, model) {
+  return v_flex()
+    .flex_none()
+    .child(div().flex_none().px(SPACE[2]).pt(SPACE[3]).pb(SPACE[1]).text_size(TYPE.xs).font_semibold().text_color(c.muted).child("TASKS"))
+    .children(model.tasks.map((t) => clickable(
+      h_flex()
+        .gap(SPACE[2])
+        .items_center()
+        .px(SPACE[3])
+        .py(SPACE[2])
+        .rounded(SIZE.nested)
+        .on_click((_e, cx) => model.acts.task(t.id, cx))
+        .child(div().flex_1().min_w(0).truncate().text_size(TYPE.sm).text_color(c.ink).child(t.title))
+        .child(div().flex_none().text_size(TYPE.xs).text_color(c.faint).child(`${t.done}/${t.total}`)),
+      c,
+      `bh-rail-task-${t.id}`,
+    )));
 }
 
 /** The rail beside the chat: pinned at `left` and `top`, down to `maxH`. */

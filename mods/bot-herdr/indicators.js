@@ -313,3 +313,19 @@ export function roleWord(c, { role, tone, text: given = null, id = "rw" }) {
 }
 
 export { motion };
+
+/**
+ * A word that shimmers with the same moving band, without a role's motion: a step's own action
+ * ("Editing", "Running tests") in the tracker. `tone` is the colour the band carries.
+ */
+export function shimmerWord(c, word, tone, id = "sw") {
+  const W = snap(widthOf(word));
+  return div()
+    .id(`${id}-${word}`)
+    .relative()
+    .flex_none()
+    .flex()
+    .h(snap(LH) + u(6))
+    .child(text(word, c.muted).relative().flex_none().on_size_change((size, cx) => learn(word, size, cx)))
+    .child(shimmer(word, tone, W));
+}

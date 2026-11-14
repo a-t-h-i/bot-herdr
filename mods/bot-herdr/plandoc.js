@@ -182,6 +182,13 @@ export class PlanDoc {
     cx.notify();
   }
 
+  /** A click on the page behind the sheet: an empty comment box goes first, then the sheet; a box
+   *  with text stays, so a stray click never throws away what was typed. */
+  scrimClick(cx) {
+    if (!this.commenting) return this.closeSelf(cx);
+    if (!this.inline.value().trim()) this.cancelComment(cx);
+  }
+
   sendInline(cx) {
     const text = this.inline.value().trim();
     const where = this.commenting;
@@ -246,11 +253,12 @@ export class PlanDoc {
       .relative()
       .size_full()
       .text_color(c.ink)
-      // The page behind the sheet: a scrim (gpui has no blur) that fades in with the sheet; a click on it closes.
+      // The page behind the sheet: a scrim (gpui has no blur) that fades in with the sheet; a click
+      // on it closes an empty comment box or the sheet, never a box with something typed in it.
       .child(div().absolute().inset_0().bg(isLight(c) ? SCRIM.light : SCRIM.dark)
         .opacity(inPlace ? 1 : 0)
         .transition("opacity", MOTION.arrive)
-        .on_click((_e, cx) => this.closeSelf(cx)))
+        .on_click((_e, cx) => this.scrimClick(cx)))
       .child(v_flex()
         .absolute()
         .top(SPACE[4])
@@ -259,6 +267,8 @@ export class PlanDoc {
         .w(this.sheetW())
         .opacity(this.sized ? 1 : 0)
         .transition("left", MOTION.arrive)
+        // The sheet keeps its own presses: the overlay behind it must not see them and close it.
+        .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
         .child(this.sheet(c, p)));
   }
 

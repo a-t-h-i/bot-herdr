@@ -13,7 +13,7 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { slug } from "../../roster.js";
-import { DATA, accessOf, ensureDir, now, projectRoot, readJson, readText, writeJson, writeText } from "./core.mjs";
+import { DATA, accessOf, appendJsonl, ensureDir, exists, now, projectRoot, readJson, readText, store, writeJson, writeText } from "./core.mjs";
 import * as team from "./team.mjs";
 import * as T from "./tasks.mjs";
 import * as P from "./plans.mjs";
@@ -307,6 +307,26 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
     return lines.length ? `## Brief update\n\n${lines.join("\n")}` : "";
   }
 
+  /** One line per turn for `bh usage`: what it cost, on which task and step (and in the task's file). */
+  function recordUsage(usage, wallMs) {
+    const record = {
+      at: now(),
+      agent: who,
+      harness: agent.harness,
+      model: agent.model || null,
+      effort: agent.effort || null,
+      task: task ?? null,
+      step: step === null ? null : Number(step),
+      ...usage,
+      ...(usage.ms === undefined ? { ms: wallMs } : {}),
+    };
+    // Best effort: a lock timeout or a write error must never fail the turn.
+    try {
+      appendJsonl(join(DATA, "usage", `${key}.jsonl`), record);
+      if (task && exists(join(store(root, "tasks", task), "task.json"))) T.recordUsage(root, task, record);
+    } catch {}
+  }
+
   function makeBrief() {
     const child = task ? (load(T.loadTask, task)?.children ?? []).find((c) => c.state === "open" && c.name === who) : null;
     brief = team.brief(agent, { mode, root, parent, task, plan, step, name: name ?? null, headless: true, worktree: child ? { path: child.path, branch: child.branch } : null });
@@ -332,11 +352,16 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
     const { access, allow } = accessOf();
     status("working", text.split("\n")[0]);
     let shown = "";
+    let usage = {};
+    const started = Date.now();
     const on = (e) => {
       if (e.kind === "tool") {
         say(`${DIM}  · ${e.line}${OFF}`);
         status("working", e.line);
         activity(e.line);
+      } else if (e.kind === "usage") {
+        const { kind, ...rest } = e;
+        usage = { ...usage, ...rest };
       } else if (e.kind === "ask" && address) {
         // The harness's own question tool: the same card as bh ask; the answers come back as a message.
         askCard(e, { address, who, cwd, say });
@@ -355,6 +380,7 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
     if (r.session && (r.text || !r.error)) state.session = r.session;
     state.seen = seenNow(); // the next turn's update starts from here
     save();
+    recordUsage(usage, Date.now() - started);
     if (r.text && r.text !== shown) say(`\n${r.text.trim()}\n`);
     return finish(r, text);
   }

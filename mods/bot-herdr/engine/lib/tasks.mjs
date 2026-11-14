@@ -41,12 +41,20 @@ export function updateTask(root, id, change) {
   });
 }
 
+/** A task with usage on it and on each of its steps, as `bh task show` gives it (the task page reads the list). */
+function withUsage(root, task) {
+  const usage = usageOf(root, task.id);
+  const steps = (task.steps ?? []).map((s) => ({ ...s, usage: usageTotals(usage.filter((r) => r.step === s.n)) }));
+  return { ...task, steps, usage: usageTotals(usage) };
+}
+
 export function listTasks(root, { all = false } = {}) {
   return listDir(store(root, "tasks"))
     .filter((d) => d.isDirectory())
     .map((d) => readJson(join(store(root, "tasks"), d.name, "task.json")))
     .filter((t) => t && (all || !t.archived))
-    .sort((a, b) => String(b.updated).localeCompare(String(a.updated)));
+    .sort((a, b) => String(b.updated).localeCompare(String(a.updated)))
+    .map((t) => withUsage(root, t));
 }
 
 /** The task a bare `bh task …` means: the newest active one, else the newest. */
@@ -255,6 +263,63 @@ export function recordCheck(root, id, receipt) {
 /** The runs `bh check` kept for a task, oldest first. */
 export function checks(root, id) {
   return readJsonl(join(dir(root, id), "checks.jsonl"));
+}
+
+/** One turn's usage, kept on the task: what it cost and how long it ran. */
+export function recordUsage(root, id, record) {
+  const path = join(dir(root, id), "usage.jsonl");
+  return withLock(path, () => {
+    appendJsonl(path, record);
+    return record;
+  });
+}
+
+/** The turns recorded for a task, oldest first. */
+export const usageOf = (root, id) => readJsonl(join(dir(root, id), "usage.jsonl"));
+
+/** Tokens, cost and minutes over some usage records. */
+export function usageTotals(list) {
+  const sum = (key) => list.reduce((n, r) => n + (Number(r[key]) || 0), 0);
+  return { tokens: sum("input") + sum("output") + sum("cacheRead") + sum("cacheWrite"), costUsd: Number(sum("costUsd").toFixed(4)), minutes: Number((sum("ms") / 60000).toFixed(2)) };
+}
+
+/** `3/4 tests`, plus `, full suite` when the check ran the whole suite. */
+function checkDetail(r) {
+  const c = r.counts ?? {};
+  return `${c.total ? `${c.pass ?? 0}/${c.total}` : String(r.ran?.tests ?? 0)} tests${r.fallback ? ", full suite" : ""}`;
+}
+
+/** A report's or a merge's own board entry: each already has its event, so the entry is not shown twice. */
+const echo = (e) => e.kind === "done" && (Boolean(e.file) || String(e.text ?? "").startsWith("Merged "));
+
+/** Everything that happened to one step, oldest first: board posts, its report, checks and merges. */
+function stepEvents(step, entries, receipts, children) {
+  const events = [
+    ...entries.filter((e) => e.step === step.n && !echo(e)).map((e) => ({ at: e.at, kind: "board", text: e.text, detail: e.kind, from: e.from ?? null })),
+    ...(step.report ? [{ at: step.report.at, kind: "report", text: step.report.summary, detail: step.report.file, from: step.report.from ?? null }] : []),
+    ...receipts.filter((r) => r.step === step.n).map((r) => ({ at: r.at, kind: "check", text: r.exit === 0 ? "Checks passed" : "Checks failed", detail: checkDetail(r), from: r.from ?? null })),
+    ...children.filter((c) => c.step === step.n && c.state === "merged").map((c) => ({ at: c.mergedAt ?? c.at, kind: "merge", text: `Merged ${c.name}`, detail: `+${c.stat?.added ?? 0} −${c.stat?.removed ?? 0}`, from: c.agent ?? null })),
+  ];
+  return events.filter((e) => e.at).sort((a, b) => String(a.at).localeCompare(String(b.at)));
+}
+
+/**
+ * The task as `bh task show --json` gives it: each step with its events, its agent and its elapsed
+ * time, the task's done/total, and usage per step and for the task (what Design's tracker reads).
+ */
+export function taskDetail(root, task, entries = []) {
+  const receipts = checks(root, task.id);
+  const usage = usageOf(root, task.id);
+  const at = Date.now();
+  const open = (step) => (task.children ?? []).find((c) => c.state === "open" && c.step === step)?.name ?? null;
+  const steps = task.steps.map((s) => ({
+    ...s,
+    events: stepEvents(s, entries, receipts, task.children ?? []),
+    agentName: s.agent ?? open(s.n),
+    elapsedMs: (s.workedMs ?? 0) + (s.status === "active" && s.started ? Math.max(0, at - Date.parse(s.started)) : 0),
+    usage: usageTotals(usage.filter((r) => r.step === s.n)),
+  }));
+  return { ...task, steps, done: steps.filter((s) => s.status === "done" || s.status === "skipped").length, total: steps.length, usage: usageTotals(usage) };
 }
 
 /** A gate verdict on the task, and a `done` board entry for it; round defaults to one past the last. */

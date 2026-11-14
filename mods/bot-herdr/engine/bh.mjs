@@ -9,7 +9,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { argvOf, effortsOf, roleOf, slug, withPrompt } from "../roster.js";
-import { APP_HOME, BH, BOOLEANS, DATA, UsageError, accessOf, bodyText, ensureDir, myAddress, need, now, parseArgs, projectRoot, readJson, readText, sh, store, withLock, writeJson, writeText } from "./lib/core.mjs";
+import { APP_HOME, BH, BOOLEANS, DATA, UsageError, accessOf, bodyText, ensureDir, listDir, myAddress, need, now, parseArgs, projectRoot, readJson, readJsonl, readText, sh, store, withLock, writeJson, writeText } from "./lib/core.mjs";
 import * as T from "./lib/tasks.mjs";
 import * as P from "./lib/plans.mjs";
 import * as K from "./lib/knowledge.mjs";
@@ -38,6 +38,7 @@ Tasks
   bh report <task> [--step N] --file <path> "<summary>"   record a report on the task (the board entry is the record)
   bh gate <task> --verdict PASS|CHANGES_REQUIRED [--round N] --file <report> "<summary>"   record the QA gate's verdict
   bh inbox [--task T] [--peek]    reports addressed to me that I have not seen yet
+  bh usage [--task T] [--since ISO date]   tokens, cost and minutes per agent and model
 
 Plans
   bh plan new "<idea>"            bh plan list            bh plan show <id>
@@ -52,6 +53,7 @@ Knowledge (one file per agent)
   bh knowledge ask "<question>"   ask Scout about the project's knowledge and code
   bh knowledge add <agent> "<fact>" [--section Facts|Standards|Decisions|History]
   bh knowledge note <agent> "<entry words>" "<note>"      bh knowledge write <agent> --file F
+  bh knowledge inbox [--task T]   the Knowledge Proposals bullets of a task's reports that are not recorded yet
 
 Scripts
   bh scripts                      bh scripts show <name>        bh scripts run <name> [args…]
@@ -228,6 +230,39 @@ function lastReceipts(list) {
   return [...byStep].map(([step, r]) => `- step ${step}: ${r.command}: ran ${r.ran?.lint ?? 0} lint, ${r.ran?.typecheck ?? 0} typecheck, ${r.ran?.tests ?? 0} tests${r.fallback ? `, fallback ${r.fallback}` : ""}, exit ${r.exit}, head ${String(r.head ?? "").slice(0, 7)}, diff ${String(r.diff ?? "").slice(0, 12)}`);
 }
 
+/** Every turn every agent recorded under DATA/usage. */
+function usageFiles() {
+  return listDir(join(DATA, "usage")).filter((d) => d.isFile() && d.name.endsWith(".jsonl")).flatMap((d) => readJsonl(join(DATA, "usage", d.name)));
+}
+
+/** Usage grouped by agent and model: turns, tokens, cache, cost and minutes. */
+function usageByModel(list) {
+  const groups = new Map();
+  for (const r of list) {
+    const key = `${r.agent ?? "unknown"}|${r.model ?? ""}`;
+    const g = groups.get(key) ?? { agent: r.agent ?? "unknown", model: r.model ?? null, turns: 0, input: 0, output: 0, cache: 0, costUsd: 0, ms: 0 };
+    g.turns += 1;
+    g.input += Number(r.input) || 0;
+    g.output += Number(r.output) || 0;
+    g.cache += (Number(r.cacheRead) || 0) + (Number(r.cacheWrite) || 0);
+    g.costUsd += Number(r.costUsd) || 0;
+    g.ms += Number(r.ms) || 0;
+    groups.set(key, g);
+  }
+  return [...groups.values()].map((g) => ({ ...g, costUsd: Number(g.costUsd.toFixed(4)), minutes: Number((g.ms / 60000).toFixed(1)) }));
+}
+
+/** One usage line: who, on which model, and what it cost; minutes only when the harness reported no tokens or cost. */
+function usageLine(g) {
+  const who = `${g.agent}${g.model ? ` (${g.model})` : ""}: ${g.turns} turns`;
+  return g.input + g.output + g.cache + g.costUsd === 0 ? `${who}, ${g.minutes} min` : `${who}, ${g.input} input, ${g.output} output, ${g.cache} cache, $${g.costUsd}, ${g.minutes} min`;
+}
+
+/** The `## Knowledge Proposals` bullets of a report. */
+function proposals(md) {
+  return mdSection(md, "Knowledge Proposals").split("\n").filter((line) => /^-\s+/.test(line)).map((line) => line.replace(/^-\s+/, "").trim()).filter(Boolean);
+}
+
 /** What a review needs before it reads code: the acceptance criteria, the reports, the receipts and the risk. */
 async function reviewContext(root, task, cwd) {
   const { qaRiskBrief, unreadRisk } = await import("./classifier/qa-risk.mjs");
@@ -287,7 +322,8 @@ async function main(argv) {
         const task = T.loadTask(root, id);
         const where = [W.gitLine(task.git), W.missingWorktree(task)].filter(Boolean).join("\n");
         const entries = T.board(root, id);
-        return out(flags, { ...task, worked: T.worked(task), board: entries, cwd: W.taskCwd(task, root) }, () => T.taskText(task, entries, { all: Boolean(flags.board) }).replace(/\n/, `\n${where ? `${where}\n` : ""}`));
+        const detail = { ...T.taskDetail(root, task, entries), worked: T.worked(task), board: entries, cwd: W.taskCwd(task, root) };
+        return out(flags, detail, () => T.taskText(task, entries, { all: Boolean(flags.board) }).replace(/\n/, `\n${where ? `${where}\n` : ""}`));
       }
       if (sub === "steps") {
         const titles = typeof flags.file === "string" ? T.stepsFromMarkdown(bodyText(flags, [])) : rest2;
@@ -386,6 +422,12 @@ async function main(argv) {
       return out(flags, fresh, (l) => l.map(inboxLine).join("\n") || "No new reports.");
     }
 
+    case "usage": {
+      const since = typeof flags.since === "string" ? flags.since : "";
+      const list = (flags.task ? T.usageOf(root, flags.task) : usageFiles()).filter((r) => !since || String(r.at) >= since);
+      return out(flags, { rows: usageByModel(list) }, (x) => x.rows.map(usageLine).join("\n") || "No usage recorded.");
+    }
+
     case "plan": {
       if (sub === "new") {
         const idea = need(bodyText(flags, args), 'bh plan new "<idea>"');
@@ -474,9 +516,22 @@ async function main(argv) {
       }
       if (sub === "list") return out(flags, K.list(root), (l) => l.map((k) => `${k.agent}: ${k.entries} entries, ${k.chars} characters${k.over ? " (over the limit: rewrite it shorter)" : ""}`).join("\n") || "No knowledge yet.");
       if (sub === "search") return out(flags, K.search(root, args.join(" ")), (l) => l.join("\n") || "Nothing found.");
+      if (sub === "inbox") {
+        const task = flags.task ? T.loadTask(root, flags.task) : T.currentTask(root);
+        if (!task) return out(flags, [], "No task to read reports from.");
+        const files = [...new Set([
+          ...task.steps.filter((s) => s.report?.file).map((s) => s.report.file),
+          ...T.board(root, task.id, { kinds: ["done"] }).filter((e) => e.file).map((e) => e.file),
+          ...(task.gates ?? []).map((g) => g.file).filter(Boolean),
+        ])];
+        const known = new Set(K.list(root).flatMap((k) => K.read(root, k.agent).split("\n").filter((l) => /^-\s/.test(l)).map((l) => l.replace(/^-\s+/, "").trim())));
+        const items = files.flatMap((file) => proposals(readText(join(root, file))).filter((text) => !known.has(text)).map((text) => ({ text, file })));
+        return out(flags, items, (l) => l.map((x) => `- ${x.text} — ${x.file}`).join("\n") || "No new proposals.");
+      }
       if (sub === "add") {
-        const [agent, ...words] = args;
-        const r = K.add(root, need(agent, "bh knowledge add <agent> \"<fact>\""), need(words.join(" ") || bodyText(flags, []), 'bh knowledge add <agent> "<fact>"'), flags.section ?? "Facts");
+        const agent = need(args[0], 'bh knowledge add <agent> "<fact>"');
+        const fact = need(args.slice(1).join(" ") || bodyText(flags, []), 'bh knowledge add <agent> "<fact>"');
+        const r = K.add(root, agent, fact, flags.section ?? "Facts");
         return out(flags, r, () => (r.added ? `Recorded for ${agent}.` : "Already there.") + (r.chars > K.LIMIT ? ` The file is over ${K.LIMIT} characters: rewrite it shorter with bh knowledge write.` : ""));
       }
       if (sub === "note") {
@@ -517,7 +572,7 @@ async function main(argv) {
       const cwd = child ? child.path : W.taskCwd(task, root);
       const base = flags.base ?? child?.base ?? task?.base ?? null;
       const { lint, targeted, full, command, ran, counts, anything, exit } = runChecks(cwd, base);
-      const receipt = { at: now(), from: flags.from ?? actor(), step: process.env.BH_STEP ? Number(process.env.BH_STEP) : null, command: "bh check", base, head: git(cwd, ["rev-parse", "HEAD"]).out.trim() || null, diff: changeHash(cwd), ran, fallback: command || null, exit };
+      const receipt = { at: now(), from: flags.from ?? actor(), step: process.env.BH_STEP ? Number(process.env.BH_STEP) : null, command: "bh check", base, head: git(cwd, ["rev-parse", "HEAD"]).out.trim() || null, diff: changeHash(cwd), ran, counts, fallback: command || null, exit };
       if (task) T.recordCheck(root, task.id, receipt);
       if (flags.json) {
         console.log(JSON.stringify(receipt, null, 2));

@@ -81,7 +81,7 @@ Your messages are on the right, with who they went to; a long one folds after tw
 
 **Mockups**: a ```` ```mockup ```` (or ```` ```html ````) block in a reply is drawn as a picture by a browser you already have (Chrome, Edge, Chromium or Brave, run headless; `BH_BROWSER` picks one). Click it to open it large, with the reply's other mockups beside it and **Open in browser**. With no browser found, the card says so and opens the page in your browser instead.
 
-**Working**: one agent at a time, under the last message: its role's word ("Planning", "Writing", "Checking"…) shimmers in its colour beside a small motion that acts out the job, then its name and what it is doing. With several at work they take turns every few seconds (click **1 of 3** for the next). The word changes every 30 to 60 seconds.
+**Working**: one agent at a time, under the last message: its role's word ("Planning", "Writing", "Checking"…) shimmers in its colour beside a small motion that acts out the job, then its name and what it is doing. With several at work they take turns every few seconds. The word changes every 30 to 60 seconds.
 
 **Toasts** rise out of the composer's top edge, one at a time, and sink back in. herdr's own notifications (an agent needs you or finished) come the same way while the chat shows (the layout names this mod as its `toast`); on another page they show in herdr's corner, drawn the same.
 

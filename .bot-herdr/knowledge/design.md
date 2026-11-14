@@ -11,6 +11,7 @@
 - work.js page chrome is PAGE_CHROME (pt SPACE[5] + tab bar CONTROL + GAP): a column that must reach the page's foot sizes this.height - PAGE_CHROME and the page drops its pb(SPACE[5]).
 - Overlay props are serialized (data only, methods dropped), but the overlay shares the page's module realm: pass an id in props and resolve the live object from a module-level Map (settings.js PAGES).
 - The mod runtime's fs/promises has no stat and readFile rejects with a plain Error with no code; test absence with exists(path).
+- The Work page reads tasks (and their usage) from bh task list --all --json; only bh task show readers (the chat tracker) get taskDetail fields like steps[].events.
 
 ## Standards
 - When reusing the Composer for non-chat sends (e.g. plan comments), override send but reset input/files/pane state or the composer sticks (chosen by Design)
@@ -20,6 +21,7 @@
 - A page composer's toast survives an action that changes the open item when the pane opens its neighbour in the same render (Archive, Delete).
 - A page composer folds like the chat's only if the page root has a cx.focus_handle() with track_focus and forwards e.key_char to composer.typeFolded while composer.isFolded(); Composer.changed sets expanded back to true.
 - OpenQuestions (mods/bot-herdr/questions.js) is the one read/answer path for every page composer: poll() reads the outbox questions folder every 2500ms, drop(q) takes a card off at once, send() posts bh answer; a page composer's hooks.answered must be wired or its cards cannot go.
+- agentBadge(c, name, size) in railview.js is the one agent badge (rail row, child group, tracker step).
 
 ## Decisions
 - Knowledge cards: no coloured side stripe; the agent is marked by its dot and name only (the user's choice, 2026-11-11).

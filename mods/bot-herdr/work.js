@@ -34,6 +34,7 @@ import { openLightbox } from "./lightbox.js";
 import { openFile, openLink } from "./viewer.js";
 import { OpenQuestions, publishCounts } from "./questions.js";
 import { awaited, seatStates, boardAge, boardRows, boardTone } from "./signals.js";
+import { stepAgents, usageText } from "./steps.js";
 
 const TABS = [
   { id: "tasks", icon: "page-tasks", label: "Tasks" },
@@ -73,12 +74,6 @@ const SEATS = [
 
 /** Which status circle a task or step gets: each word of the status maps to one mark. */
 const MARK_KIND = { done: "done", active: "active", now: "active", paused: "paused", blocked: "blocked", abandoned: "cross", skipped: "cross" };
-
-/** The agents a step names: "dev", "dev, qa", "design-toast & qa" or a list. */
-export function stepAgents(s) {
-  const raw = Array.isArray(s?.agent) ? s.agent : String(s?.agent ?? "").split(/\s*(?:,|&|\+|\band\b)\s*/);
-  return [...new Set(raw.map((a) => String(a ?? "").trim()).filter(Boolean))];
-}
 
 const GAP = 14;
 const MAX = 1140;
@@ -791,7 +786,10 @@ export class Work {
               .pt(SPACE[5])
               .when(!pinned, (el) => el.pb(SPACE[5]))
               .gap(GAP)
-              .child(
+              // The plan column reaches the page's top: a pinned plan is a whole page of conversation,
+              // so its empty tab bar (the pin puts no tabs there) would only cut the chats; its
+              // refresh sits in the rail instead. Every other page keeps the bar.
+              .when(!(this.fixed && pinned), (el) => el.child(
                 h_flex()
                   .gap(SPACE[4])
                   .items_center()
@@ -799,7 +797,7 @@ export class Work {
                   .when(!this.fixed, (el) => el.child(this.tabs(c)))
                   .child(div().flex_1())
                   .child(actionButton(c, "bh-work-refresh", null, (_e, cx) => this.reload(cx), { icon: "refresh-cw", tone: "quiet", tooltip: "Refresh" })),
-              )
+              ))
               .when(Boolean(this.problem), (el) => el.child(stateView(c, {
                 id: "bh-work-error",
                 title: "Couldn't load this page",
@@ -1070,14 +1068,16 @@ export class Work {
       .child(div().flex_1().min_w(0).text_size(TYPE.xl).font_semibold().line_height(`${LINE.xl}px`).child(t.title ?? t.id));
   }
 
-  /** The status pill, the track, and the Details link that opens what the task is made of. */
+  /** The status pill, the track, what it cost, and the Details link that opens what the task is made of. */
   taskFacts(c, t) {
     const open = this.descOpen?.has(`details:${t.id}`);
+    const usage = usageText(t.usage);
     return v_flex()
       .gap(SPACE[3])
       .child(h_flex().flex_wrap().gap(SPACE[3]).items_center()
         .child(pill(c, t.status ?? "backlog", statusTone(c, t.status)))
         .when(Boolean(t.track), (el) => el.child(div().text_size(TYPE.sm).text_color(c.muted).child(`${t.track} track`)))
+        .when(Boolean(usage), (el) => el.child(mutedLine(c, usage)))
         .child(textLink(c, `bh-task-details-${t.id}`, "Details", (_e, cx) => this.toggleDesc(`details:${t.id}`, cx), open ? c.ink : c.muted)))
       .when(Boolean(open), (el) => el.child(this.taskDetails(c, t)));
   }
@@ -1169,6 +1169,7 @@ export class Work {
   stepLine(c, t, s, { next, on, who, live }) {
     const done = s.status === "done" || s.status === "skipped";
     const time = this.stepTime(s);
+    const usage = usageText(s.usage);
     return clickable(
       this.stepFrame(c, t, s, on)
         .child(statusMark(c, s.status, MARK))
@@ -1178,6 +1179,7 @@ export class Work {
         .when(who.length > 0 && (s.status === "active" || done), (el) => el.child(this.stepWho(c, t, s, who)))
         .when(Boolean(s.report?.file), (el) => el.child(this.reportLink(c, s.report.file, `bh-step-report-${t.id}-${s.n}`)))
         .when(Boolean(time), (el) => el.child(div().flex_none().text_size(TYPE.sm).text_color(c.muted).child(time)))
+        .when(Boolean(usage), (el) => el.child(div().flex_none().text_size(TYPE.xs).text_color(c.faint).child(usage)))
         .when(live > 0, (el) => el.child(commentCount(c, live))),
       c,
       `bh-step-${t.id}-${s.n}`,
@@ -1474,7 +1476,9 @@ export class Work {
       .relative()
       .flex_none()
       .w(w)
-      .h(Math.max(300, this.height - PAGE_CHROME))
+      // A pinned plan page has no tab bar above it (its refresh is in the rail): the column starts at
+      // the page's own top padding and reaches its foot. A block that keeps its tabs subtracts them.
+      .h(Math.max(300, this.height - (this.fixed ? SPACE[5] : PAGE_CHROME)))
       .gap(SPACE[2])
       .when(rail, (el) => el.child(this.planRail(c, p, { horizontal: true })))
       // The conversation ends above the pinned box and its tab: the last round scrolls clear of them.
@@ -1829,9 +1833,18 @@ export class Work {
       .when(waiting > 0, (x) => x.child(seatBadge(c, waiting)));
   }
 
-  /** The rail's icon actions: Other plans, New plan, and Discard (two steps, like Delete). */
+  /** The rail's icon actions: Refresh (a pinned plan page has no top bar to hold it), Other plans, New plan, and Discard (two steps, like Delete). */
   railActions(c, p) {
-    return [this.otherPlansButton(c), this.newPlanButton(c), this.discardPlanButton(c, p)];
+    return [
+      ...(this.fixed ? [this.refreshButton(c)] : []),
+      this.otherPlansButton(c),
+      this.newPlanButton(c),
+      this.discardPlanButton(c, p),
+    ];
+  }
+
+  refreshButton(c) {
+    return actionButton(c, "bh-plan-refresh", null, (_e, cx) => this.reload(cx), { icon: "refresh-cw", tone: "quiet", tooltip: "Refresh" });
   }
 
   otherPlansButton(c) {

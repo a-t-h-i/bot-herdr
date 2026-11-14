@@ -2,6 +2,7 @@
 
 ## Facts
 - bh in an agent shell resolves to the installed mod (~/.config/herdr-app/mods/bot-herdr/engine/bh.mjs), not the repo copy.
+- A writing child worktree branches from the task last commit, so uncommitted task work is not in it: spawn with --shared to build on uncommitted work.
 
 ## Standards
 - gpui-kit declares no rotate or transform and .loop() takes no delay: check mods/bot-herdr/gpui-kit.d.ts (npx tsc -p mods/bot-herdr/jsconfig.json) before using a style method.
