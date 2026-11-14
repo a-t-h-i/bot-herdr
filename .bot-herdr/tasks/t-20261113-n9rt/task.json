@@ -7,7 +7,7 @@
   "plan": "p-20261113-bkli",
   "by": "t4n",
   "created": "2026-11-13T13:13:17.774Z",
-  "updated": "2026-11-14T08:48:27.636Z",
+  "updated": "2026-11-14T08:57:38.237Z",
   "archived": false,
   "steps": [
     {
@@ -168,9 +168,9 @@
       "n": 14,
       "title": "`bh task show --json` gives each step its events in order: board posts, the report summary, `bh check` receipts (tests passed of run), the merge's diff stat (+added −removed) and the owning agent's current action (Dev)",
       "agent": "dev-fix3",
-      "status": "todo",
+      "status": "done",
       "started": null,
-      "finished": "2026-11-14T08:27:04.471Z",
+      "finished": "2026-11-14T08:57:38.236Z",
       "workedMs": 650797,
       "note": "",
       "report": {
