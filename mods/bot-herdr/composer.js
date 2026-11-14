@@ -469,11 +469,29 @@ export class Composer {
     };
   }
 
+  /**
+   * The roster entry each running agent in this space is, by address: the Orchestrator at the
+   * address a message to it goes to, every other roster agent at its tab's. One pass of the
+   * roster and of the running agents, for a feed that asks about every reply in it.
+   */
+  entriesByAddress() {
+    const space = this.space()?.id ?? null;
+    const list = this.roster();
+    const live = agents();
+    const lead = list.find((a) => a.lead);
+    const byAddress = new Map();
+    for (const a of list) {
+      const running = runningAs(a, live, space);
+      if (running && !byAddress.has(running.address)) byAddress.set(running.address, a);
+    }
+    const target = orchestratorOf(live, space, lead?.name);
+    if (target?.address) byAddress.set(target.address, lead);
+    return byAddress;
+  }
+
   /** The roster entry a running agent is: the Orchestrator, or the one whose tab carries its name. */
   entryAt(address) {
-    if (this.target()?.address === address) return this.leadEntry();
-    const name = this.names()[address];
-    return name ? this.roster().find((a) => a.name === name) ?? null : null;
+    return this.entriesByAddress().get(address) ?? null;
   }
 
   /**

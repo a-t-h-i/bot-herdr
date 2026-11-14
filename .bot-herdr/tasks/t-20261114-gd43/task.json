@@ -7,7 +7,7 @@
   "plan": null,
   "by": "t50",
   "created": "2026-11-14T08:49:55.436Z",
-  "updated": "2026-11-14T08:57:03.363Z",
+  "updated": "2026-11-14T09:07:57.010Z",
   "archived": false,
   "steps": [
     {
@@ -57,6 +57,22 @@
         "from": "qa-time",
         "at": "2026-11-14T08:56:51.039Z"
       }
+    },
+    {
+      "n": 4,
+      "title": "The chat renders again with a long feed: who is a child is worked out once per feed pass, not once per entry (Design)",
+      "agent": "design-render",
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-14T09:07:56.880Z",
+      "workedMs": 261980,
+      "note": "",
+      "report": {
+        "file": ".bot-herdr/tasks/t-20261114-gd43/reports/design-render.md",
+        "summary": "Feed built once per frame: roster passes per items() over 300 replies 700 -> 1, tests and checks green; report .bot-herdr/tasks/t-20261114-gd43/reports/design-render.md",
+        "from": "design-render",
+        "at": "2026-11-14T09:03:29.953Z"
+      }
     }
   ],
   "triage": {
@@ -79,19 +95,21 @@
       "max": 6
     },
     "focusAreas": [
+      "security boundaries: the wrong user, no user and an expired session are refused, and no secret leaks",
       "concurrency: races, ordering, double runs, and a lock or claim that is never released",
       "isolation: work stays inside its branch, worktree and permission boundaries"
     ],
     "riskFactors": [
+      "security: .bot-herdr/tasks/t-20261114-gd43/task.json (\"permission\")",
       "concurrency: .bot-herdr/plans/p-20261111-9dkc/comments.json (\"locks\")",
-      "isolation: data/bot-herdr/replies/t5b.jsonl (\"worktree\")",
-      "a wide change: 15 files, 144 changed lines across 5 modules (mods/bot-herdr, mods/bot-herdr/engine, .bot-herdr/tasks/t-20261114-gd43 and 2 more)",
-      "tests changed with it: test/detail.test.mjs, test/engine.test.mjs, test/steps.test.mjs and 1 more"
+      "isolation: .bot-herdr/tasks/t-20261114-gd43/task.json (\"worktree\")",
+      "a wide change: 18 files, 215 changed lines across 5 modules (.bot-herdr/tasks/t-20261114-gd43, mods/bot-herdr, mods/bot-herdr/engine and 2 more)",
+      "tests changed with it: test/detail.test.mjs, test/engine.test.mjs, test/feed-items.test.mjs and 2 more"
     ],
     "existingTestsLikelySufficient": true,
-    "reasoning": "HIGH: concurrency: .bot-herdr/plans/p-20261111-9dkc/comments.json (\"locks\"); isolation: data/bot-herdr/replies/t5b.jsonl (\"worktree\"); a wide change: 15 files, 144 changed lines across 5 modules (mods/bot-herdr, mods/bot-herdr/engine, .bot-herdr/tasks/t-20261114-gd43 and 2 more). the engine's rules (Jev is off or had nothing to read).",
+    "reasoning": "HIGH: security: .bot-herdr/tasks/t-20261114-gd43/task.json (\"permission\"); concurrency: .bot-herdr/plans/p-20261111-9dkc/comments.json (\"locks\"); isolation: .bot-herdr/tasks/t-20261114-gd43/task.json (\"worktree\"). the engine's rules (Jev is off or had nothing to read).",
     "source": "rules",
-    "at": "2026-11-14T08:54:44.918Z"
+    "at": "2026-11-14T09:04:43.282Z"
   },
   "summary": "",
   "base": "ece8b2dc4c189a7a5e6502c53438dcdd333ae72d",
@@ -127,6 +145,22 @@
         "added": 94,
         "removed": 14
       }
+    },
+    {
+      "name": "design-render",
+      "agent": "Design",
+      "step": 4,
+      "branch": "bh/t-20261114-gd43-design-render",
+      "path": "C:\\Users\\athenkosi.hlubi\\Desktop\\bot-herdr\\.bot-herdr\\worktrees\\t-20261114-gd43-design-render",
+      "base": "a37204cb85260c3029574219ae8dab0f852a5887",
+      "state": "merged",
+      "at": "2026-11-14T08:59:07.924Z",
+      "mergedAt": "2026-11-14T09:03:52.705Z",
+      "stat": {
+        "files": 4,
+        "added": 184,
+        "removed": 9
+      }
     }
   ],
   "comments": [
@@ -148,6 +182,15 @@
       "from": "qa-time",
       "at": "2026-11-14T08:56:47.771Z",
       "head": "ece8b2dc4c189a7a5e6502c53438dcdd333ae72d"
+    },
+    {
+      "round": 2,
+      "verdict": "PASS",
+      "file": ".bot-herdr/tasks/t-20261114-gd43/reports/qa-render.md",
+      "summary": "PASS: entryAt equivalent, feed cache sound, suite green 263/264; 1 minor (duplicate-name last-wins, unreachable)",
+      "from": "qa-render",
+      "at": "2026-11-14T09:07:33.197Z",
+      "head": "a37204cb85260c3029574219ae8dab0f852a5887"
     }
   ]
 }

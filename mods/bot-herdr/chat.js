@@ -57,6 +57,20 @@ const save = (key, value) => {
   }
 };
 
+/** The id of the newest entry, or null: the feed's cache changes with it. */
+const lastId = (entries) => (entries?.length ? entries[entries.length - 1].id : null);
+
+/** Whether two address→entry maps hold the same addresses, with the same lead. */
+function sameAddresses(before, after) {
+  if (before === after) return true;
+  if (!before || !after || before.size !== after.size) return false;
+  for (const [address, entry] of before) {
+    const now = after.get(address);
+    if (!now || Boolean(now.lead) !== Boolean(entry.lead)) return false;
+  }
+  return true;
+}
+
 /** A path under the app home, from there as image() shows it (bh clip and bh preview name them so); else null. */
 function underHome(path) {
   const home = `${appHome().replace(/\\/g, "/")}/`;
@@ -103,6 +117,7 @@ export class Chat {
     this.back = 0; // whole entries scrolled up from the newest
     this.px = 0; // pixels scrolled into the entry `back` up from the newest
     this.heights = new Map(); // entry id → its drawn height, gap included
+    this.feedCache = null; // the last items(space) built: reused while the feed and who runs where hold
     this.handle = cx.focus_handle(); // holds the keyboard while the composer is folded
     this.focusAt = shared(FOCUS) ?? 0;
     this.outAt = shared(OUTGOING)?.at ?? 0; // the last message another page asked us to send
@@ -732,9 +747,10 @@ export class Chat {
   workers() {
     const space = this.space();
     const team = roster(shared(ROSTER_KEY), []);
+    const byAddress = this.composer.entriesByAddress();
     return this.live().filter((a) => a.space === space && a.status === "working").map((a) => {
       const name = this.composer.nameOf(a.address);
-      const role = this.composer.entryAt(a.address)?.role ?? findAgent(team, name)?.role ?? (/(^|[-_ ])(dev|design|qa|scout|research|planner|panel)/i.exec(name)?.[2] ?? "agent");
+      const role = byAddress.get(a.address)?.role ?? findAgent(team, name)?.role ?? (/(^|[-_ ])(dev|design|qa|scout|research|planner|panel)/i.exec(name)?.[2] ?? "agent");
       return { address: a.address, name, tile: a.tile, role, doing: this.doing[a.address] ?? (a.quiet ? "Its terminal shows its progress" : null) };
     });
   }
@@ -767,10 +783,11 @@ export class Chat {
   railRows() {
     const space = this.space();
     const asks = this.questionsBy();
+    const byAddress = this.composer.entriesByAddress();
     return this.live().filter((a) => a.space === space).map((a) => ({
       address: a.address,
       name: this.composer.nameOf(a.address),
-      lead: Boolean(this.composer.entryAt(a.address)?.lead),
+      lead: Boolean(byAddress.get(a.address)?.lead),
       status: a.status,
       question: asks[a.address] ?? null,
       doing: this.doing[a.address] ?? (a.quiet ? "Its terminal shows its progress" : null),
@@ -1023,16 +1040,24 @@ export class Chat {
     cx.notify();
   }
 
-  /** The feed of this space as it is drawn: a run of child replies folded into one row of reports. */
+  /**
+   * The feed of this space as it is drawn: a run of child replies folded into one row of reports.
+   * Built once a frame, and built again only when the space, the entries or who runs where change.
+   */
   items(space) {
+    const byAddress = this.composer.entriesByAddress();
+    const at = this.feedCache;
+    if (at && at.space === space && at.entries === this.entries && at.last === lastId(this.entries) && sameAddresses(at.byAddress, byAddress)) return at.items;
     const mine = this.entries.filter((x) => (x.space ?? null) === (space ?? null));
-    return groupChildren(mine, (e) => this.childEntry(e));
+    const items = groupChildren(mine, (e) => this.childEntry(e, byAddress));
+    this.feedCache = { space, entries: this.entries, last: lastId(this.entries), byAddress, items };
+    return items;
   }
 
   /** Whether an entry is a child's reply: an agent's that is not the Orchestrator's, gone or not. */
-  childEntry(e) {
+  childEntry(e, byAddress) {
     if (e.kind !== "agent" || !e.from?.address) return false;
-    const entry = this.composer.entryAt(e.from.address);
+    const entry = byAddress.get(e.from.address) ?? null;
     return !(entry ? entry.lead : e.from.name === "Orchestrator");
   }
 
