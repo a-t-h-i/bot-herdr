@@ -322,8 +322,9 @@ async function main(argv) {
         const task = T.loadTask(root, id);
         const where = [W.gitLine(task.git), W.missingWorktree(task)].filter(Boolean).join("\n");
         const entries = T.board(root, id);
-        const detail = { ...T.taskDetail(root, task, entries), worked: T.worked(task), board: entries, cwd: W.taskCwd(task, root) };
-        return out(flags, detail, () => T.taskText(task, entries, { all: Boolean(flags.board) }).replace(/\n/, `\n${where ? `${where}\n` : ""}`));
+        const detail = T.taskDetail(root, task, entries);
+        const worked = detail.timeMs;
+        return out(flags, { ...detail, worked, board: entries, cwd: W.taskCwd(task, root) }, () => T.taskText(task, entries, { all: Boolean(flags.board), workedMs: worked }).replace(/\n/, `\n${where ? `${where}\n` : ""}`));
       }
       if (sub === "steps") {
         const titles = typeof flags.file === "string" ? T.stepsFromMarkdown(bodyText(flags, [])) : rest2;

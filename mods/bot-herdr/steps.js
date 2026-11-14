@@ -68,11 +68,29 @@ export function stepEvents(s, board = []) {
   return out.sort((a, b) => String(a.at ?? "").localeCompare(String(b.at ?? "")));
 }
 
+/**
+ * A step's time: its recorded ms (`timeMs`, else `elapsedMs`, else `workedMs`), plus the part of
+ * the turn its agent is in right now. `working` maps an agent's lower-case name to that turn's start.
+ */
+function stepWorked(s, agentName, now, working) {
+  const base = Number.isFinite(s.timeMs) ? s.timeMs : Number.isFinite(s.elapsedMs) ? s.elapsedMs : (s.workedMs ?? 0);
+  const since = (working ?? {})[String(agentName ?? "").toLowerCase()];
+  if (s.status !== "active" || !Number.isFinite(since)) return base;
+  return base + Math.max(0, now - since);
+}
+
+/** What a task worked: the engine's own turn total, else its `worked`, else the steps' times added up. */
+function taskWorked(task, steps) {
+  if (Number.isFinite(task?.timeMs)) return task.timeMs;
+  if (Number.isFinite(task?.worked)) return task.worked;
+  return steps.reduce((n, s) => n + s.ms, 0);
+}
+
 /** One step as the tracker draws it: its agent, its time, whether it needs you, and its events. */
-function stepRow(s, board, now, asking) {
+function stepRow(s, board, now, asking, working) {
   const agentName = s.agentName ?? stepAgents(s)[0] ?? null;
   const active = s.status === "active";
-  const ms = Number.isFinite(s.elapsedMs) ? s.elapsedMs : (s.workedMs ?? 0) + (active && s.started ? now - Date.parse(s.started) : 0);
+  const ms = stepWorked(s, agentName, now, working);
   return {
     n: s.n,
     title: s.title ?? `Step ${s.n}`,
@@ -89,12 +107,13 @@ function stepRow(s, board, now, asking) {
 
 /**
  * A task as the tracker shows it: its steps in order, how many are done, the agents at work, its
- * total time and what it cost. `asking` holds the agents with a question open for the user.
+ * total time and what it cost. `asking` holds the agents with a question open for the user;
+ * `working` maps an agent working now to when its current turn started.
  */
-export function trackerModel(task, { now = Date.now(), asking = [] } = {}) {
+export function trackerModel(task, { now = Date.now(), asking = [], working = {} } = {}) {
   const asks = new Set((asking ?? []).map((a) => String(a).toLowerCase()));
-  const steps = (Array.isArray(task?.steps) ? task.steps : []).map((s) => stepRow(s, task?.board, now, asks));
-  const worked = Number.isFinite(task?.worked) ? task.worked : steps.reduce((n, s) => n + s.ms, 0);
+  const steps = (Array.isArray(task?.steps) ? task.steps : []).map((s) => stepRow(s, task?.board, now, asks, working));
+  const worked = taskWorked(task, steps);
   return {
     id: task?.id ?? null,
     title: task?.title ?? task?.id ?? "Task",

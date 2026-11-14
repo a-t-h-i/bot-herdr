@@ -28,7 +28,7 @@ test("task detail: a step's report and merge show once each on its timeline", as
   T.post(root, task.id, { kind: "contract", text: "POST /x takes { a }", from: "dev", step: 1 });
   T.report(root, task.id, { step: 1, summary: "Built the endpoint", file: "reports/dev.md", from: "dev" });
   T.recordCheck(root, task.id, { at: new Date().toISOString(), from: "dev", step: 1, command: "bh check", exit: 0, counts: { pass: 3, total: 4 }, ran: { tests: 4 } });
-  T.recordUsage(root, task.id, { agent: "dev", step: 1, input: 10, output: 5, ms: 60000 });
+  T.recordUsage(root, task.id, { agent: "dev", step: 1, input: 10, output: 5, ms: 60000, at: new Date().toISOString() });
   // `bh merge`: the child merged, and the `done "Merged …"` post it writes next to it (bh.mjs:739-741).
   T.updateTask(root, task.id, (t) => Object.assign(t.children[0], { state: "merged", mergedAt: new Date().toISOString(), stat: { files: 2, added: 5, removed: 2 } }));
   T.post(root, task.id, { kind: "done", text: "Merged fix-x: 2 files, +5 −2", from: "dev", step: 1 });
@@ -43,8 +43,10 @@ test("task detail: a step's report and merge show once each on its timeline", as
   assert.ok(one.events.every((e) => e.from === "dev"));
   assert.equal(one.agentName, "dev");
   assert.equal(two.agentName, "di"); // no agent yet: the open child's name
-  assert.equal(one.elapsedMs, 120000); // worked time, the clock already stopped
-  assert.ok(two.elapsedMs >= 29000 && two.elapsedMs < 40000, `running ${two.elapsedMs}`);
+  assert.equal(one.timeMs, 60000); // its turn, not the 120000 its stored clock had
+  assert.equal(one.elapsedMs, 60000); // the same number, with no running part
+  assert.equal(two.elapsedMs, 0); // active for a minute, but no turn recorded: nothing counts
+  assert.equal(detail.timeMs, 60000);
   assert.deepEqual(one.usage, { tokens: 15, costUsd: 0, minutes: 1 });
   assert.deepEqual(two.usage, { tokens: 0, costUsd: 0, minutes: 0 });
   assert.deepEqual(detail.usage, { tokens: 15, costUsd: 0, minutes: 1 });

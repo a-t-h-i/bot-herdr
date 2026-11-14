@@ -41,11 +41,11 @@ export function updateTask(root, id, change) {
   });
 }
 
-/** A task with usage on it and on each of its steps, as `bh task show` gives it (the task page reads the list). */
+/** A task with usage and time worked on it and on each of its steps, as `bh task show` gives it (the task page reads the list). */
 function withUsage(root, task) {
   const usage = usageOf(root, task.id);
-  const steps = (task.steps ?? []).map((s) => ({ ...s, usage: usageTotals(usage.filter((r) => r.step === s.n)) }));
-  return { ...task, steps, usage: usageTotals(usage) };
+  const steps = (task.steps ?? []).map((s) => ({ ...s, timeMs: usage.length ? stepTime(usage, s.n) : (s.workedMs ?? 0), usage: usageTotals(usage.filter((r) => r.step === s.n)) }));
+  return { ...task, steps, usage: usageTotals(usage), timeMs: worked(root, task) };
 }
 
 export function listTasks(root, { all = false } = {}) {
@@ -158,9 +158,32 @@ function removeWorktree(root, path) {
   }
 }
 
-/** How long agents have worked on a task, in ms: finished time plus what is running now. */
-export function worked(task, at = Date.now()) {
-  return task.steps.reduce((sum, s) => sum + (s.workedMs ?? 0) + (s.status === "active" && s.started ? at - Date.parse(s.started) : 0), 0);
+/** One usage record's turn as [start, end] in ms, or null when it records no usable time. */
+const turnSpan = (r) => {
+  const end = Date.parse(r.at);
+  return Number.isFinite(r.ms) && Number.isFinite(end) ? [end - r.ms, end] : null;
+};
+
+/** How long one step's turns took, in ms: the turns recorded on it, added up (parallel ones twice). */
+export function stepTime(records, step) {
+  return records.filter((r) => Number(r.step) === Number(step)).reduce((sum, r) => sum + (turnSpan(r) ? r.ms : 0), 0);
+}
+
+/** How long a task's turns took, in ms: their intervals merged, so turns that overlap count once. */
+export function taskTime(records) {
+  const spans = records.map(turnSpan).filter(Boolean).sort((a, b) => a[0] - b[0]);
+  let [total, to] = [0, -Infinity];
+  for (const [start, end] of spans) {
+    if (end > Math.max(start, to)) total += end - Math.max(start, to);
+    to = Math.max(to, end);
+  }
+  return total;
+}
+
+/** How long agents have worked on a task, in ms: its turns when it has any, else what its steps stored. */
+export function worked(root, task) {
+  const records = usageOf(root, task.id);
+  return records.length ? taskTime(records) : (task.steps ?? []).reduce((sum, s) => sum + (s.workedMs ?? 0), 0);
 }
 
 export function post(root, id, { kind, text, from = null, to = null, step = null, file = null }) {
@@ -304,22 +327,18 @@ function stepEvents(step, entries, receipts, children) {
 }
 
 /**
- * The task as `bh task show --json` gives it: each step with its events, its agent and its elapsed
- * time, the task's done/total, and usage per step and for the task (what Design's tracker reads).
+ * The task as `bh task show --json` gives it: each step with its events, its agent and the time its
+ * turns took, the task's done/total, and usage per step and for the task (what Design's tracker reads).
  */
 export function taskDetail(root, task, entries = []) {
   const receipts = checks(root, task.id);
   const usage = usageOf(root, task.id);
-  const at = Date.now();
   const open = (step) => (task.children ?? []).find((c) => c.state === "open" && c.step === step)?.name ?? null;
-  const steps = task.steps.map((s) => ({
-    ...s,
-    events: stepEvents(s, entries, receipts, task.children ?? []),
-    agentName: s.agent ?? open(s.n),
-    elapsedMs: (s.workedMs ?? 0) + (s.status === "active" && s.started ? Math.max(0, at - Date.parse(s.started)) : 0),
-    usage: usageTotals(usage.filter((r) => r.step === s.n)),
-  }));
-  return { ...task, steps, done: steps.filter((s) => s.status === "done" || s.status === "skipped").length, total: steps.length, usage: usageTotals(usage) };
+  const steps = task.steps.map((s) => {
+    const ms = usage.length ? stepTime(usage, s.n) : (s.workedMs ?? 0);
+    return { ...s, events: stepEvents(s, entries, receipts, task.children ?? []), agentName: s.agent ?? open(s.n), timeMs: ms, elapsedMs: ms, usage: usageTotals(usage.filter((r) => r.step === s.n)) };
+  });
+  return { ...task, steps, done: steps.filter((s) => s.status === "done" || s.status === "skipped").length, total: steps.length, usage: usageTotals(usage), timeMs: worked(root, task) };
 }
 
 /** A gate verdict on the task, and a `done` board entry for it; round defaults to one past the last. */
@@ -352,8 +371,8 @@ function boardLines(entries, all) {
   return ["", "## Board", `board: ${counts.join(", ")}`, ...(all ? entries : entries.slice(-5)).map(boardLine)];
 }
 
-export function taskText(t, entries = [], { all = false } = {}) {
-  const mins = Math.round(worked(t) / 60000);
+export function taskText(t, entries = [], { all = false, workedMs = 0 } = {}) {
+  const mins = Math.round(workedMs / 60000);
   const lines = [
     `# ${t.title}`,
     `${t.id} · ${t.status} · ${t.track} track${t.plan ? ` · from plan ${t.plan}` : ""} · agents worked ${mins} min`,

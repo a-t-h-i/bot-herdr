@@ -104,7 +104,8 @@ export function duration(ms) {
   return h ? `${h}h ${m % 60}m` : `${m}m`;
 }
 
-const workedOf = (t, at = Date.now()) => (t.steps ?? []).reduce((sum, s) => sum + (s.workedMs ?? 0) + (s.status === "active" && s.started ? at - Date.parse(s.started) : 0), 0);
+/** What a task worked: the engine's own turn total, else the steps' stored time; nothing runs on a clock. */
+const workedOf = (t) => (Number.isFinite(t?.timeMs) ? t.timeMs : (t.steps ?? []).reduce((sum, s) => sum + (s.workedMs ?? 0), 0));
 /** How old something is, in one short word: now, 40s, 3h, 4d. */
 export function age(iso, at = Date.now()) {
   const ms = at - Date.parse(iso ?? "");
@@ -1255,10 +1256,11 @@ export class Work {
       .on_click((_e, cx) => this.startInline("task", t.id, s.n, cx));
   }
 
-  /** How long a step has been worked (its record plus the running part); "" for one not started. */
+  /** A step's recorded time (its `timeMs`, else its stored `workedMs`); "" for one not started. */
   stepTime(s) {
-    if (!s.workedMs && s.status !== "active") return "";
-    return duration((s.workedMs ?? 0) + (s.status === "active" && s.started ? Date.now() - Date.parse(s.started) : 0));
+    const ms = Number.isFinite(s.timeMs) ? s.timeMs : (s.workedMs ?? 0);
+    if (!ms && s.status !== "active") return "";
+    return duration(ms);
   }
 
   /** Who works on an active or done step: the first agent, or how many; a working dot while it runs; a chevron when several. */

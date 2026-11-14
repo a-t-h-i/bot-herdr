@@ -47,9 +47,28 @@ test("tracker: today's JSON gives steps, times, done/total and the agents at wor
   assert.equal(m.steps[2].needs, true); // blocked
   assert.equal(m.steps[3].agentName, null);
   assert.equal(m.time, "1h 30m");
-  // A running step counts from its start when the JSON has no elapsed time.
-  const running = trackerModel({ ...today, steps: [{ n: 1, status: "active", workedMs: 0, started: "2026-11-13T10:19:00.000Z" }] }, { now });
-  assert.equal(running.steps[0].time, "1m");
+});
+
+test("tracker: a step's time is its recorded time, not a clock from when it started", () => {
+  const step = { n: 1, agent: "dev", status: "active", timeMs: 120000, started: "2026-11-13T09:20:00.000Z" };
+  const m = trackerModel({ ...today, steps: [step] }, { now });
+  assert.equal(m.steps[0].time, "2m"); // its start was an hour ago, and no agent works now
+});
+
+test("tracker: a step whose agent works now adds the part of that turn", () => {
+  const step = { n: 1, agent: "dev", status: "active", timeMs: 120000, started: "2026-11-13T09:20:00.000Z" };
+  const m = trackerModel({ ...today, steps: [step] }, { now, working: { dev: now - 60000 } });
+  assert.equal(m.steps[0].time, "3m");
+  // The same agent's finished step keeps its record: that turn belongs to the active step.
+  const done = { n: 2, agent: "dev", status: "done", timeMs: 60000 };
+  const both = trackerModel({ ...today, steps: [step, done] }, { now, working: { dev: now - 60000 } });
+  assert.equal(both.steps[1].time, "1m");
+});
+
+test("tracker: an older engine's step uses its workedMs and does not grow", () => {
+  const step = { n: 1, agent: "dev", status: "active", workedMs: 52000, started: "2026-11-13T09:20:00.000Z" };
+  const m = trackerModel({ ...today, steps: [step] }, { now });
+  assert.equal(m.steps[0].time, "52s");
 });
 
 test("tracker: a step's events are its report and the board posts on it, oldest first", () => {

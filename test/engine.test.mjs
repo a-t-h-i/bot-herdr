@@ -50,7 +50,7 @@ test("tasks: steps from a plan, timing, board", async () => {
   task.steps[0].started = new Date(Date.now() - 120000).toISOString();
   T.moveStep(task, 1, "done");
   assert.ok(task.steps[0].workedMs >= 119000);
-  assert.ok(T.worked(task) >= 119000);
+  assert.ok(T.worked(root, task) >= 119000);
   T.saveTask(root, task);
   assert.equal(T.listTasks(root).length, 1);
   T.post(root, task.id, { kind: "contract", text: "GET /api/x returns { ok }", from: "dev" });

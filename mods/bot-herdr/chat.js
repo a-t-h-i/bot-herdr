@@ -609,7 +609,7 @@ export class Chat {
   trackerCard(c, e, width) {
     const task = this.taskShown?.[e.task] ?? null;
     if (!task) return this.note(c, { id: e.id, text: `Tracking ${e.task}…` });
-    const model = trackerModel(task, { asking: this.askingNames() });
+    const model = trackerModel(task, { asking: this.askingNames(), working: this.workingSince() });
     return tracker(c, model, this.trackerView(task, model, width));
   }
 
@@ -658,6 +658,16 @@ export class Chat {
   /** The agents with a question open for the user, by name, so a step they own needs you. */
   askingNames() {
     return Object.keys(this.questionsBy()).map((address) => this.composer.nameOf(address).toLowerCase());
+  }
+
+  /** The agents working now, by name (lower case), with when their current turn started. */
+  workingSince() {
+    const out = {};
+    for (const r of this.railRows()) {
+      const since = this.since[r.address];
+      if (since?.status === "working") out[r.name.toLowerCase()] = since.at;
+    }
+    return out;
   }
 
   /** A step's Needs you: its agent's question in the drawer (as the rail's Answer opens it), else its terminal. */

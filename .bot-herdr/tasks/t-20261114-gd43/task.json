@@ -1,0 +1,153 @@
+{
+  "id": "t-20261114-gd43",
+  "title": "Fix the time worked timer",
+  "request": "The time worked timer on the tasks is incorrect. It seems to be timing based on when the task was first planned and never stops, even if agents do stop. It also blows the time out of proportion.",
+  "status": "done",
+  "track": "full",
+  "plan": null,
+  "by": "t50",
+  "created": "2026-11-14T08:49:55.436Z",
+  "updated": "2026-11-14T08:57:03.363Z",
+  "archived": false,
+  "steps": [
+    {
+      "n": 1,
+      "title": "Time worked comes from agent turns: each step sums its turns, the task counts overlapping turns once, nothing runs while no agent works (Dev)",
+      "agent": "dev-time",
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-14T08:54:15.454Z",
+      "workedMs": 176227,
+      "note": "",
+      "report": {
+        "file": ".bot-herdr/tasks/t-20261114-gd43/reports/dev-time.md",
+        "summary": "Time worked now from usage turns only; n9rt reads 12 min instead of 4492",
+        "from": "dev-time",
+        "at": "2026-11-14T08:53:37.968Z"
+      }
+    },
+    {
+      "n": 2,
+      "title": "The task page and the tracker show the engine's time, live only while the step's agent is working (Design)",
+      "agent": "design-time",
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-14T08:54:15.551Z",
+      "workedMs": 129803,
+      "note": "",
+      "report": {
+        "file": ".bot-herdr/tasks/t-20261114-gd43/reports/design-time.md",
+        "summary": "Work page and tracker show recorded turn time only; live part only for an active step whose agent works now",
+        "from": "design-time",
+        "at": "2026-11-14T08:52:53.068Z"
+      }
+    },
+    {
+      "n": 3,
+      "title": "QA gate",
+      "agent": "qa-time",
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-14T08:57:03.261Z",
+      "workedMs": 112856,
+      "note": "",
+      "report": {
+        "file": ".bot-herdr/tasks/t-20261114-gd43/reports/qa-time.md",
+        "summary": "QA gate PASS: turns-only time worked verified, bh check 127 green, 2 minor findings",
+        "from": "qa-time",
+        "at": "2026-11-14T08:56:51.039Z"
+      }
+    }
+  ],
+  "triage": {
+    "size": "small",
+    "kind": "feature",
+    "domains": {
+      "design": 0,
+      "dev": 0,
+      "qa": 0
+    },
+    "research": 0,
+    "ambiguous": 0,
+    "by": "rules"
+  },
+  "qa": {
+    "risk": "high",
+    "qaRequired": true,
+    "testBudget": {
+      "min": 0,
+      "max": 6
+    },
+    "focusAreas": [
+      "concurrency: races, ordering, double runs, and a lock or claim that is never released",
+      "isolation: work stays inside its branch, worktree and permission boundaries"
+    ],
+    "riskFactors": [
+      "concurrency: .bot-herdr/plans/p-20261111-9dkc/comments.json (\"locks\")",
+      "isolation: data/bot-herdr/replies/t5b.jsonl (\"worktree\")",
+      "a wide change: 15 files, 144 changed lines across 5 modules (mods/bot-herdr, mods/bot-herdr/engine, .bot-herdr/tasks/t-20261114-gd43 and 2 more)",
+      "tests changed with it: test/detail.test.mjs, test/engine.test.mjs, test/steps.test.mjs and 1 more"
+    ],
+    "existingTestsLikelySufficient": true,
+    "reasoning": "HIGH: concurrency: .bot-herdr/plans/p-20261111-9dkc/comments.json (\"locks\"); isolation: data/bot-herdr/replies/t5b.jsonl (\"worktree\"); a wide change: 15 files, 144 changed lines across 5 modules (mods/bot-herdr, mods/bot-herdr/engine, .bot-herdr/tasks/t-20261114-gd43 and 2 more). the engine's rules (Jev is off or had nothing to read).",
+    "source": "rules",
+    "at": "2026-11-14T08:54:44.918Z"
+  },
+  "summary": "",
+  "base": "ece8b2dc4c189a7a5e6502c53438dcdd333ae72d",
+  "children": [
+    {
+      "name": "dev-time",
+      "agent": "Dev",
+      "step": 1,
+      "branch": "bh/t-20261114-gd43-dev-time",
+      "path": "C:\\Users\\athenkosi.hlubi\\Desktop\\bot-herdr\\.bot-herdr\\worktrees\\t-20261114-gd43-dev-time",
+      "base": "ece8b2dc4c189a7a5e6502c53438dcdd333ae72d",
+      "state": "merged",
+      "at": "2026-11-14T08:50:41.693Z",
+      "mergedAt": "2026-11-14T08:54:10.065Z",
+      "stat": {
+        "files": 5,
+        "added": 143,
+        "removed": 25
+      }
+    },
+    {
+      "name": "design-time",
+      "agent": "Design",
+      "step": 2,
+      "branch": "bh/t-20261114-gd43-design-time",
+      "path": "C:\\Users\\athenkosi.hlubi\\Desktop\\bot-herdr\\.bot-herdr\\worktrees\\t-20261114-gd43-design-time",
+      "base": "ece8b2dc4c189a7a5e6502c53438dcdd333ae72d",
+      "state": "merged",
+      "at": "2026-11-14T08:50:43.220Z",
+      "mergedAt": "2026-11-14T08:53:26.674Z",
+      "stat": {
+        "files": 5,
+        "added": 94,
+        "removed": 14
+      }
+    }
+  ],
+  "comments": [
+    {
+      "id": "c1",
+      "step": null,
+      "quote": "",
+      "text": "Fix this also:\nThis view could not be rendered\n\ninterrupted\n    at clean (\\\\?\\C:\\Users\\athenkosi.hlubi\\.config\\herdr-app\\mods\\bot-herdr\\roster.js?v=21:118:16)\n    at <anonymous> (\\\\?\\C:\\Users\\athenkosi.hlubi\\.config\\herdr-app\\mods\\bot-herdr\\roster.js?v=21:135:116)\n    at map (native)\n    at roster (\\\\?\\C:\\Users\\athenkosi.hlubi\\.config\\herdr-app\\mods\\bot-herdr\\roster.js?v=21:135:96)\n    at roster (\\\\?\\C:\\Users\\athenkosi.hlubi\\.config\\herdr-app\\mods\\bot-herdr\\composer.js?v=21:268:26)\n    at leadEntry (\\\\?\\C:\\Users\\athenkosi.hlubi\\.config\\herdr-app\\mods\\bot-herdr\\composer.js?v=21:272:17)\n    at target (\\\\?\\C:\\Users\\athenkosi.hlubi\\.config\\herdr-app\\mods\\bot-herdr\\composer.js?v=21:424:68)\n    at entryAt (\\\\?\\C:\\Users\\athenkosi.hlubi\\.config\\herdr-app\\mods\\bot-herdr\\composer.js?v=21:474:14)\n    at <anonymous> (\\\\?\\C:\\Users\\athenkosi.hlubi\\.config\\herdr-app\\mods\\bot-herdr\\chat.js?v=21:727:42)\n    at map (native)",
+      "at": "2026-11-14T08:51:20.564Z",
+      "open": true
+    }
+  ],
+  "gates": [
+    {
+      "round": 1,
+      "verdict": "PASS",
+      "file": ".bot-herdr/tasks/t-20261114-gd43/reports/qa-gate.md",
+      "summary": "PASS: time worked from turns only, merge maths sound, bh check green 127; 2 minor (name-keyed live part, total lacks live part)",
+      "from": "qa-time",
+      "at": "2026-11-14T08:56:47.771Z",
+      "head": "ece8b2dc4c189a7a5e6502c53438dcdd333ae72d"
+    }
+  ]
+}
