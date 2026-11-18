@@ -1,0 +1,17 @@
+{
+  "harness": "claude",
+  "session": "8a086609-6a45-4a07-8118-05aaa4f2ab8b",
+  "root": "C:/Users/athenkosi.hlubi/Desktop/bot-herdr",
+  "seen": {
+    "knowledge": "44fee227b273a0f6461d7cc7736cee1b289ac552",
+    "boardN": 8,
+    "comments": [
+      "c1"
+    ],
+    "steps": {
+      "1": "done",
+      "2": "done",
+      "3": "active"
+    }
+  }
+}

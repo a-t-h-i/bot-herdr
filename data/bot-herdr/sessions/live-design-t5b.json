@@ -1,0 +1,14 @@
+{
+  "harness": "claude",
+  "session": "5bb37391-9b0b-4084-ba4e-55468f672678",
+  "root": "C:/Users/athenkosi.hlubi/AppData/Local/Temp/bh-live-n9rt/.bot-herdr/worktrees/t-20261114-wvyj-live-design",
+  "seen": {
+    "knowledge": "da39a3ee5e6b4b0d3255bfef95601890afd80709",
+    "boardN": 1,
+    "comments": [],
+    "steps": {
+      "1": "active",
+      "2": "active"
+    }
+  }
+}

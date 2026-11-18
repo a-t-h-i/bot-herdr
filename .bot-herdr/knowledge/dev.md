@@ -6,6 +6,9 @@
 - bh models <harness> [--command exe] [--refresh] --json asks the installed harness for its models (omp models --json, opencode models, agy models, pi --list-models, ACP session/new for gemini/qwen, codex app-server model/list); Claude Code cannot list models, so it is answered from models.js. Cached 24 h under data/bot-herdr/models.
 - Repo-history flips commit through a temp GIT_INDEX_FILE seeded from HEAD (workspace.mjs commitHistory): decide from HEAD, never the real index, and refuse mid-merge, since the temp index bypasses git's unmerged guard.
 - On Windows a lock file made with openSync(path, "wx") can throw EPERM (not EEXIST) while another unlink is pending: treat EPERM/EACCES as held and retry.
+- Per-launch skill/MCP limits: Claude Code --settings '{"permissions":{"deny":["Skill(skill:x)","mcp__srv"]}}'; Codex -c mcp_servers.<id>.enabled=false (no per-launch skill switch); OpenCode has none confirmed, so brief only.
+- Claude Code installed plugin skills are under ~/.claude/plugins/**/skills, but plugins/marketplaces holds catalogues, not installs; claude.ai-synced skills sit at ~/.claude/skills/synced/<id>/<skill>/SKILL.md.
+- Verified live 2026-11-18 (Claude Code 2.1.322): a --settings deny rule Skill(skill:docx) blocks the claude.ai-synced skill anthropic-skills:docx, so the bare synced name works in deny rules.
 
 ## Standards
 - team.hc never runs hc through a shell (a brief is one argument); tests stand in for hc with a script named by BH_HC

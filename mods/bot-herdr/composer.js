@@ -786,8 +786,7 @@ export class Composer {
     const note = shared(TOAST_KEY);
     if (!note?.at || note.at <= this.noteAt) return;
     this.noteAt = note.at;
-    const action = note.action?.name ? { label: "Show", run: () => run(note.action.name, note.action.args ?? {}) } : null;
-    cx.timer.after(1, (cx) => this.say(noteText(note), cx, note.level ?? "info", action));
+    cx.timer.after(1, (cx) => this.say(noteText(note), cx, note.level ?? "info"));
   }
 
   // ── Files ──────────────────────────────────────────────────────────────────────────────────

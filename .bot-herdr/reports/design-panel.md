@@ -1,412 +1,530 @@
-# design panel — contrast, attach picker, UI review
-
 ## Status
 OPEN
 
-## Findings
-
-### 1. How the colours are picked (theme path)
-
-`colors()` is one line: `palette(settings(), theme())` — `mods/bot-herdr/theme.js:5`. Every view calls it per render.
-
-- `mods/bot-herdr/look.js:159` `ownTheme()`: `bot-herdr*` (or no theme named) → our `LIGHT`/`DARK`, untouched.
-- `mods/bot-herdr/look.js:170-215` `palette()`: for any other theme, every token comes from herdr's `theme()` map.
-- herdr names the same keys in every theme (`mods/bot-herdr/gpui-kit.d.ts:22460-22465`): `canvas surface raised popover chrome border input hover selected foreground muted dim accent accent_foreground ansi0..15`.
-- Built-in themes: `graphite ink moss` (dark), `paper` (light); `themes/*.json` adds `atom-one-dark` and `win98` — `~/.config/herdr-app/AGENTS.md:319-332`. A theme file without a `colors` block (`atom-one-dark`) gets panel colours **derived** by herdr, so we get a derivation of a derivation.
-- Rest of the pipeline: `mods/bot-herdr/chat.js:584` (page bg `c.ground`), reply header `chat.js:805-816`, meta `chat.js:753-758`, link helper `chat.js:940-951` (`c.muted`), comment link `chat.js:204-218` (`c.faint`, 11.5px), timestamp `chat.js:784` (11px `c.faint`), user bubble `chat.js:720-760` (`c.bubble` = theme `selected`, text `c.ink`).
-
-Tokens copied raw with **no contrast repair**: `ink, muted, faint, accent, accentInk, danger/stop, info, success, warning, bubble`. Repaired ones: `edge`, `edgeDark`, `bubbleEdge` (`look.js:190-215` via `line()`/`reach()`). `readable()` runs only in `tint()` (`look.js:126-130`) and for agent **tile** colours (`chat.js:815`); `agentHue()` output is used raw (`chat.js:757`, `look.js:236-254`).
-
-### 2. Measured WCAG ratios (4.5 text / 3 UI)
-
-`text/bg` — graphite / atom-one-dark / win98 / ours dark / ours light.
-
-| element | graphite | aod | win98 | ours dark | ours light |
-|---|---|---|---|---|---|
-| timestamps, "Comment", "to", counts — `faint` 11–11.5px on `ground` (`chat.js:784,217,756`) | **4.49** | **3.39** | **2.17** | **4.39** | **3.07** |
-| `faint` on `fill` (task steps `chat.js:441-449`, pill `chat.js:952`) | **3.63** | **3.39** | **2.96** | **3.83** | **3.23** |
-| "Open terminal" `muted` on `ground` (`chat.js:940`) | 8.10 | 7.22 | 5.70 | 7.72 | 4.58 |
-| agent hue "design" on `ground` (`chat.js:757`, raw `agentHue`) | 5.84 | 5.28 | **1.60** | 5.20 | **2.77** |
-| agent hue "dev" | 5.27 | 4.77 | **1.78** | 4.69 | **3.07** |
-| send: `accentInk` on `accent` (`look.js:17/40`) | 8.91 | 7.93 | 16.0 | **3.12** | **3.90** |
-| `danger` on `fill` | **4.32** | 4.82 | 5.82 | 4.78 | 6.47 |
-| `success` on `fill` | 6.84 | 7.64 | **2.33** | 6.88 | 5.48 |
-| `warning` on `fill` | 7.99 | 8.91 | **3.93** | 7.92 | 5.02 |
-| your text `ink` on `bubble` | 9.42 | 5.52 | 15.76 | 10.83 | 15.73 |
-| bubble vs page (separation, not text) | 1.45 | 1.31 | 1.37 | 1.33 | **1.11** |
-
-Two failures are **ours, not the theme's**: white-on-terracotta send (3.12 dark, 3.90 light) and the light-theme bubble at 1.11 against the page (its border is 1.22). So screenshots taken under a built-in theme reproduce bugs that exist in our own pair too.
-
-Fixes that keep theme character (computed with the existing `readable()`): light `faint` on ground `#918f8a → #6c6a66`; graphite `faint` on fill `#80838a → #94979c`; light hues `design #d6825a → #9c6145`, `dev #5b8def → #4669ad`, `qa #3fa877 → #327c59`, `research #a47bd6 → #795c9c`; send `accent` darkened 18% (`#c96442 → #a55236`, 5.44).
-
-Inline code chips are **not ours**: `TextView.markdown(id, markdown)` (`gpui-kit.d.ts:20709`) takes no theme hook, so chips and links inside replies follow herdr's own markdown colours whatever `palette()` says. On a theme whose `surface` equals `background` (atom-one-dark) the chip has nothing to sit on. Making chips consistent means rendering code spans ourselves, or accepting herdr's.
-
-### 3. "Attach document…" never opens a picker
-
-- Paperclip → pane: `composer.js:1151`, pane body `composer.js:1255-1265`, item `composer.js:1262` → `pickFiles` `composer.js:521-544`.
-- Windows branch: `exec("powershell", ["-NoProfile","-Command","Add-Type -AssemblyName System.Windows.Forms; $d = New-Object …OpenFileDialog; … if ($d.ShowDialog() -eq 'OK') { $d.FileNames -join … }"])` — `composer.js:528-531`.
-- Attach **folder** works because it calls herdr's native `pickFolder` (`gpui-kit.d.ts:22229`, `composer.js:546-552`). There is no `pickFiles` in herdr's API, so documents are the one hand-rolled dialog.
-- The failure is silent by construction: `if (r.code === 0) this.addFiles(…); return;` (`composer.js:534-537`) — a non-zero PowerShell exit returns with no toast, no fallback. The toast only appears when `exec` *throws* (`composer.js:539-542`). Cancel (`code 0`, empty stdout) and error are indistinguishable to the person.
-- The script itself is fine: the same spawn (pipes, `windowsHide`) opens a dialog — `.bot-herdr/tmp/pick.mjs` left a window up until killed. So the fault is in the mod's `exec` path or in the dialog opening behind the herdr window, not in the PowerShell.
-- Fragile bits vs the working clipboard code (`engine/lib/media.mjs:129` uses `-NonInteractive -STA`): no `-STA`, no `-NonInteractive`, and a `;`/`$`/backtick/quoted string passed through `-Command`.
-
-### 4. UI review — improve / remove / layout
-
-Facts: sidebar 268px, topbar 42px with a 452px switch, pages stack, status 28px (`layouts/bot-herdr.json`); chat column max 660 (`look.js:62`), messages max 82% (`chat.js:723`).
-
-**Improve.** Reply header carries four items on every message, two of them 11.5px links that fail AA (`chat.js:805-816`). Move "Open terminal"/"Comment" into one row that appears on hover/focus (keep them permanent only where the agent stopped without replying, `chat.js:871`). The switch draws with `t.chrome`/`t.border` (`switch.js:47-56`) while everything else uses `palette()` — two greys in one bar.
-
-**Remove.** `edgeDark` and `scrim` tokens are unused (`look.js:33,195,216`); the "A row's or chip's colour" comment at `look.js:92` is orphaned above `luminance`. The "to" prefix on every message meta (`chat.js:755`) is noise.
-
-**Layout** — the page switch in the top bar duplicates the sidebar's spaces/agents navigation, and at ≥1200px the 660px column leaves two large dead gutters. Worth deciding (question 2).
-
 ## Questions
 
-1. How far should the contrast fix go?
+1. Should the chat show a live list of agents, or keep one working line?
+   - Presence strip — one compact row per live agent above the composer: name, status, what it is doing now, elapsed; a click opens its terminal.
+     ```mockup
+    <style>
+    *{box-sizing:border-box}
+    html,body{margin:0}
+    body{width:1200px;height:825px;overflow:hidden;background:#262624;color:#faf9f5;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+    .top{height:44px;padding:0 16px;display:flex;align-items:center;border-bottom:1px solid #4a4a47}
+    .tabs{display:flex;gap:4px}
+    .tab{height:29px;padding:0 12px;display:flex;align-items:center;gap:6px;border-radius:8px;font-size:12px;color:#bbb9b2}
+    .tab.on{background:#30302e;color:#faf9f5}
+    .main{height:781px;display:flex;flex-direction:column;align-items:center}
+    .feed{width:660px;flex:1;display:flex;flex-direction:column;gap:22px;padding:16px 0 10px;justify-content:flex-end;overflow:hidden}
+    .me{align-self:flex-end;max-width:520px;background:#3a3a37;border:1px solid #51514d;border-radius:12px;padding:12px 16px;font-size:13.5px;line-height:20px}
+    .r{width:640px}
+    .meta{display:flex;align-items:center;gap:8px;font-size:12px;height:18px}
+    .name{font-weight:600}
+    .time{color:#abaaa4;font-size:11px}
+    .body{font-size:13.5px;line-height:20px;color:#faf9f5}
+    .body .muted{color:#bbb9b2}
+    .strip{width:660px;background:#30302e;border:1px solid #4a4a47;border-radius:12px;padding:6px 6px 8px;margin-bottom:8px}
+    .shead{display:flex;align-items:center;padding:2px 8px 4px;font-size:10.5px;letter-spacing:.04em;color:#abaaa4;text-transform:uppercase}
+    .shead .right{margin-left:auto;text-transform:none;letter-spacing:0;color:#bbb9b2}
+    .srow{display:flex;align-items:center;gap:8px;height:34px;padding:0 8px;border-radius:8px}
+    .srow.you{background:rgba(251,191,36,.10);border:1px solid rgba(251,191,36,.32)}
+    .av{flex:none;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:600;border:1px solid}
+    .nm{flex:none;width:88px;font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .st{flex:none;width:76px;display:flex;align-items:center;gap:5px;font-size:11px;color:#bbb9b2}
+    .dot{width:6px;height:6px;border-radius:50%}
+    .act{flex:1;min-width:0;font-size:12px;color:#bbb9b2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .age{flex:none;font-size:11px;color:#abaaa4}
+    .answer{flex:none;height:28px;padding:0 12px;border-radius:8px;background:#e1987e;color:#141413;font-size:11px;font-weight:600;display:flex;align-items:center}
+    .rowa{display:flex;align-items:center;gap:8px}
+    .composer{width:660px;height:76px;background:#30302e;border:1px solid #4a4a47;border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;justify-content:space-between}
+    .ph{font-size:13.5px;color:#abaaa4}
+    .tools{display:flex;align-items:center;gap:8px;height:28px}
+    .tool{width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#bbb9b2}
+    .send{margin-left:auto;width:28px;height:28px;border-radius:50%;background:#e1987e;display:flex;align-items:center;justify-content:center;color:#141413;font-size:14px}
+    </style>
+    <div class="top">
+      <div class="tabs">
+        <div class="tab on">Chat</div><div class="tab">Terminals</div><div class="tab">Tasks</div><div class="tab">Plans</div><div class="tab">Knowledge</div><div class="tab">Settings</div>
+      </div>
+    </div>
+    <div class="main">
+      <div class="feed">
+        <div class="me">Check who is working right now, and whether Dev's and QA's reports landed before you called it done.</div>
+        <div class="r">
+          <div class="meta"><span class="name" style="color:#e1987e">Orchestrator</span><span class="time">14:22</span></div>
+          <div class="body">Done. Dev built the strip, Design checked the motion, QA tested the focus order. I read both reports before marking step 2 done: <span class="muted">the working line now lists each agent.</span></div>
+        </div>
+        <div class="r">
+          <div class="meta"><span class="name" style="color:#5b8def">Dev</span><span class="time">14:21</span></div>
+          <div class="body">Strip is in <span style="color:#e1987e">src/chat.js:958</span>. Rows read from <span style="color:#e1987e">workers()</span>, so the rotating line is gone.</div>
+        </div>
+      </div>
+      <div class="strip">
+        <div class="shead"><span>Working now · 4</span><span class="right">3 working · 1 needs you</span></div>
+        <div class="srow">
+          <div class="av" style="background:rgba(225,152,126,.16);border-color:rgba(225,152,126,.45);color:#e1987e">O</div>
+          <div class="nm" style="color:#e1987e">Orchestrator</div>
+          <div class="st"><span class="dot" style="background:#34d399"></span>working</div>
+          <div class="act">Waiting on 3 children</div><div class="age">12m</div>
+        </div>
+        <div class="srow">
+          <div class="av" style="background:rgba(91,141,239,.16);border-color:rgba(91,141,239,.45);color:#5b8def">D</div>
+          <div class="nm" style="color:#5b8def">Dev</div>
+          <div class="st"><span class="dot" style="background:#34d399"></span>working</div>
+          <div class="act">Editing src/chat.js — presence rows</div><div class="age">4m</div>
+        </div>
+        <div class="srow">
+          <div class="av" style="background:rgba(214,130,90,.16);border-color:rgba(214,130,90,.45);color:#d6825a">D</div>
+          <div class="nm" style="color:#d6825a">Design</div>
+          <div class="st"><span class="dot" style="background:#34d399"></span>working</div>
+          <div class="act">Checking the row at 1200px</div><div class="age">1m</div>
+        </div>
+        <div class="srow you">
+          <div class="av" style="background:rgba(63,168,119,.16);border-color:rgba(63,168,119,.45);color:#3fa877">Q</div>
+          <div class="nm" style="color:#3fa877">QA</div>
+          <div class="st"><span class="dot" style="background:#fbbf24"></span>needs you</div>
+          <div class="act">Should child reports stay in the feed?</div><div class="answer">Answer</div>
+        </div>
+      </div>
+      <div class="composer">
+        <div class="ph">Write a message, run a command, or ask an agent</div>
+        <div class="tools"><div class="tool">＋</div><div class="tool">▤</div><div class="send">↑</div></div>
+      </div>
+    </div>
+     ```
+   - Name the working line — keep the one line and add the agent's name, its current action and a working count; nothing else moves.
+     ```mockup
+    <style>
+    *{box-sizing:border-box}
+    html,body{margin:0}
+    body{width:1200px;height:825px;overflow:hidden;background:#262624;color:#faf9f5;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+    .top{height:44px;padding:0 16px;display:flex;align-items:center;border-bottom:1px solid #4a4a47}
+    .tabs{display:flex;gap:4px}
+    .tab{height:29px;padding:0 12px;display:flex;align-items:center;border-radius:8px;font-size:12px;color:#bbb9b2}
+    .tab.on{background:#30302e;color:#faf9f5}
+    .main{height:781px;display:flex;flex-direction:column;align-items:center}
+    .feed{width:660px;flex:1;display:flex;flex-direction:column;gap:22px;padding:16px 0 12px;justify-content:flex-end;overflow:hidden}
+    .me{align-self:flex-end;max-width:520px;background:#3a3a37;border:1px solid #51514d;border-radius:12px;padding:12px 16px;font-size:13.5px;line-height:20px}
+    .r{width:640px}
+    .meta{display:flex;align-items:center;gap:8px;height:18px;font-size:12px}
+    .name{font-weight:600}
+    .time{color:#abaaa4;font-size:11px}
+    .body{font-size:13.5px;line-height:20px}
+    .muted{color:#bbb9b2}
+    .line{width:660px;height:28px;display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:12px}
+    .glyph{width:16px;height:16px;flex:none;position:relative}
+    .glyph i{position:absolute;left:0;width:16px;height:2px;border-radius:2px;background:rgba(91,141,239,.35)}
+    .glyph i:nth-child(1){top:4px}
+    .glyph i:nth-child(2){top:9px;width:10px;background:#5b8def}
+    .glyph i:nth-child(3){top:14px}
+    .who{font-weight:600;color:#5b8def}
+    .what{color:#bbb9b2;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+    .count{margin-left:auto;flex:none;height:28px;padding:0 10px;border:1px solid #4a4a47;border-radius:8px;display:flex;align-items:center;gap:4px;font-size:12px;color:#bbb9b2;background:#30302e}
+    .composer{width:660px;height:76px;background:#30302e;border:1px solid #4a4a47;border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;justify-content:space-between}
+    .ph{font-size:13.5px;color:#abaaa4}
+    .tools{display:flex;align-items:center;gap:8px;height:28px}
+    .tool{width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#bbb9b2}
+    .send{margin-left:auto;width:28px;height:28px;border-radius:50%;background:#e1987e;display:flex;align-items:center;justify-content:center;color:#141413;font-size:14px}
+    </style>
+    <div class="top">
+      <div class="tabs">
+        <div class="tab on">Chat</div><div class="tab">Terminals</div><div class="tab">Tasks</div><div class="tab">Plans</div><div class="tab">Knowledge</div><div class="tab">Settings</div>
+      </div>
+    </div>
+    <div class="main">
+      <div class="feed">
+        <div class="me">Check who is working right now, and whether Dev's and QA's reports landed before you called it done.</div>
+        <div class="r">
+          <div class="meta"><span class="name" style="color:#e1987e">Orchestrator</span><span class="time">14:22</span></div>
+          <div class="body">Done. Dev built the strip, Design checked the motion, QA tested the focus order. I read both reports before marking step 2 done: <span class="muted">the working line now names the agent.</span></div>
+        </div>
+        <div class="r">
+          <div class="meta"><span class="name" style="color:#5b8def">Dev</span><span class="time">14:21</span></div>
+          <div class="body">Line is updated in <span style="color:#e1987e">src/chat.js:958</span>: it reads <span style="color:#e1987e">workers()[turn]</span>, so the name and what it is doing are on the line.</div>
+        </div>
+        <div class="r">
+          <div class="meta"><span class="name" style="color:#d6825a">Design</span><span class="time">14:20</span></div>
+          <div class="body">Name in the agent's hue, activity muted after the dot; the count stays a quiet button.</div>
+        </div>
+      </div>
+      <div class="line">
+        <div class="glyph"><i></i><i></i><i></i></div>
+        <div class="who">Dev</div>
+        <div class="what">· Editing src/chat.js — presence rows</div>
+        <div class="count">1 of 3 working <span>›</span></div>
+      </div>
+      <div class="composer">
+        <div class="ph">Write a message, run a command, or ask an agent</div>
+        <div class="tools"><div class="tool">＋</div><div class="tool">▤</div><div class="send">↑</div></div>
+      </div>
+    </div>
+     ```
+   - Agents rail — a fixed column beside the chat with every agent grouped needs-you, working, idle; the chat column gives up that width.
+     ```mockup
+    <style>
+    *{box-sizing:border-box}
+    html,body{margin:0}
+    body{width:1200px;height:825px;overflow:hidden;background:#262624;color:#faf9f5;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+    .top{height:44px;padding:0 16px;display:flex;align-items:center;border-bottom:1px solid #4a4a47}
+    .tabs{display:flex;gap:4px}
+    .tab{height:29px;padding:0 12px;display:flex;align-items:center;border-radius:8px;font-size:12px;color:#bbb9b2}
+    .tab.on{background:#30302e;color:#faf9f5}
+    .page{height:781px;display:flex;justify-content:center;gap:16px;padding:16px 0}
+    .column{width:660px;display:flex;flex-direction:column;min-height:0}
+    .feed{flex:1;display:flex;flex-direction:column;gap:22px;justify-content:flex-end;overflow:hidden}
+    .me{align-self:flex-end;max-width:500px;background:#3a3a37;border:1px solid #51514d;border-radius:12px;padding:12px 16px;font-size:13.5px;line-height:20px}
+    .r{width:640px}
+    .meta{display:flex;align-items:center;gap:8px;height:18px;font-size:12px}
+    .name{font-weight:600}
+    .time{color:#abaaa4;font-size:11px}
+    .body{font-size:13.5px;line-height:20px}
+    .muted{color:#bbb9b2}
+    .line{height:28px;display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:12px;color:#bbb9b2}
+    .line .who{color:#5b8def;font-weight:600}
+    .composer{height:76px;background:#30302e;border:1px solid #4a4a47;border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;justify-content:space-between}
+    .ph{font-size:13.5px;color:#abaaa4}
+    .tools{display:flex;align-items:center;gap:8px;height:28px}
+    .tool{width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#bbb9b2}
+    .send{margin-left:auto;width:28px;height:28px;border-radius:50%;background:#e1987e;display:flex;align-items:center;justify-content:center;color:#141413;font-size:14px}
+    .rail{width:248px;flex:none;background:#30302e;border:1px solid #4a4a47;border-radius:12px;padding:10px 8px;align-self:flex-start}
+    .rhead{display:flex;align-items:center;padding:2px 8px 8px;font-size:10.5px;letter-spacing:.04em;color:#abaaa4;text-transform:uppercase}
+    .rhead b{margin-left:auto;color:#bbb9b2;font-weight:400;letter-spacing:0;text-transform:none;font-size:11px}
+    .group{font-size:10.5px;letter-spacing:.04em;color:#abaaa4;text-transform:uppercase;padding:8px 8px 4px}
+    .arow{display:flex;gap:8px;padding:6px 8px;border-radius:8px;align-items:flex-start}
+    .arow.you{background:rgba(251,191,36,.10);border:1px solid rgba(251,191,36,.32);padding:5px 7px}
+    .av{flex:none;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;border:1px solid}
+    .aw{flex:1;min-width:0}
+    .an{display:flex;align-items:center;gap:5px;font-size:12px;font-weight:600}
+    .dot{width:6px;height:6px;border-radius:50%;flex:none}
+    .aa{font-size:11px;color:#bbb9b2;line-height:15px;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .at{font-size:11px;color:#abaaa4}
+    .answer{height:26px;padding:0 10px;border-radius:8px;background:#e1987e;color:#141413;font-size:11px;font-weight:600;display:inline-flex;align-items:center;margin-top:6px}
+    .q{font-size:11px;color:#fbbf24;line-height:15px;margin-top:2px}
+    </style>
+    <div class="top">
+      <div class="tabs">
+        <div class="tab on">Chat</div><div class="tab">Terminals</div><div class="tab">Tasks</div><div class="tab">Plans</div><div class="tab">Knowledge</div><div class="tab">Settings</div>
+      </div>
+    </div>
+    <div class="page">
+      <div class="column">
+        <div class="feed">
+          <div class="me">Check who is working right now, and whether Dev's and QA's reports landed before you called it done.</div>
+          <div class="r">
+            <div class="meta"><span class="name" style="color:#e1987e">Orchestrator</span><span class="time">14:22</span></div>
+            <div class="body">Done. Dev built it, Design checked the motion, QA tested the focus order. I read both reports before marking step 2 done: <span class="muted">the rail lists every agent beside the chat.</span></div>
+          </div>
+          <div class="r">
+            <div class="meta"><span class="name" style="color:#5b8def">Dev</span><span class="time">14:21</span></div>
+            <div class="body">Rail is in <span style="color:#e1987e">src/chat.js</span>; rows read from <span style="color:#e1987e">workers()</span> and <span style="color:#e1987e">children()</span>.</div>
+          </div>
+        </div>
+        <div class="line"><span class="who">Dev</span><span>· Editing src/chat.js</span></div>
+        <div class="composer">
+          <div class="ph">Write a message, run a command, or ask an agent</div>
+          <div class="tools"><div class="tool">＋</div><div class="tool">▤</div><div class="send">↑</div></div>
+        </div>
+      </div>
+      <div class="rail">
+        <div class="rhead"><span>Agents</span><b>6 live</b></div>
+        <div class="group">Needs you</div>
+        <div class="arow you">
+          <div class="av" style="background:rgba(63,168,119,.16);border-color:rgba(63,168,119,.45);color:#3fa877">Q</div>
+          <div class="aw">
+            <div class="an" style="color:#3fa877">QA</div>
+            <div class="q">Should child reports stay in the feed?</div>
+            <div class="answer">Answer</div>
+          </div>
+        </div>
+        <div class="group">Working</div>
+        <div class="arow">
+          <div class="av" style="background:rgba(225,152,126,.16);border-color:rgba(225,152,126,.45);color:#e1987e">O</div>
+          <div class="aw"><div class="an" style="color:#e1987e">Orchestrator<span class="dot" style="background:#34d399"></span></div><div class="aa">Waiting on 3 children · 12m</div></div>
+        </div>
+        <div class="arow">
+          <div class="av" style="background:rgba(91,141,239,.16);border-color:rgba(91,141,239,.45);color:#5b8def">D</div>
+          <div class="aw"><div class="an" style="color:#5b8def">Dev<span class="dot" style="background:#34d399"></span></div><div class="aa">Editing src/chat.js · 4m</div></div>
+        </div>
+        <div class="arow">
+          <div class="av" style="background:rgba(214,130,90,.16);border-color:rgba(214,130,90,.45);color:#d6825a">D</div>
+          <div class="aw"><div class="an" style="color:#d6825a">Design<span class="dot" style="background:#34d399"></span></div><div class="aa">Checking the row at 1200px · 1m</div></div>
+        </div>
+        <div class="group">Idle</div>
+        <div class="arow">
+          <div class="av" style="background:rgba(164,123,214,.16);border-color:rgba(164,123,214,.45);color:#a47bd6">R</div>
+          <div class="aw"><div class="an" style="color:#a47bd6">Research<span class="dot" style="background:#abaaa4"></span></div><div class="aa">Waiting for a task</div></div>
+        </div>
+        <div class="arow">
+          <div class="av" style="background:rgba(62,163,181,.16);border-color:rgba(62,163,181,.45);color:#3ea3b5">S</div>
+          <div class="aw"><div class="an" style="color:#3ea3b5">Scout<span class="dot" style="background:#abaaa4"></span></div><div class="aa">Waiting for a task</div></div>
+        </div>
+      </div>
+    </div>
+     ```
 
-   - Repair failing text only — raise `faint` (and the send button) to 4.5:1, leave agent hues, chips and the bubble as they are; theme keeps its character.
+2. How should a child agent's report appear in the feed?
+   - Tag, keep flat — child replies stay where they happened, tagged "child of X" and "report", with a Team only / Everything filter.
      ```mockup
-     <style>
-     :root{--ground:#faf9f5;--fill:#fff;--ink:#141413;--muted:#73726c;--faint:#6c6a66;--edge:#e3e0d7;
-     --accent:#c96442;--accentInk:#a55236;--bubble:#efede5;--bubbleEdge:#d6d2c6;--chip:#eceae4;--chipInk:#6c6a66}
-     *{box-sizing:border-box}
-     body{margin:0;background:var(--ground);color:var(--ink);font:14px/1.5 "Geist",system-ui,sans-serif}
-     .page{width:1200px;margin:0 auto;padding:28px 0}
-     .col{width:660px;margin:0 auto;display:flex;flex-direction:column;gap:22px}
-     .reply{display:flex;flex-direction:column;gap:6px}
-     .head{display:flex;align-items:center;gap:8px}
-     .name{font-size:12.5px;font-weight:600;color:#d6825a}
-     .time{font-size:11px;color:var(--faint)}
-     .grow{flex:1}
-     .link{font-size:11.5px;color:var(--muted);padding:0 7px;height:22px;display:flex;align-items:center;border-radius:6px;cursor:pointer;background:none;border:0;font-family:inherit}
-     .link:hover{background:#f4f3ef;color:var(--ink)}
-     .body{font-size:14px;line-height:21px;max-width:560px}
-     .chip{font-family:ui-monospace,monospace;font-size:13px;background:var(--chip);color:var(--chipInk);padding:1px 5px;border-radius:5px}
-     .comment{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:var(--faint);width:max-content;cursor:pointer;background:none;border:0;padding:2px 4px;border-radius:6px;font-family:inherit}
-     .comment:hover{color:var(--ink);background:#f4f3ef}
-     .mine{align-self:flex-end;max-width:540px;background:var(--bubble);border:1px solid var(--bubbleEdge);border-radius:12px;padding:9px 13px}
-     .meta{display:flex;gap:4px;align-items:center;font-size:11px;color:var(--faint);margin-top:4px}
-     .meta b{font-weight:600;color:#d6825a}
-     .file{display:inline-flex;align-items:center;gap:4px;height:22px;padding:0 6px;border-radius:6px;background:#f4f3ef;color:var(--muted);font-size:11.5px;margin-top:6px}
-     .send{width:32px;height:32px;border-radius:10px;background:var(--accentInk);color:#fff;display:flex;align-items:center;justify-content:center;font-size:15px}
-     .bar{display:flex;align-items:center;gap:8px;border:1px solid var(--edge);background:var(--fill);border-radius:12px;padding:10px 12px;color:var(--muted);font-size:14px}
-     </style>
-     <div class="page"><div class="col">
-       <div class="reply">
-         <div class="head"><span class="name">Design</span><span class="time">09:41</span><span class="grow"></span>
-           <button class="link">Open terminal</button></div>
-         <div class="body">The composer keeps its curve; the chip <span class="chip">c.fill</span> is still herdr's and the hue above is untouched.</div>
-         <button class="comment">Comment</button>
-       </div>
-       <div style="align-self:flex-end;display:flex;flex-direction:column;align-items:flex-end;gap:4px">
-         <div class="mine">Tighten the header and make the timestamps legible.</div>
-         <div class="meta">to <b>Orchestrator</b> · 09:47</div>
-         <div class="file">design-review.md</div>
-       </div>
-       <div class="bar"><span style="flex:1">Write a message, run a command, or ask an agent</span><span class="send">↑</span></div>
-     </div></div>
+    <style>
+    *{box-sizing:border-box}
+    html,body{margin:0}
+    body{width:1200px;height:825px;overflow:hidden;background:#262624;color:#faf9f5;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+    .top{height:44px;padding:0 16px;display:flex;align-items:center;border-bottom:1px solid #4a4a47}
+    .tabs{display:flex;gap:4px}
+    .tab{height:29px;padding:0 12px;display:flex;align-items:center;border-radius:8px;font-size:12px;color:#bbb9b2}
+    .tab.on{background:#30302e;color:#faf9f5}
+    .main{height:781px;display:flex;flex-direction:column;align-items:center}
+    .filter{width:660px;display:flex;align-items:center;gap:8px;padding:12px 0 4px}
+    .filter .label{font-size:11px;color:#abaaa4}
+    .seg{margin-left:auto;display:flex;padding:2px;gap:2px;background:#222220;border-radius:10px}
+    .seg div{height:24px;padding:0 10px;display:flex;align-items:center;border-radius:8px;font-size:11px;color:#bbb9b2}
+    .seg .on{background:#30302e;color:#faf9f5}
+    .feed{width:660px;flex:1;display:flex;flex-direction:column;gap:22px;padding:8px 0 12px;justify-content:flex-end;overflow:hidden}
+    .me{align-self:flex-end;max-width:520px;background:#3a3a37;border:1px solid #51514d;border-radius:12px;padding:12px 16px;font-size:13.5px;line-height:20px}
+    .r{width:640px}
+    .meta{display:flex;align-items:center;gap:8px;height:18px;font-size:12px}
+    .name{font-weight:600}
+    .time{color:#abaaa4;font-size:11px}
+    .body{font-size:13.5px;line-height:20px}
+    .muted{color:#bbb9b2}
+    .tag{display:flex;align-items:center;gap:6px;height:18px;margin-bottom:3px;font-size:10.5px;color:#abaaa4}
+    .pill{height:16px;padding:0 6px;border-radius:8px;background:#222220;border:1px solid #4a4a47;display:flex;align-items:center;gap:4px;color:#bbb9b2;font-size:10px}
+    .pill i{width:5px;height:5px;border-radius:50%;background:#abaaa4}
+    .line{width:660px;height:28px;display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:12px;color:#bbb9b2}
+    .line .who{color:#5b8def;font-weight:600}
+    .composer{width:660px;height:76px;background:#30302e;border:1px solid #4a4a47;border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;justify-content:space-between}
+    .ph{font-size:13.5px;color:#abaaa4}
+    .tools{display:flex;align-items:center;gap:8px;height:28px}
+    .tool{width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#bbb9b2}
+    .send{margin-left:auto;width:28px;height:28px;border-radius:50%;background:#e1987e;display:flex;align-items:center;justify-content:center;color:#141413;font-size:14px}
+    </style>
+    <div class="top">
+      <div class="tabs">
+        <div class="tab on">Chat</div><div class="tab">Terminals</div><div class="tab">Tasks</div><div class="tab">Plans</div><div class="tab">Knowledge</div><div class="tab">Settings</div>
+      </div>
+    </div>
+    <div class="main">
+      <div class="filter"><span class="label">Feed</span><div class="seg"><div>Team only</div><div class="on">Everything</div></div></div>
+      <div class="feed">
+        <div class="me">Add a presence strip so I can see who is working.</div>
+        <div class="r">
+          <div class="meta"><span class="name" style="color:#e1987e">Orchestrator</span><span class="time">14:22</span></div>
+          <div class="body">Done. Dev built it, Design checked the motion, QA tested the focus order. I read both reports first; step 2 is done.</div>
+        </div>
+        <div class="r">
+          <div class="tag"><span class="pill"><i></i>report</span><span>child of Orchestrator</span></div>
+          <div class="meta"><span class="name" style="color:#5b8def">Dev</span><span class="time">14:21</span></div>
+          <div class="body">Strip is in <span style="color:#e1987e">src/chat.js:958</span>. Rows read from <span style="color:#e1987e">workers()</span>; the rotating line is gone.</div>
+        </div>
+        <div class="r">
+          <div class="tag"><span class="pill"><i></i>report</span><span>child of Orchestrator</span></div>
+          <div class="meta"><span class="name" style="color:#d6825a">Design</span><span class="time">14:20</span></div>
+          <div class="body">Rows are 34px, name in the agent's hue, activity truncated. Two fixes, both in.</div>
+        </div>
+        <div class="r">
+          <div class="tag"><span class="pill"><i></i>report</span><span>child of Orchestrator</span></div>
+          <div class="meta"><span class="name" style="color:#3fa877">QA</span><span class="time">14:19</span></div>
+          <div class="body">Focus order checked; rows are reachable and cost nothing when idle.</div>
+        </div>
+      </div>
+      <div class="line"><span class="who">Dev</span><span>· Editing src/chat.js</span></div>
+      <div class="composer">
+        <div class="ph">Write a message, run a command, or ask an agent</div>
+        <div class="tools"><div class="tool">＋</div><div class="tool">▤</div><div class="send">↑</div></div>
+      </div>
+    </div>
      ```
-   - Enforce AA everywhere, keep the theme — `faint` repaired, agent hues shifted toward the ink when they fail, code chips drawn by us, send button darkened; every token passes 4.5:1 on any theme.
+   - Group under the turn — each team reply collects the child reports that answered it, indented and compact, opened one by one.
      ```mockup
-     <style>
-     :root{--ground:#faf9f5;--fill:#fff;--ink:#141413;--muted:#73726c;--faint:#6c6a66;--edge:#e3e0d7;
-     --accent:#a55236;--bubble:#e9e6dc;--bubbleEdge:#c9c4b5;--chip:#ebe9e2;--chipInk:#141413}
-     *{box-sizing:border-box}
-     body{margin:0;background:var(--ground);color:var(--ink);font:14px/1.5 "Geist",system-ui,sans-serif}
-     .page{width:1200px;margin:0 auto;padding:28px 0}
-     .col{width:660px;margin:0 auto;display:flex;flex-direction:column;gap:22px}
-     .reply{display:flex;flex-direction:column;gap:6px}
-     .head{display:flex;align-items:center;gap:8px}
-     .name{font-size:12.5px;font-weight:600;color:#9c6145}
-     .time{font-size:11px;color:var(--faint)}
-     .grow{flex:1}
-     .link{font-size:11.5px;color:var(--muted);padding:0 7px;height:22px;display:flex;align-items:center;border-radius:6px;cursor:pointer;background:none;border:0;font-family:inherit}
-     .link:hover{background:#f4f3ef;color:var(--ink)}
-     .body{font-size:14px;line-height:21px;max-width:560px}
-     .chip{font-family:ui-monospace,monospace;font-size:13px;background:var(--chip);color:var(--chipInk);padding:1px 5px;border-radius:5px}
-     .comment{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:var(--faint);width:max-content;cursor:pointer;background:none;border:0;padding:2px 4px;border-radius:6px;font-family:inherit}
-     .comment:hover{color:var(--ink);background:#f4f3ef}
-     .mine{align-self:flex-end;max-width:540px;background:var(--bubble);border:1px solid var(--bubbleEdge);border-radius:12px;padding:9px 13px}
-     .meta{display:flex;gap:4px;align-items:center;font-size:11px;color:var(--faint);margin-top:4px}
-     .meta b{font-weight:600;color:#9c6145}
-     .file{display:inline-flex;align-items:center;gap:4px;height:22px;padding:0 6px;border-radius:6px;background:#f4f3ef;color:var(--muted);font-size:11.5px;margin-top:6px}
-     .send{width:32px;height:32px;border-radius:10px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-size:15px}
-     .bar{display:flex;align-items:center;gap:8px;border:1px solid var(--edge);background:var(--fill);border-radius:12px;padding:10px 12px;color:var(--muted);font-size:14px}
-     </style>
-     <div class="page"><div class="col">
-       <div class="reply">
-         <div class="head"><span class="name">Design</span><span class="time">09:41</span><span class="grow"></span>
-           <button class="link">Open terminal</button></div>
-         <div class="body">The composer keeps its curve; the chip <span class="chip">c.fill</span> is now ours and the hue above deepened to pass.</div>
-         <button class="comment">Comment</button>
-       </div>
-       <div style="align-self:flex-end;display:flex;flex-direction:column;align-items:flex-end;gap:4px">
-         <div class="mine">Tighten the header and make the timestamps legible.</div>
-         <div class="meta">to <b>Orchestrator</b> · 09:47</div>
-         <div class="file">design-review.md</div>
-       </div>
-       <div class="bar"><span style="flex:1">Write a message, run a command, or ask an agent</span><span class="send">↑</span></div>
-     </div></div>
+    <style>
+    *{box-sizing:border-box}
+    html,body{margin:0}
+    body{width:1200px;height:825px;overflow:hidden;background:#262624;color:#faf9f5;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+    .top{height:44px;padding:0 16px;display:flex;align-items:center;border-bottom:1px solid #4a4a47}
+    .tabs{display:flex;gap:4px}
+    .tab{height:29px;padding:0 12px;display:flex;align-items:center;border-radius:8px;font-size:12px;color:#bbb9b2}
+    .tab.on{background:#30302e;color:#faf9f5}
+    .main{height:781px;display:flex;flex-direction:column;align-items:center}
+    .feed{width:660px;flex:1;display:flex;flex-direction:column;gap:22px;padding:16px 0 12px;justify-content:flex-end;overflow:hidden}
+    .me{align-self:flex-end;max-width:520px;background:#3a3a37;border:1px solid #51514d;border-radius:12px;padding:12px 16px;font-size:13.5px;line-height:20px}
+    .r{width:640px}
+    .meta{display:flex;align-items:center;gap:8px;height:18px;font-size:12px}
+    .name{font-weight:600}
+    .time{color:#abaaa4;font-size:11px}
+    .body{font-size:13.5px;line-height:20px}
+    .muted{color:#bbb9b2}
+    .group{margin-left:16px;border-left:2px solid #4a4a47;padding-left:12px;display:flex;flex-direction:column;gap:10px}
+    .ghead{display:flex;align-items:center;gap:8px;height:22px;font-size:11px;color:#bbb9b2}
+    .ghead b{font-weight:600;color:#faf9f5}
+    .ghead .chev{color:#abaaa4}
+    .rep{display:flex;align-items:center;gap:8px;height:34px}
+    .rep .av{flex:none;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:600;border:1px solid}
+    .rep .rn{flex:none;width:70px;font-size:12px;font-weight:600}
+    .rep .rs{flex:1;min-width:0;font-size:12px;color:#bbb9b2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .rep .rt{flex:none;font-size:11px;color:#abaaa4}
+    .rep .open{flex:none;height:24px;padding:0 8px;border:1px solid #4a4a47;border-radius:8px;display:flex;align-items:center;font-size:11px;color:#bbb9b2}
+    .line{width:660px;height:28px;display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:12px;color:#bbb9b2}
+    .line .who{color:#5b8def;font-weight:600}
+    .composer{width:660px;height:76px;background:#30302e;border:1px solid #4a4a47;border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;justify-content:space-between}
+    .ph{font-size:13.5px;color:#abaaa4}
+    .tools{display:flex;align-items:center;gap:8px;height:28px}
+    .tool{width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#bbb9b2}
+    .send{margin-left:auto;width:28px;height:28px;border-radius:50%;background:#e1987e;display:flex;align-items:center;justify-content:center;color:#141413;font-size:14px}
+    </style>
+    <div class="top">
+      <div class="tabs">
+        <div class="tab on">Chat</div><div class="tab">Terminals</div><div class="tab">Tasks</div><div class="tab">Plans</div><div class="tab">Knowledge</div><div class="tab">Settings</div>
+      </div>
+    </div>
+    <div class="main">
+      <div class="feed">
+        <div class="me">Add a presence strip so I can see who is working.</div>
+        <div class="r">
+          <div class="meta"><span class="name" style="color:#e1987e">Orchestrator</span><span class="time">14:22</span></div>
+          <div class="body">Done. Dev built it, Design checked the motion, QA tested the focus order. I read both reports first; step 2 is done.</div>
+        </div>
+        <div class="group">
+          <div class="ghead"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5l3 3 3-3" fill="none" stroke="#abaaa4" stroke-width="1.5" stroke-linecap="round"/></svg><b>3 reports</b><span>this turn · Dev, Design, QA · 2m</span></div>
+          <div class="rep">
+            <div class="av" style="background:rgba(91,141,239,.16);border-color:rgba(91,141,239,.45);color:#5b8def">D</div>
+            <div class="rn" style="color:#5b8def">Dev</div>
+            <div class="rs">Strip is in src/chat.js:958; rows read from workers()</div>
+            <div class="rt">14:21</div><div class="open">Open</div>
+          </div>
+          <div class="rep">
+            <div class="av" style="background:rgba(214,130,90,.16);border-color:rgba(214,130,90,.45);color:#d6825a">D</div>
+            <div class="rn" style="color:#d6825a">Design</div>
+            <div class="rs">Rows are 34px, name in the agent's hue; two fixes</div>
+            <div class="rt">14:20</div><div class="open">Open</div>
+          </div>
+          <div class="rep">
+            <div class="av" style="background:rgba(63,168,119,.16);border-color:rgba(63,168,119,.45);color:#3fa877">Q</div>
+            <div class="rn" style="color:#3fa877">QA</div>
+            <div class="rs">Focus order checked; rows reachable, idle costs nothing</div>
+            <div class="rt">14:19</div><div class="open">Open</div>
+          </div>
+        </div>
+        <div class="r">
+          <div class="meta"><span class="name" style="color:#e1987e">Orchestrator</span><span class="time">14:18</span></div>
+          <div class="body muted">Starting QA on the focus order while Dev finishes.</div>
+        </div>
+      </div>
+      <div class="line"><span class="who">Dev</span><span>· Editing src/chat.js</span></div>
+      <div class="composer">
+        <div class="ph">Write a message, run a command, or ask an agent</div>
+        <div class="tools"><div class="tool">＋</div><div class="tool">▤</div><div class="send">↑</div></div>
+      </div>
+    </div>
      ```
-   - Always our palette — drop the theme following from `c84411a`; the app looks the same in Graphite, Ink, Moss, Paper and Win98, and only the terminals change.
+   - Team replies only — the feed shows the team's replies; each turn's child reports sit behind one "N child reports" row.
      ```mockup
-     <style>
-     :root{--ground:#faf9f5;--fill:#fff;--ink:#141413;--muted:#73726c;--faint:#6c6a66;--edge:#e3e0d7;
-     --accent:#a55236;--bubble:#e9e6dc;--bubbleEdge:#c9c4b5;--chip:#ebe9e2;--chipInk:#141413}
-     *{box-sizing:border-box}
-     body{margin:0;background:var(--ground);color:var(--ink);font:14px/1.5 "Geist",system-ui,sans-serif}
-     .page{width:1200px;margin:0 auto;padding:28px 0}
-     .note{width:660px;margin:0 auto 18px;font-size:12px;color:var(--faint);border-left:2px solid var(--edge);padding-left:10px}
-     .col{width:660px;margin:0 auto;display:flex;flex-direction:column;gap:22px}
-     .reply{display:flex;flex-direction:column;gap:6px}
-     .head{display:flex;align-items:center;gap:8px}
-     .name{font-size:12.5px;font-weight:600;color:#9c6145}
-     .time{font-size:11px;color:var(--faint)}
-     .grow{flex:1}
-     .link{font-size:11.5px;color:var(--muted);padding:0 7px;height:22px;display:flex;align-items:center;border-radius:6px;cursor:pointer;background:none;border:0;font-family:inherit}
-     .link:hover{background:#f4f3ef;color:var(--ink)}
-     .body{font-size:14px;line-height:21px;max-width:560px}
-     .chip{font-family:ui-monospace,monospace;font-size:13px;background:var(--chip);color:var(--chipInk);padding:1px 5px;border-radius:5px}
-     .comment{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:var(--faint);width:max-content;cursor:pointer;background:none;border:0;padding:2px 4px;border-radius:6px;font-family:inherit}
-     .comment:hover{color:var(--ink);background:#f4f3ef}
-     .mine{align-self:flex-end;max-width:540px;background:var(--bubble);border:1px solid var(--bubbleEdge);border-radius:12px;padding:9px 13px}
-     .meta{display:flex;gap:4px;align-items:center;font-size:11px;color:var(--faint);margin-top:4px}
-     .meta b{font-weight:600;color:#9c6145}
-     .file{display:inline-flex;align-items:center;gap:4px;height:22px;padding:0 6px;border-radius:6px;background:#f4f3ef;color:var(--muted);font-size:11.5px;margin-top:6px}
-     .send{width:32px;height:32px;border-radius:10px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-size:15px}
-     .bar{display:flex;align-items:center;gap:8px;border:1px solid var(--edge);background:var(--fill);border-radius:12px;padding:10px 12px;color:var(--muted);font-size:14px}
-     </style>
-     <div class="page">
-     <div class="note">Same view under Graphite, Ink, Moss, Paper or Win98 — only the terminals take the theme.</div>
-     <div class="col">
-       <div class="reply">
-         <div class="head"><span class="name">Design</span><span class="time">09:41</span><span class="grow"></span>
-           <button class="link">Open terminal</button></div>
-         <div class="body">The composer keeps its curve; the chip <span class="chip">c.fill</span> and the hue above are always the Claude pair.</div>
-         <button class="comment">Comment</button>
-       </div>
-       <div style="align-self:flex-end;display:flex;flex-direction:column;align-items:flex-end;gap:4px">
-         <div class="mine">Tighten the header and make the timestamps legible.</div>
-         <div class="meta">to <b>Orchestrator</b> · 09:47</div>
-         <div class="file">design-review.md</div>
-       </div>
-       <div class="bar"><span style="flex:1">Write a message, run a command, or ask an agent</span><span class="send">↑</span></div>
-     </div></div>
-     ```
-
-2. Which layout should the app settle on?
-
-   - Keep as is, tidy the details — 268px sidebar, the switch in the top bar, a 660px chat column; only the hover actions and tokens change.
-     ```mockup
-     <style>
-     :root{--ground:#faf9f5;--fill:#fff;--ink:#141413;--muted:#73726c;--faint:#6c6a66;--edge:#e3e0d7;--well:#ebe9e2;--accent:#c96442;--hover:#f4f3ef;--bubble:#efede5}
-     *{box-sizing:border-box}body{margin:0;background:var(--ground);color:var(--ink);font:13px/1.45 "Geist",system-ui,sans-serif}
-     .app{width:1200px;height:720px;margin:0 auto;display:flex;border:1px solid var(--edge);border-radius:12px;overflow:hidden;background:var(--ground)}
-     .side{width:268px;border-right:1px solid var(--edge);display:flex;flex-direction:column;background:var(--ground)}
-     .brand{height:46px;display:flex;align-items:center;padding:0 16px;font-weight:600;font-size:13.5px}
-     .sect{padding:8px 16px 4px;font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:.06em}
-     .item{height:30px;margin:0 8px;padding:0 8px;border-radius:8px;display:flex;align-items:center;gap:8px;color:var(--muted);cursor:pointer}
-     .item:hover{background:var(--hover);color:var(--ink)}
-     .item.on{background:var(--well);color:var(--ink)}
-     .dot{width:6px;height:6px;border-radius:99px;background:#3fa877}
-     .foot{margin-top:auto;height:69px;border-top:1px solid var(--edge);padding:10px 16px;font-size:11.5px;color:var(--faint)}
-     .work{flex:1;display:flex;flex-direction:column;min-width:0}
-     .top{height:42px;display:flex;align-items:center;gap:8px;padding:0 10px;border-bottom:1px solid var(--edge);background:var(--fill)}
-     .seg{display:flex;gap:2px;padding:2px;background:var(--well);border-radius:10px;height:30px;align-items:center}
-     .seg div{height:26px;padding:0 11px;display:flex;align-items:center;border-radius:8px;color:var(--muted);font-size:12.5px;font-weight:500;cursor:pointer}
-     .seg div:hover{color:var(--ink)}
-     .seg .on{background:var(--fill);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08)}
-     .tabs{flex:1;display:flex;gap:6px;font-size:12px;color:var(--faint);padding-left:10px}
-     .chat{flex:1;position:relative;display:flex;justify-content:center}
-     .feed{width:660px;padding:18px 0;display:flex;flex-direction:column;gap:18px}
-     .head{display:flex;align-items:center;gap:8px}
-     .name{font-size:12.5px;font-weight:600;color:#d6825a}
-     .time{font-size:11px;color:var(--faint)}
-     .grow{flex:1}
-     .link{font-size:11.5px;color:var(--muted);height:22px;padding:0 7px;display:flex;align-items:center;border-radius:6px;background:none;border:0;cursor:pointer;font-family:inherit}
-     .link:hover{background:var(--hover);color:var(--ink)}
-     .body{font-size:14px;line-height:21px;max-width:560px;margin-top:4px}
-     .mine{align-self:flex-end;max-width:540px;background:var(--bubble);border:1px solid #dcd8cc;border-radius:12px;padding:9px 13px;font-size:14px;line-height:21px}
-     .meta{display:flex;gap:4px;justify-content:flex-end;font-size:11px;color:var(--faint);margin-top:4px}
-     .meta b{font-weight:600;color:#d6825a}
-     .composer{position:absolute;left:0;right:0;bottom:14px;display:flex;justify-content:center}
-     .box{width:660px;border:1px solid var(--edge);background:var(--fill);border-radius:12px;padding:12px 14px;display:flex;align-items:center;gap:10px;color:var(--faint)}
-     .box .r{margin-left:auto;width:32px;height:32px;border-radius:10px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center}
-     .status{height:28px;border-top:1px solid var(--edge);display:flex;align-items:center;padding:0 12px;font-size:11px;color:var(--faint);background:var(--fill)}
-     </style>
-     <div class="app">
-       <div class="side">
-         <div class="brand">bot-herdr</div>
-         <div class="sect">Spaces</div>
-         <div class="item on">bot-herdr</div>
-         <div class="item">scratch</div>
-         <div class="sect">Agents</div>
-         <div class="item"><span class="dot"></span>Orchestrator</div>
-         <div class="item"><span class="dot"></span>Design</div>
-         <div class="item"><span class="dot"></span>Dev</div>
-         <div class="foot">3 running · 1 waiting</div>
-       </div>
-       <div class="work">
-         <div class="top"><div class="seg"><div class="on">Chat</div><div>Terminals</div><div>Tasks</div><div>Plans</div><div>Knowledge</div><div>Settings</div></div><div class="tabs">Claude · Codex · Fixtures</div></div>
-         <div class="chat">
-           <div class="feed">
-             <div>
-               <div class="head"><span class="name">Design</span><span class="time">09:41</span><span class="grow"></span><button class="link">Open terminal</button></div>
-               <div class="body">The composer keeps its curve and the column stays 660px; the rest of the work goes into the tokens and the hover row.</div>
-             </div>
-             <div class="mine">Then keep the sidebar as it is and fix the greys.</div>
-             <div class="meta">to <b>Orchestrator</b> · 09:47</div>
-           </div>
-           <div class="composer"><div class="box"><span>Write a message, run a command, or ask an agent</span><span class="r">↑</span></div></div>
-         </div>
-         <div class="status">bot-herdr · main · 2 agents working</div>
-       </div>
-     </div>
-     ```
-   - Pages move into the sidebar — the switch becomes a nav list above Spaces, the top bar keeps only herdr's tabs; one navigation, not two.
-     ```mockup
-     <style>
-     :root{--ground:#faf9f5;--fill:#fff;--ink:#141413;--muted:#73726c;--faint:#6c6a66;--edge:#e3e0d7;--well:#ebe9e2;--accent:#c96442;--hover:#f4f3ef;--bubble:#efede5}
-     *{box-sizing:border-box}body{margin:0;background:var(--ground);color:var(--ink);font:13px/1.45 "Geist",system-ui,sans-serif}
-     .app{width:1200px;height:720px;margin:0 auto;display:flex;border:1px solid var(--edge);border-radius:12px;overflow:hidden;background:var(--ground)}
-     .side{width:268px;border-right:1px solid var(--edge);display:flex;flex-direction:column}
-     .brand{height:46px;display:flex;align-items:center;padding:0 16px;font-weight:600;font-size:13.5px}
-     .nav{padding:6px 8px 10px;border-bottom:1px solid var(--edge)}
-     .nav a{display:flex;align-items:center;gap:9px;height:30px;padding:0 8px;border-radius:8px;color:var(--muted);text-decoration:none;font-size:12.5px;font-weight:500}
-     .nav a:hover{background:var(--hover);color:var(--ink)}
-     .nav a.on{background:var(--well);color:var(--ink)}
-     .nav i{width:14px;height:14px;border:1.5px solid currentColor;border-radius:4px;display:inline-block;opacity:.7}
-     .sect{padding:10px 16px 4px;font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:.06em}
-     .item{height:30px;margin:0 8px;padding:0 8px;border-radius:8px;display:flex;align-items:center;gap:8px;color:var(--muted);cursor:pointer}
-     .item:hover{background:var(--hover);color:var(--ink)}
-     .item.on{background:var(--well);color:var(--ink)}
-     .dot{width:6px;height:6px;border-radius:99px;background:#3fa877}
-     .foot{margin-top:auto;height:69px;border-top:1px solid var(--edge);padding:10px 16px;font-size:11.5px;color:var(--faint)}
-     .work{flex:1;display:flex;flex-direction:column;min-width:0}
-     .top{height:42px;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid var(--edge);background:var(--fill);font-size:12px;color:var(--faint)}
-     .tab{padding:0 10px;height:26px;display:flex;align-items:center;border-radius:7px;color:var(--muted)}
-     .tab.on{background:var(--well);color:var(--ink)}
-     .chat{flex:1;position:relative;display:flex;justify-content:center}
-     .feed{width:720px;padding:18px 0;display:flex;flex-direction:column;gap:18px}
-     .head{display:flex;align-items:center;gap:8px}
-     .name{font-size:12.5px;font-weight:600;color:#d6825a}
-     .time{font-size:11px;color:var(--faint)}
-     .grow{flex:1}
-     .link{font-size:11.5px;color:var(--muted);height:22px;padding:0 7px;display:flex;align-items:center;border-radius:6px;background:none;border:0;cursor:pointer;font-family:inherit}
-     .link:hover{background:var(--hover);color:var(--ink)}
-     .body{font-size:14px;line-height:21px;max-width:600px;margin-top:4px}
-     .mine{align-self:flex-end;max-width:560px;background:var(--bubble);border:1px solid #dcd8cc;border-radius:12px;padding:9px 13px;font-size:14px;line-height:21px}
-     .meta{display:flex;gap:4px;justify-content:flex-end;font-size:11px;color:var(--faint);margin-top:4px}
-     .meta b{font-weight:600;color:#d6825a}
-     .composer{position:absolute;left:0;right:0;bottom:14px;display:flex;justify-content:center}
-     .box{width:720px;border:1px solid var(--edge);background:var(--fill);border-radius:12px;padding:12px 14px;display:flex;align-items:center;gap:10px;color:var(--faint)}
-     .box .r{margin-left:auto;width:32px;height:32px;border-radius:10px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center}
-     .status{height:28px;border-top:1px solid var(--edge);display:flex;align-items:center;padding:0 12px;font-size:11px;color:var(--faint);background:var(--fill)}
-     </style>
-     <div class="app">
-       <div class="side">
-         <div class="brand">bot-herdr</div>
-         <nav class="nav">
-           <a class="on" href="#"><i></i>Chat</a>
-           <a href="#"><i></i>Terminals</a>
-           <a href="#"><i></i>Tasks</a>
-           <a href="#"><i></i>Plans</a>
-           <a href="#"><i></i>Knowledge</a>
-           <a href="#"><i></i>Settings</a>
-         </nav>
-         <div class="sect">Spaces</div>
-         <div class="item on">bot-herdr</div>
-         <div class="item">scratch</div>
-         <div class="sect">Agents</div>
-         <div class="item"><span class="dot"></span>Orchestrator</div>
-         <div class="item"><span class="dot"></span>Design</div>
-         <div class="foot">3 running · 1 waiting</div>
-       </div>
-       <div class="work">
-         <div class="top"><span class="tab on">Claude</span><span class="tab">Codex</span><span class="tab">Fixtures</span></div>
-         <div class="chat">
-           <div class="feed">
-             <div>
-               <div class="head"><span class="name">Design</span><span class="time">09:41</span><span class="grow"></span><button class="link">Open terminal</button></div>
-               <div class="body">One navigation: pages on the left with the spaces, herdr's own tabs alone in the bar, and the column gets 60px more.</div>
-             </div>
-             <div class="mine">That reads better — the bar was doing two jobs.</div>
-             <div class="meta">to <b>Orchestrator</b> · 09:47</div>
-           </div>
-           <div class="composer"><div class="box"><span>Write a message, run a command, or ask an agent</span><span class="r">↑</span></div></div>
-         </div>
-         <div class="status">bot-herdr · main · 2 agents working</div>
-       </div>
-     </div>
-     ```
-   - Collapse the sidebar to an icon rail — 56px of icons for pages, spaces and agents as pop-overs; the chat column grows to 860px.
-     ```mockup
-     <style>
-     :root{--ground:#faf9f5;--fill:#fff;--ink:#141413;--muted:#73726c;--faint:#6c6a66;--edge:#e3e0d7;--well:#ebe9e2;--accent:#c96442;--hover:#f4f3ef;--bubble:#efede5}
-     *{box-sizing:border-box}body{margin:0;background:var(--ground);color:var(--ink);font:13px/1.45 "Geist",system-ui,sans-serif}
-     .app{width:1200px;height:720px;margin:0 auto;display:flex;border:1px solid var(--edge);border-radius:12px;overflow:hidden;background:var(--ground)}
-     .rail{width:56px;border-right:1px solid var(--edge);display:flex;flex-direction:column;align-items:center;padding:10px 0;gap:6px}
-     .rail .b{width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;color:var(--muted);cursor:pointer;font-size:13px;font-weight:600}
-     .rail .b:hover{background:var(--hover);color:var(--ink)}
-     .rail .b.on{background:var(--well);color:var(--ink)}
-     .rail .sep{width:24px;height:1px;background:var(--edge);margin:6px 0}
-     .rail .sp{width:34px;height:34px;border-radius:9px;background:var(--well);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--muted)}
-     .work{flex:1;display:flex;flex-direction:column;min-width:0}
-     .top{height:42px;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid var(--edge);background:var(--fill);font-size:12px;color:var(--faint)}
-     .tab{padding:0 10px;height:26px;display:flex;align-items:center;border-radius:7px;color:var(--muted)}
-     .tab.on{background:var(--well);color:var(--ink)}
-     .chat{flex:1;position:relative;display:flex;justify-content:center}
-     .feed{width:860px;padding:18px 0;display:flex;flex-direction:column;gap:18px}
-     .head{display:flex;align-items:center;gap:8px}
-     .name{font-size:12.5px;font-weight:600;color:#d6825a}
-     .time{font-size:11px;color:var(--faint)}
-     .grow{flex:1}
-     .link{font-size:11.5px;color:var(--muted);height:22px;padding:0 7px;display:flex;align-items:center;border-radius:6px;background:none;border:0;cursor:pointer;font-family:inherit}
-     .link:hover{background:var(--hover);color:var(--ink)}
-     .body{font-size:14px;line-height:21px;max-width:720px;margin-top:4px}
-     .mine{align-self:flex-end;max-width:600px;background:var(--bubble);border:1px solid #dcd8cc;border-radius:12px;padding:9px 13px;font-size:14px;line-height:21px}
-     .meta{display:flex;gap:4px;justify-content:flex-end;font-size:11px;color:var(--faint);margin-top:4px}
-     .meta b{font-weight:600;color:#d6825a}
-     .composer{position:absolute;left:0;right:0;bottom:14px;display:flex;justify-content:center}
-     .box{width:860px;border:1px solid var(--edge);background:var(--fill);border-radius:12px;padding:12px 14px;display:flex;align-items:center;gap:10px;color:var(--faint)}
-     .box .r{margin-left:auto;width:32px;height:32px;border-radius:10px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center}
-     .status{height:28px;border-top:1px solid var(--edge);display:flex;align-items:center;padding:0 12px;font-size:11px;color:var(--faint);background:var(--fill)}
-     </style>
-     <div class="app">
-       <div class="rail">
-         <div class="b on" title="Chat">Ch</div>
-         <div class="b" title="Terminals">Te</div>
-         <div class="b" title="Tasks">Ta</div>
-         <div class="b" title="Plans">Pl</div>
-         <div class="b" title="Knowledge">Kn</div>
-         <div class="b" title="Settings">Se</div>
-         <div class="sep"></div>
-         <div class="sp" title="bot-herdr">bh</div>
-         <div class="sp" title="scratch">sc</div>
-       </div>
-       <div class="work">
-         <div class="top"><span class="tab on">Claude</span><span class="tab">Codex</span><span class="tab">Fixtures</span><span class="grow"></span><span>bot-herdr</span></div>
-         <div class="chat">
-           <div class="feed">
-             <div>
-               <div class="head"><span class="name">Design</span><span class="time">09:41</span><span class="grow"></span><button class="link">Open terminal</button></div>
-               <div class="body">The rail gives the conversation the room it needs: 860px, two thirds of the window, and the pages stay one click away.</div>
-             </div>
-             <div class="mine">Long replies stop feeling cramped in the middle of a wide screen.</div>
-             <div class="meta">to <b>Orchestrator</b> · 09:47</div>
-           </div>
-           <div class="composer"><div class="box"><span>Write a message, run a command, or ask an agent</span><span class="r">↑</span></div></div>
-         </div>
-         <div class="status">bot-herdr · main · 2 agents working</div>
-       </div>
-     </div>
+    <style>
+    *{box-sizing:border-box}
+    html,body{margin:0}
+    body{width:1200px;height:825px;overflow:hidden;background:#262624;color:#faf9f5;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+    .top{height:44px;padding:0 16px;display:flex;align-items:center;border-bottom:1px solid #4a4a47}
+    .tabs{display:flex;gap:4px}
+    .tab{height:29px;padding:0 12px;display:flex;align-items:center;border-radius:8px;font-size:12px;color:#bbb9b2}
+    .tab.on{background:#30302e;color:#faf9f5}
+    .main{height:781px;display:flex;flex-direction:column;align-items:center}
+    .feed{width:660px;flex:1;display:flex;flex-direction:column;gap:22px;padding:16px 0 12px;justify-content:flex-end;overflow:hidden}
+    .me{align-self:flex-end;max-width:520px;background:#3a3a37;border:1px solid #51514d;border-radius:12px;padding:12px 16px;font-size:13.5px;line-height:20px}
+    .r{width:640px}
+    .meta{display:flex;align-items:center;gap:8px;height:18px;font-size:12px}
+    .name{font-weight:600}
+    .time{color:#abaaa4;font-size:11px}
+    .body{font-size:13.5px;line-height:20px}
+    .muted{color:#bbb9b2}
+    .expander{width:640px;margin-left:16px;border:1px solid #4a4a47;background:#222220;border-radius:10px;height:40px;display:flex;align-items:center;gap:8px;padding:0 12px;font-size:12px;color:#bbb9b2}
+    .expander b{font-weight:600;color:#faf9f5}
+    .avs{display:flex;gap:3px;margin-left:auto}
+    .av{width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:9.5px;font-weight:600;border:1px solid}
+    .chev{color:#abaaa4}
+    .line{width:660px;height:28px;display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:12px;color:#bbb9b2}
+    .line .who{color:#5b8def;font-weight:600}
+    .composer{width:660px;height:76px;background:#30302e;border:1px solid #4a4a47;border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;justify-content:space-between}
+    .ph{font-size:13.5px;color:#abaaa4}
+    .tools{display:flex;align-items:center;gap:8px;height:28px}
+    .tool{width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#bbb9b2}
+    .send{margin-left:auto;width:28px;height:28px;border-radius:50%;background:#e1987e;display:flex;align-items:center;justify-content:center;color:#141413;font-size:14px}
+    </style>
+    <div class="top">
+      <div class="tabs">
+        <div class="tab on">Chat</div><div class="tab">Terminals</div><div class="tab">Tasks</div><div class="tab">Plans</div><div class="tab">Knowledge</div><div class="tab">Settings</div>
+      </div>
+    </div>
+    <div class="main">
+      <div class="feed">
+        <div class="me">Add a presence strip so I can see who is working.</div>
+        <div class="r">
+          <div class="meta"><span class="name" style="color:#e1987e">Orchestrator</span><span class="time">14:22</span></div>
+          <div class="body">Done. Dev built it, Design checked the motion, QA tested the focus order. I read both reports first; step 2 is done.</div>
+        </div>
+        <div class="expander">
+          <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M3.5 2l3 3-3 3" fill="none" stroke="#abaaa4" stroke-width="1.5" stroke-linecap="round"/></svg><b>3 child reports</b><span>Dev, Design, QA</span>
+          <div class="avs">
+            <div class="av" style="background:rgba(91,141,239,.16);border-color:rgba(91,141,239,.45);color:#5b8def">D</div>
+            <div class="av" style="background:rgba(214,130,90,.16);border-color:rgba(214,130,90,.45);color:#d6825a">D</div>
+            <div class="av" style="background:rgba(63,168,119,.16);border-color:rgba(63,168,119,.45);color:#3fa877">Q</div>
+          </div>
+        </div>
+        <div class="r">
+          <div class="meta"><span class="name" style="color:#e1987e">Orchestrator</span><span class="time">14:18</span></div>
+          <div class="body muted">Starting QA on the focus order while Dev finishes. Reports stay folded unless you ask for them.</div>
+        </div>
+        <div class="r">
+          <div class="meta"><span class="name" style="color:#e1987e">Orchestrator</span><span class="time">14:12</span></div>
+          <div class="body muted">Task t-20261113-gq2: 3 steps, Dev and QA on it.</div>
+        </div>
+      </div>
+      <div class="line"><span class="who">Dev</span><span>· Editing src/chat.js</span></div>
+      <div class="composer">
+        <div class="ph">Write a message, run a command, or ask an agent</div>
+        <div class="tools"><div class="tool">＋</div><div class="tool">▤</div><div class="send">↑</div></div>
+      </div>
+    </div>
      ```
 
 ## Notes
 
-- **What "done" means for me**: every text token in `palette()` (and the two own-theme tokens `accentInk`/`bubble`) proves ≥4.5:1 against the surfaces it is drawn on — a test like `test/themes.test.mjs` that loops graphite/atom-one-dark/win98/our pair and asserts the pairs; and `pickFiles` either opens a dialog or says why in a toast.
-- Inline code chips cannot be fixed while `TextView.markdown` owns them (`gpui-kit.d.ts:20709`); if chips must match, replies need their own span renderer — that is a separate, larger change.
-- `theme()` for a theme file without `colors` (atom-one-dark) is a herdr derivation we cannot see from here; the floor must be enforced on the values `theme()` returns, not on the file.
-- The attach fix is technical, not a taste call: `-STA -NonInteractive`, a temp `.ps1` passed with `-File`, exit code and `stderr` surfaced in a toast, and a typed-path fallback in the attach pane if no dialog can be shown. If the person would rather never depend on an OS dialog, that becomes a third question (in-app file list).
-- `switch.js:47-56` draws with raw `t.chrome`/`t.border`; whatever answer question 1 gets, that bar should use the same token source as the rest.
-- Dead weight found: `edgeDark`, `scrim` (`look.js:33,195,216`), the orphan comment at `look.js:92`.
+**What the mod shows today (read this round, with anchors)**
+- The working line names no one: `working()` draws only the role's verb and motion (mods/bot-herdr/chat.js:953-1001), one agent at a time, rotated every 4s (mods/bot-herdr/working.js:122). With two Devs, or a Dev and a Design child, the user cannot tell who is where.
+- The activity text exists and is never drawn: `poll()` reads each headless agent's current tool call into `this.doing` (chat.js:337-351) and `workers()` returns it (chat.js:540-548); no element renders it.
+- Parentage exists and is used only for @-mentions: `children()` returns live child terminals with `parent` and `parentName` (mods/bot-herdr/composer.js:527-537), consumed only in `mentionContext()` (composer.js:582).
+- A child's turn is indistinguishable from a team reply: every headless agent's last message is written to the chat reply file (mods/bot-herdr/engine/lib/agent.mjs:304-307) and drawn as an ordinary reply (chat.js:822-859).
+- Replies can be lost: `poll()` loops over live agents only (chat.js:302-337), and each turn replaces one reply file per address (engine/lib/agent.mjs:51-53,307). Two turns between polls (2.5s, chat.js:35), or an agent killed or exited before the next poll, leaves nothing in the feed — the "report never arrived" feeling. Needs an engine change (append per turn or keep a per-turn log) plus a UI that reads the whole replies folder.
+- A pending question is invisible off the pages with a composer: `OpenQuestions` is polled per page (chat.js:505; mods/bot-herdr/work.js:458); the page switch can draw a tab count (mods/bot-herdr/switch.js:59) but `PAGES` items pass none (switch.js:230). On Terminals, where users watch agents, there is no signal at all.
+- The Tasks page hides the evidence: board posts exist (`bh board post/read`, engine/lib/tasks.mjs:145-152) and every brief tells agents to use them (engine/lib/team.mjs:90); reports land in `.bot-herdr/tasks/<id>/reports/<name>.md` (tasks.mjs:201). `taskBody()` draws actions, title, facts, progress, steps, full plan and comments only (work.js:932-948) — no board, no report links.
+- "Resume" claims what it did not do: work.js:972-976 toasts `Resumed <title>` after only `sendFromChat(...)`; the status changes only when the Orchestrator acts. The chat widget's Pause swallows failures (`catch {}`, chat.js:385-395).
+- Plans: an open question says "Waiting for your answer in the chat" (work.js:1599) although the plan box below answers it; seat pills are static (work.js:1693-1729); "Reading the code…" is a local timer (work.js:1519-1525), not a signal.
+- Accessibility: reply actions are hover-only (`opacity(show ? 1 : 0)`, chat.js:822-859,234-247) but stay in the tab order, so keyboard focus lands on invisible buttons.
+- Cost: nothing captures usage — runner.mjs parses none, the activity file is `{line, at}` (engine/lib/agent.mjs:228), sessions hold `{harness, session, root, updated}`. A spend number would be invented. Elapsed time is available now (waits.at, activity timestamps, task `workedMs`). Cost needs an engine change first (DEV/orchestrator), then per-agent and per-task spend in the strip and task facts.
+- Not missing: the question card answers in one go, the task page already shows each step's owner and time, and plan questions/answers with mockups render well.
+
+**Candidates, in the order I would build them**
+1. Presence strip (question 1) — rows from `workers()` + `children()`, activity from `doing`, elapsed from the wait; needs-you row is the question entry point; fixed height so the bottom-anchored feed (chat.js:585-607) does not jump.
+2. Child voice (question 2) — parentage from `children()`; always-available fallback is "is this address the lead?".
+3. Question visibility — one layout-level `OpenQuestions` (or its stamp in shared state), a count on the Chat/Plans tabs (switch.js:59 already draws `count`) and a line in the strip. Keep the single answer path (`bh answer`).
+4. Reply scan (engine + UI) — read the replies folder instead of only live agents; one entry per turn. Without it, 1-3 still show a feed that can lie about what agents said.
+5. Task evidence — a Board section (kind, from, age; open comments first) and per-step report links opened in `viewer.js`; no new backend.
+6. Delivery state on your own message — "sent 14:02 · working 4m · replied 14:09" or "no status yet" from `waits`/`outcome` (chat.js:292-300; mods/bot-herdr/feed.js:119). Never say "delivered" without evidence.
+7. Plan rail states and copy — working / waiting / done per seat (panel members run as `<seat>-panel`), replace the fake "Reading the code…", say "Answer below".
+8. Copy/state fixes — "Asked the Orchestrator to resume" plus a pending mark until the status changes; surface a failed Pause.
+9. Keyboard — keep reply actions visible (quiet tone) or reveal them on focus, not hover only.
+10. Cost — engine captures per-turn usage first; then spend beside elapsed time, per agent and per task, with a daily total.
+
+**Constraints and risks**
+- The chat feed is bottom-anchored with measured heights and clamped scroll (chat.js:585-607); a strip whose height changes with the agent count reflows it on every poll. Give it a fixed max height and fold it when nobody works.
+- Exact parentage needs the engine or the roster name: `children()` only knows live children, so a child that exited before its reply was read loses its parent. Tag by lead/non-lead if the parent is unknown; never guess silently.
+- Board/report UI must reuse `openFile` (viewer.js) and the project paths already resolved in `Work`; do not add another file reader.
+- Questions can be answered on several pages; one `OpenQuestions` path only (page composers must keep `hooks.answered` wired).
+- No new design tokens: chat column 660, 28px controls, 34px presence row, radii 12/10/8, agent hues from `look.js agentHue`; keep the ONE `actionButton` (28px) rule.
+- Motion stays native and stops when idle; the strip must not add polling loops beyond the existing 2.5s/5s timers.
+
+**Done for my seat**
+- The chat answers "who is working, on what, since when, and who needs me" without opening Terminals.
+- Every reply an agent writes reaches the feed once, even if the agent exits right after.
+- Children are visibly internal and filterable; the team's summary and a child's report never read the same.
+- A pending question is visible on every page (tab count plus a strip row or notice).
+- The task page links the raw evidence (board posts, per-step reports) under the steps.
+- No action claims a state it did not set; every action is reachable and visible from the keyboard.

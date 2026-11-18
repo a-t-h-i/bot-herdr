@@ -2,13 +2,13 @@
   "id": "t-20261112-5hcb",
   "title": "Plans composer matches chat",
   "request": "the plans page composer needs to match the chat composer exactly. Also it should stick to the bottom. Remove the bottom padding below the composer",
-  "status": "active",
+  "status": "done",
   "track": "fast",
   "plan": null,
   "by": "t3p",
   "created": "2026-11-12T14:06:52.504Z",
-  "updated": "2026-11-12T15:19:15.245Z",
-  "archived": false,
+  "updated": "2026-11-13T06:49:26.401Z",
+  "archived": true,
   "steps": [
     {
       "n": 1,

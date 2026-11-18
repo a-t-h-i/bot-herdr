@@ -1,79 +1,73 @@
+# dev-panel — engine: where handoffs, reports, the board, knowledge, resume, cost and parallel work lose time
+
 ## Status
+
 OPEN
 
 ## Questions
-1. Part 3 ("review the engine, prompts, cache") produced findings, not fixes. Should this plan also change code?
-   - Findings only — the plan records them (this report plus the others) and the person picks work later
-   - Fix the three measured wins — role-text dedupe (brief 19–26 KB → ~12 KB), classifier prompt caps (`qa-risk` diff 60 000 chars, `pickScripts` 24 questions), duplicated engine helpers merged
-   - All of it, including usage capture — the above plus reading `cache_read_input_tokens` out of the Claude stream so cache hit rate becomes a number we can tune against
-2. Which prompt cost should be attacked first?
-   - Per-agent brief size — every new agent pays 10–26 KB (~2.6–6.6k tokens) before its first word; the duplication is inside the role files
-   - Per-message model calls — `bh classify route` runs a classifier for every send (node spawn + model call, 70 s timeout), and `qa-risk` can send ~17.5k tokens of raw diff per assessment
-   - Cache visibility — nothing measures cache hits today, so any "improvement" is unverifiable; capture usage first, tune after
+
+1. Should a child's report be recorded on the task before the Orchestrator acts on it?
+   - Board entry + inbox — the report writes its file and posts a `done` board entry carrying its one-line summary; `bh inbox` lists what is still unread, so nothing depends on a message arriving at the right moment.
+   - Report gates the step — a step whose child left no report cannot be marked done, and the task cannot close while a report is unread.
+   - Keep messages, add listing — reports stay a file plus `hc send`; add `bh reports <task>` listing the files with their summaries.
+2. How should two children on one task be kept off each other's files?
+   - Claims on the board — `bh spawn --files` records what a child may touch, and a second overlapping claim is refused.
+   - Per-child worktree — each child gets its own checkout and branch; merging back is the Orchestrator's step.
+   - Advisory only — keep today's prose rule and spend the work elsewhere.
 
 ## Notes
 
-### 1. Theme data (item 1): what the engine/host side owes the contrast fix
-QA owns the palette fix; these are the contract facts it has to be built on.
+### Facts about the engine as it is now (all read, some run)
 
-- The host contract is `theme()` (`herdr.d.ts:270-281`, docs in the binary at `~/.config/herdr-app/AGENTS.md` text): it returns **every colour by name** — `background, canvas, chrome, surface, popover, raised, hover, selected, border, input, foreground, muted, dim, accent, accent_foreground, solid, solid_foreground, selection, working, blocked, done, idle, unknown, ansi0..15` — already resolved light/dark and already resolving a theme file's `colors` block **over** its top-level `background/foreground` (that is why the `win98` fixture in `test/palette.test.mjs:7` legitimately uses `foreground: "#000000"`, the `colors.foreground`, not the file's top-level `#c0c0c0`).
-- The mod uses a subset and ignores the pairs the host guarantees: `mods/bot-herdr/look.js:180-216` reads `muted`/`dim` raw (`:198-199`), derives them by mixing when absent, and takes `accentInk` from `accent_foreground ?? base.accentInk` (`:204`). It never reads `solid`/`solid_foreground`, which the host documents as "a primary button" — the exact pair for a filled send button with a label on it.
-- Measured with the repo's own `contrastOf`, tokens views actually use:
-  | theme | pair | ratio |
-  |---|---|---|
-  | atom-one-dark (file, no `colors` block) | `muted` on `fill` (derived, 3.93) / `faint` (2.91) | fail |
-  | atom-one-dark | `accentInk` on `accent` (#fff on our orange 3.12) | fail |
-  | win98 (file) | `faint` #808080 on `raised` #dfdfdf | 2.96 fail |
-  | bot-herdr-dark (own) | `faint` #73726c on `raised`; `accentInk` on `#d97757` | 2.39 / 3.12 fail |
-  | bot-herdr-light (own) | `faint` #a6a39a on `raised`; `accentInk` on `#c96442` | 2.17 / 3.90 fail |
-- A theme file with no `colors` block (atom-one-dark) makes `palette()` fall back to **our** `DARK.fill`/accent while keeping the theme's ink — a mixed palette. Any fix must handle "theme has ink but no surfaces", not just "theme has everything".
-- The built-in presets (graphite/ink/moss/paper) are compiled into `herdr-app.exe`; `~/.config/herdr-app/themes/` holds only 4 files. A snapshot fixture generated once from `themes()` (QA's proposal) is the only way to cover them offline. `palette.test.mjs` already ships a hand-copied graphite fixture, so that pattern exists.
+- **A resumed agent never gets a fresh brief.** `agent.mjs:262` builds and writes the brief only when there is no session yet (`if (!state.session && !acp.current) makeBrief()`), and the same text is used for every later turn as `""` because `makeBrief` (`agent.mjs:245-249`) is the only setter. Codex sends the brief only in the first prompt (`runner.mjs:303`), ACP only on the first `session/prompt` (`runner.mjs:539`). The only refresh is `/team` (`agent.mjs:342-344`), which re-sends the whole brief *and* appends an ack turn ("Reply with one line once you have read it"), so freshness costs a full knowledge file (up to 8000 chars, `knowledge.mjs:109-113`) plus a round trip.
+- **`bh spawn` drops fields between the first message and the child's own brief.** `team.mjs:162` (`agentArgv`) has no `plan`, and `bh.mjs:468` passes none; `runAgent` (`agent.mjs:199`) has no plan parameter either. The non-headless branch builds the persistent brief as `team.brief(agent, { mode, root })` (`bh.mjs:473`) — no task, plan, parent or name. Consequence, verified live: `bh brief dev --mode panel` prints no `The plan is …` line and the report section says "the report file your first message names" (`team.mjs:57`); only the ephemeral spawn text carries the plan and the report path (`bh.mjs:455-461`). The durable artifact is thinner than the throwaway one.
+- **Reports have no home in the task.** `reportSection` (`team.mjs:56-63`) gives a path and an `hc send` line; `tasks.mjs:201` exports `reportsDir` and nothing calls it (dead export, grep across `mods/`); `taskText` (`tasks.mjs:224`) prints the board but never lists reports; nothing tracks which reports were read. Ordering exists only through the message queue (`agent.mjs:368`), which is exactly the "report arrives after the check" race; `HANDLED`/`toChat` (`agent.mjs:37,44-48`) only hides the late arrival from the chat, it does not remove it.
+- **Board and `bh task show` are unbounded.** `bh.mjs:174` loads the whole board for both output modes, and `taskText` inlines every entry (`tasks.mjs:224`); `bh board read --since N` exists (`tasks.mjs:152`, `bh.mjs:232`) but the brief never mentions it (`team.mjs:78`) and a child is never told its own cursor. Every post therefore raises the token cost of every later `bh task show`.
+- **Actor identity is thrown away.** `bh board post` records `from: flags.from ?? null` (`bh.mjs:227`) and `bh task step` records `agent: flags.agent` with no default (`bh.mjs:186`), although the agent terminal exports `BH_AGENT` (`agent.mjs:428`) and `myAddress()` already exists (`core.mjs:183`). A smaller model that forgets `--from` leaves anonymous entries, and `worked()` then has nobody to attribute time to.
+- **Nothing measures cost or tokens.** grep over the engine finds no usage/token/cost handling. The Claude `result` event's `usage`/`total_cost_usd` and Codex's `turn.completed` usage are discarded in `runner.mjs` (`claudeTurn`, `codexTurn`), so `bh classify effort` and `--effort auto` (`bh.mjs:441-447`) route blind. Step time is only closed by `bh task step … done` (`tasks.mjs:90-105`); `bh spawn --step` marks a step started (`bh.mjs:482`) and no path closes it when the child reports, so `worked()` (`tasks.mjs:141-143`) counts an abandoned active step as running until the task ends.
+- **Parallel children share one write surface and one file with no locking.** All children of a task run in one worktree (`workspace.mjs` `taskCwd`), and the "two children never edit the same files" rule is prose only (`team.mjs:147`, `brief.js:50`). Two concurrent `bh task step` / `bh board post` calls race: `task.json` is read-modify-write whole (`bh.mjs:180-189`, `tasks.mjs:saveTask`) and `post` computes `n: board(…).length + 1` then appends (`tasks.mjs:147`, `core.mjs:94-97`) — two simultaneous posts can take the same `n` and one step update is lost. `writeJson` is atomic per write (`core.mjs:72-77`) but there is no lock across the read.
+- **`bh check` for a child is scoped to the whole task.** `bh.mjs:360` uses `flags.base ?? currentTask().base`, the commit taken at task creation, so inside a shared worktree a child's `bh check` includes its siblings' uncommitted edits; a child cannot scope its own verification. [INFERENCE until a two-child run is timed]
+- **Every spawn is a cold start.** `bh.mjs:435` appends a random suffix when `--name` is omitted, and the session file is keyed by name+terminal address (`agent.mjs:220-221`), so each child re-explores the repo instead of reusing the seat's earlier context. `resumeState` (`agent.mjs:186-192`) correctly resets on project change; it does not help here.
+- **`hc` calls have no timeout.** `team.mjs:206-211` `spawnSync("hc", …)` without `timeout`, and a harness turn has no wall-clock watchdog, so one hung `hc` or a wedged child stalls the Orchestrator's whole turn.
+- **Knowledge ingestion is manual and lossy.** `knowledge.mjs:1-6` states agents propose and the Orchestrator records; the report format already reserves `## Knowledge Proposals` (`team.mjs:58`) and nothing consumes it (grep: no reader). `forBrief` cuts at 8000 chars mid-file (`knowledge.mjs:109-113`), so `## Decisions` and `## History` can be invisible to an agent whose `Facts` are long; entries carry no timestamp or source path, and `search` matches `- ` bullets only (`knowledge.mjs:98-108`).
+- **Children talk in the chat as loudly as the Orchestrator.** `agent.mjs:304-307` writes every agent's answer to the chat; `toChat` (`agent.mjs:44-48`) suppresses only a turn that is exactly `HANDLED` or a report with no words.
 
-### 2. "Attach document…" (item 2): traced, and where it can fail silently
-**No host API exists for picking files.** The whole `herdr` surface is in `herdr.d.ts:4-43` and in the binary's export table (`fileDialogs`-style symbols: `...feedbackPickImages knownAgents pickFolder feedbackClearImages...`): `pickFolder` (folders, this machine) and frame-only `feedbackPickImages` (`herdr.d.ts:323-326`). There is no `pickFiles`. So `composer.js:521-543` hand-rolls it per platform: `osascript` on macOS, a PowerShell one-liner on Windows (`:529-532`), `zenity`/`kdialog` elsewhere.
+### Improvement candidates, by leverage
 
-What I verified on this machine (Windows 11 26200, PowerShell 5.1.26100, STA):
-- The exact argv from `composer.js:531` spawned with `node:child_process` spawns, blocks, and creates a **visible** top-level dialog (`class #32770`, title "Open") — checked by enumerating that PID's windows with `EnumWindows`.
-- Same result when the parent hides the console (`Start-Process -WindowStyle Hidden`): the dialog still appears visible. So "no console ⇒ no dialog" is **not** the cause, and WinForms/STA/assembly-load are fine (`Add-Type -AssemblyName System.Windows.Forms` succeeds, `[DialogResult]::OK -eq 'OK'` is true).
-- `exec` is a direct process spawn, not a shell: the binary contains no command-line shell wrapper for local exec (only Rust std's `cmd.exe /c` batch strings). So `$d` is not being eaten by a shell; the quoting is not the bug.
-- What is left, and is not decidable from outside the app: the dialog is shown **without an owner window** (`$d.ShowDialog()`), so it can land behind herdr's focused window — indistinguishable from "nothing happened"; or the child gets a window station where `ShowDialog` returns immediately. Either way the code cannot tell you: `composer.js:533-540` is
-  `const r = await exec(...); if (r.code === 0) this.addFiles(...); return;` — **a non-zero exit, an exception-and-cancel, and an empty selection all end in silence**. Only a spawn *rejection* reaches `this.say("No file picker here…")`.
-- Minimum bar for whatever is built: it must surface (a) picker failed, (b) picker cancelled, (c) file chosen. Today all three look identical. One `bh`-side or mod-side log line inside that block would have answered the question in one user click.
-- Operational: the app runs the **installed copy** (`~/.config/herdr-app/mods/bot-herdr`, identical files but distinct inodes, same mtimes). Verifying any fix here means `node install.mjs` (or `--switch`) before clicking the menu — `herdr-app check mods/bot-herdr` only type-loads it.
-- Panel seats already asked the shape question (QA Q2: repair the dialog vs in-app browser vs folders only). From the engine seat: if the answer is "in-app browser", it needs an engine/`bh` listing endpoint that works for a space's `machine` too, because the composer today just puts raw paths into the message (`route.js:140,237`), and `pickFolder` is documented as this-machine only.
+| # | Candidate | Where it lands | Buys |
+|---|---|---|---|
+| A | **Brief delta instead of `/team`**: keep `state.brief = { knowledge: sha1, boardN, comments: openIds, steps }`; each turn recompute cheaply and append `## Brief update` only with what changed (changed knowledge lines, board `n > boardN`, new open comments, changed step states). No change → zero extra tokens. Add `--plan` to `agentArgv`/`runAgent`/`bh agent`, and persist spawn context so `/team` reproduces the whole brief. | `agent.mjs:199,245-249,262,342`; `team.mjs:162`; `bh.mjs:611` | Kills the "brief only on /team" pain without a full re-brief per turn; keeps `headless.test.mjs:231-238` ("second prompt has no brief") true when nothing changed. |
+| B | **`bh report` / `bh inbox`**: child writes the report file *and* posts a `done` board entry `{from, summary, file, step}`; parent reads unread ones with `bh inbox` (cursor per agent in DATA), and `bh task show` lists reports with summaries. Auto-close the step the report names. | new `bh` case; `tasks.mjs:145-152,201`; `team.mjs:56-63`; `bh.mjs:454-461,482` | Reports get a stable place and order in the task; the Orchestrator's check reads task state, not an inbox race. |
+| C | **Bounded board**: `bh task show` prints counts by kind, the last 5 entries and `--board` for all; brief tells each child its cursor and `bh board read <task> --since <n>`. | `bh.mjs:174`; `tasks.mjs:224`; `team.mjs:78` | Stops the quadratic token growth of every `task show`. |
+| D | **Default the actor**: `from`/`agent` default to `BH_AGENT`, then `myAddress()`. | `bh.mjs:186,227`; `core.mjs:183` | Attribution survives forgetful models; enables worked-time and claim checks. |
+| E | **Claim + spawn base**: `bh spawn --files "a.ts,b.ts"` posts a `contract` entry with the files and refuses an overlap with an active claim; record spawn HEAD and tell the child `bh check --base <sha>`. | `bh.mjs:433-485`; `tasks.mjs:145`; `team.mjs:147` | Turns the file-ownership prose into an enforced rule and makes a child's verification its own. |
+| F | **Concurrency safety**: per-task lock file (or one `task.json.lock` around read-modify-write) and a monotonic board id (a `.seq` file or fs-based max+retry). | `tasks.mjs:145-153`; `bh.mjs:180-189` | Two children posting/stepping stop losing writes and board numbers. |
+| G | **Usage capture**: emit `{kind:"usage", tokens, costUsd, ms}` from Claude (`result.usage`), Codex (`turn.completed`), best-effort elsewhere; append `DATA/usage/<key>.jsonl`; `bh usage [--task] [--since]` per agent/model/effort; put tokens+minutes in the report. | `runner.mjs` (`claudeTurn`, `codexTurn`, `oneShot`), `agent.mjs:262-300`; new `bh` case | Effort routing gets a feedback signal; the user sees what a task cost. |
+| H | **Seat reuse**: default spawn name to the seat and, when that terminal exists and is idle, `hc send` the new brief instead of `hc run`; `--reuse`/`--fresh` to choose. | `bh.mjs:433-470`; `agent.mjs:220-221` | Removes the cold re-explore per round and makes `hc read <name>`/steering predictable. |
+| I | **Timeouts and watchdogs**: `timeout` on `team.hc`; cancel a turn after N minutes with no event, with the error surfaced like any other. | `team.mjs:206-211`; `runner.mjs oneShot`/`Acp.turn`; `agent.mjs:runTurn` | One wedged child stops stalling the Orchestrator silently. |
+| J | **Knowledge intake and budget**: `bh knowledge inbox` listing `## Knowledge Proposals` gathered from task reports, `bh knowledge add --from <report>`; section-aware brief budget (Facts/Standards/Decisions, History last) instead of a mid-file byte cut. | `knowledge.mjs:109-113`; `bh.mjs:305-330`; `team.mjs:117` | Proposals stop dying in report files; agents stop losing whole sections to truncation. |
+| K | **Children quieter in chat**: a child's report summary goes to the chat; its other turns go to the task board (or a setting: children "summaries only"). | `agent.mjs:304-307,44-48` | Fewer late/duplicate child messages competing with the Orchestrator's reply. |
 
-### 3. Engine review: size of what gets sent, and what it costs
-Measured with the CLI itself (all reproducible): `node …/bh.mjs brief <role> --mode <mode> | wc -c`, 2026-11-11.
+### What the plan must respect
 
-| role | role file | brief (child) | brief (panel) | brief (review) |
-|---|---|---|---|---|
-| design | 10 665 B | 26 375 | 22 418 | 24 034 |
-| qa | 8 719 B | 23 688 | 19 742 | 21 358 |
-| orchestrator (lead) | 11 115 B | 20 621 | — | — |
-| dev | 4 003 B | 19 181 | 15 219 | 16 835 |
-| research | 1 881 B | 11 221 | 13 116 | — |
-| scout | 1 595 B | 10 695 | — | — |
+- `headless.test.mjs:231-238` and `:262-267` pin today's contract: the brief in the first prompt, no brief later, the child's report address in its own brief file. A and B must keep those assertions true (A: empty delta adds nothing; B: report path stays in the brief, now with task and parent filled).
+- Adding `--plan` to `agentArgv` changes the managed template `command:` lines; `sync` only rewrites templates carrying `managed: bot-herdr` (`team.mjs:173-183`), so user-written templates stay safe, and `test/headless.test.mjs`, `test/engine.test.mjs:123-144` cover the brief shape.
+- Board format is append-only JSONL read by `board()` (`tasks.mjs:152`); new `done` entries must remain plain `{n, at, kind, from, to, text}` (or additive fields), never a new file, so existing boards keep reading.
+- Anything that runs `hc` must keep the `BH_HC` test stand-in working (`team.mjs:207-209`) and never go through a shell (a brief is one argument).
+- Usage capture must be best-effort: ACP has no stable usage field, and a missing number must never fail a turn.
+- Candidate F touches the only shared mutable store; it needs a test with two concurrent writers before anything else lands on top of it (E depends on it).
 
-So a spawned worker pays ~19 KB (≈4.8k tokens) and a Design child ~26 KB (≈6.6k) before its first token of work. Where it comes from (`engine/lib/team.mjs:61-136`): `global.md` (4.7 KB) **plus** the role file **plus** `worker.md` (5.9 KB) for every editing child, then tools, the report template, and up to 8 000 chars of knowledge (`knowledge.mjs:107-116`, files capped at 20 000 chars by `LIMIT:14`). A dev child therefore carries `Implementation` twice (`roles/dev.md:61`, `roles/worker.md:22`) and both `global.md` and `worker.md` restate rules/pace/handoff. Line-level duplication is zero (checked), so the fix is editorial merge, not dedupe by diff.
+### What "done" means for my seat
 
-Prompt-cache behaviour is already close to right, and that is worth protecting:
-- The brief is written **once per session** (`engine/lib/agent.mjs:207-209`, called only at `:224` when there is no session and at `:309` for `/team`) into `data/bot-herdr/briefs/<key>.md`, and passed as `--append-system-prompt-file` on the first Claude turn only (`runner.mjs:141-147`); codex and ACP harnesses get it inside the first prompt and never again (`runner.mjs:193`, `:429`); pi gets a system-prompt file (`:219`).
-- CLI-mode agents get the team brief once per terminal, gated by the `bot-herdr.briefed3` label (`composer.js:306,312`, `brief.js:77-84`).
-- Dynamic content (knowledge, the person's instructions for that agent) sits at the **end** of the brief (`team.mjs:131-136`), so the stable prefix is not disturbed — good; keep that ordering in any rewrite.
-- **But none of it is measurable**: `grep usage engine/lib/runner.mjs` is empty. `claudeTurn`'s `result` event carries `usage` (including `cache_read_input_tokens` / `cache_creation_input_tokens`) and it is dropped (`runner.mjs:169-176`). Without that, "better cache hit rate" cannot be claimed, only argued. This is the smallest first step and it is ~10 lines into `state`.
+- Each engine candidate merged has a unit test in `test/` that fails without the change and names the behaviour (delta contents, inbox cursor, claim refusal, concurrent step writes, usage totals, actor default).
+- One live two-agent run on a throwaway task proves the end-to-end path: child starts, posts `bh report`, parent's `bh inbox` shows it unread, `bh task show` lists the summary, `bh usage` shows tokens, and the second turn of a resumed agent contains only the changed lines.
+- No change to what the user sees in the chat or the task page unless the plan says so; `bh check` green.
 
-Classifier cost is where the token waste actually is:
-- `qaRiskRequest` (`classifier/qa-risk.mjs:313-331`) sends `diff: clip(input.diff, 60_000)` plus 10 questions. Measured: a 60 KB diff yields a **69 819-char prompt (≈17.5k tokens)**; the rubric itself is ~9.7k chars. It runs on a harness with a **60 s** timeout (`harness.mjs:86`, `index.mjs:135`) and 8 s on the API. The engine already computes a compact view of the same change (`diff_summary`, `fileKind`, `parseDiff`) — sending the summary plus hunks, not the raw diff, is the obvious cut.
-- `pickScripts` (`index.mjs:287-295`) asks **one noul per candidate script, up to 24**, on every step → 24 questions where a single `choice` (or top-3) answers the same thing.
-- Per message: `composer.js:246` spawns `bh classify route` (≈180 ms node start, measured `bh` invocations at 149–185 ms) plus a model call with a 70 s timeout, for every send.
-- The classifier prompt is rebuilt per call by `promptFor` (`harness.mjs:24-52`) with `JSON.stringify(state, null, 1)` — no reuse, no cache. Cheap per call; fine as long as the calls themselves are few (see above).
+## Improvement plan (dev seat, phased)
 
-Performance and dead weight in the engine (small, real):
-- `engine/lib/core.mjs` and `engine/scripts/lib/common.mjs` implement the same `sh`, `projectRoot`, `parseArgs` (~120 lines duplicated) — the scripts are plain `node file.mjs` processes in the same package, so they can import `../lib/core.mjs`.
-- `scripts/check_changed.mjs` and `scripts/run_changed_tests.mjs` overlap `bh check`, which already runs lint/typecheck/tests for what changed (`bh.mjs:47`); `diff_summary` already reports the tests that cover each file, so `find_tests_for` is mostly redundant for agents that use `diff_summary`.
-- `bh` cold start 149–185 ms per call; briefs tell agents to call it constantly, so it is worth keeping module loading lazy in `bh.mjs` (it already dynamic-imports `qa-risk.mjs` at `:481`).
-- No unused exports found in `engine/lib` or `engine/classifier` (scanned every `.mjs` in `mods/` and `test/`); the engine's dead weight is duplication, not orphans.
-- `qa-risk.mjs` is written in a different (dense, 4-space) style from the rest of the engine — if it was generated, the source should be in the repo or it should be reformatted; if hand-written, it is an outlier to merge.
+1. **Correctness first (small, unblocks the rest).** D actor default → F store lock + monotonic board id → I timeouts. F before E.
+2. **Handoff integrity.** B `bh report`/`bh inbox` + step auto-close; A plan/task/parent carried into the brief and into a per-turn delta; C bounded board with a cursor in the brief. This is the set that fixes both "report arrives after the check" and "brief only on /team".
+3. **Parallel and cost.** E file claims + spawn base for `bh check`; G usage capture and `bh usage`; H seat reuse.
+4. **Knowledge.** J proposals inbox and section-aware brief budget; K chat quieting for children (a setting, because it changes what the user sees).
 
-### Done, from my seat
-Whatever the plan builds must be verifiable without the OS dialog and without a human click: a pure `pickerCommand(platform)` / `parsePickerOutput(stdout)` pair with tests (QA proposes the same), a visible outcome for failed/cancelled picks, contrast checked in one parameterised test over a committed theme snapshot, and — if part 3 is implemented — at least one number (usage/cache tokens, or prompt size) captured where a reviewer can read it. Anything installed must be re-installed with `node install.mjs` before it is judged working.
+Each phase is independently shippable and leaves `bh check` green; 1 and 2 together carry most of the time saved.

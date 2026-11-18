@@ -2,12 +2,12 @@
 // that needs you or finished, a terminal that failed, anything a mod posts with notify(). While
 // the Chat page shows, the notification is handed to the composer, and rises out of its top
 // edge like every other toast there; this copy closes at once. On another page it shows here,
-// in herdr's toast corner, drawn the same way: its mark in its tone, the words, its action.
+// in herdr's toast corner, drawn the same way: its mark in its tone and the words; a click runs its action.
 
 import { div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { props, settings, setShared, closeOverlay, run } from "herdr";
-import { ICON, TYPE, LINE, SPACE, CONTROL, GLYPH, MOTION, SIZE, clickable } from "./look.js";
+import { ICON, TYPE, LINE, SPACE, GLYPH, MOTION, clickable } from "./look.js";
 import { colors } from "./theme.js";
 import { activePage } from "./pages.js";
 import { TOAST_KEY, noteText } from "./toasts.js";
@@ -83,11 +83,7 @@ export class Toast {
             .transition("opacity", this.out ? MOTION.toastTextOut : { ...MOTION.tool, delay: 120 })
             .text_color(c.ink)
             .child(svg(ICON(TOAST_ICONS[kind])).flex_none().size(GLYPH.lg).text_color(toneOf(c, kind)))
-            .child(div().flex_1().min_w(0).max_h(LINE.md * 3).overflow_hidden().text_size(TYPE.md).line_height(`${LINE.md}px`).child(noteText(p)))
-            .when(Boolean(action), (el) => el.child(
-              div().flex_none().h(CONTROL).px(SPACE[3]).flex().items_center().rounded(SIZE.nested).border_1().border_color(c.edge)
-                .text_size(TYPE.sm).font_medium().hover((s) => s.bg(c.hover)).child("Show"),
-            )),
+            .child(div().flex_1().min_w(0).max_h(LINE.md * 3).overflow_hidden().text_size(TYPE.md).line_height(`${LINE.md}px`).child(noteText(p))),
         ),
       c,
       "bh-toast-hit",
