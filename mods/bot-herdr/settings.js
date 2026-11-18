@@ -60,6 +60,17 @@ const remember = (id) => {
 const MODEL_CACHE = new Map();
 const NO_MODELS = "This harness could not be asked for its models; type a model id.";
 
+/** What `bh tools` said, per harness, for this session; TOOLS_ASKING holds the ones still running. */
+const TOOLS_CACHE = new Map();
+const TOOLS_ASKING = new Set();
+const NO_TOOLS = "Couldn't ask which skills and MCP servers are installed.";
+
+/** The skills and MCP servers a harness has installed, or the shape of a failure. */
+async function fetchTools(harness, refresh) {
+  const got = await bhJson(["tools", harness, ...(refresh ? ["--refresh"] : [])], { timeout: 60000 });
+  return got ?? { harness, supported: false, skills: [], mcp: [], error: NO_TOOLS };
+}
+
 const FIELDS = [
   { key: "name", placeholder: "Name" },
   { key: "does", placeholder: "One line: what this agent is for (the Orchestrator reads it)" },
@@ -916,8 +927,46 @@ export class Settings {
         .child(v_flex().gap(SPACE[2]).child(this.label(c, "What it does")).child(this.field(c, inputs.does))))
       .child(v_flex().gap(SPACE[2]).child(this.label(c, "Arguments")).child(this.field(c, inputs.args)))
       .child(v_flex().gap(SPACE[2]).child(this.label(c, "Instructions")).child(this.textarea(c, inputs.instructions)))
+      .child(this.toolsMore(c, a))
       .child(div().text_size(TYPE.xs).text_color(c.faint).child(argvOf(a, this.known).join(" ")))
       .when(custom, (el) => el.child(h_flex().child(this.removeAgent(c, a))));
+  }
+
+  /** Asks `bh tools` for a harness once per session (again on Refresh); the sheet redraws on the answer. */
+  loadTools(harness, cx, refresh = false) {
+    if (TOOLS_ASKING.has(harness) || (!refresh && TOOLS_CACHE.has(harness))) return;
+    TOOLS_ASKING.add(harness);
+    cx.spawn(async (cx) => {
+      TOOLS_CACHE.set(harness, await fetchTools(harness, refresh));
+      TOOLS_ASKING.delete(harness);
+      cx.notify();
+    });
+  }
+
+  /** Skills and MCP servers: a chip per installed name, and Refresh beside the Skills label. */
+  toolsMore(c, a) {
+    const got = TOOLS_CACHE.get(a.harness);
+    const note = (text) => div().text_size(TYPE.xs).text_color(c.muted).child(text);
+    const refresh = actionButton(c, "bh-tools-refresh", null, (_e, cx) => this.loadTools(a.harness, cx, true), { icon: "refresh-cw", tone: "quiet" });
+    const head = v_flex().gap(SPACE[2]).child(h_flex().items_center().gap(SPACE[2]).child(div().flex_1().child(this.label(c, "Skills"))).child(refresh));
+    if (!got || TOOLS_ASKING.has(a.harness)) return head.child(note("Looking for installed skills and MCP servers…"));
+    if (got.error) return head.child(note(got.error));
+    if (!got.supported) return head.child(note(`${this.harnessName(a.harness)} isn't supported yet: Claude Code, Codex and OpenCode are.`));
+    return v_flex().gap(SPACE[4])
+      .child(head.child(this.toolChips(c, a, "skills", got.skills)))
+      .child(v_flex().gap(SPACE[2]).child(this.label(c, "MCP servers")).child(this.toolChips(c, a, "mcp", got.mcp)));
+  }
+
+  /** One group's note and chips; none ticked means all of them, and a ticked name no longer installed still shows. */
+  toolChips(c, a, kind, items) {
+    const ticked = a[kind] ?? [];
+    const names = [...new Set([...(items ?? []).map((t) => t.name), ...ticked])];
+    const toggle = (name, cx) => this.change(a.id, { [kind]: ticked.includes(name) ? ticked.filter((n) => n !== name) : [...ticked, name] }, cx);
+    return v_flex().gap(SPACE[2])
+      .child(div().text_size(TYPE.xs).text_color(c.muted).child(ticked.length ? "Only the ticked ones." : "None ticked: it can use all of them."))
+      .when(!names.length, (el) => el.child(div().text_size(TYPE.sm).text_color(c.muted).child("None installed.")))
+      .child(h_flex().flex_wrap().gap(SPACE[2]).children(names.map((name) =>
+        this.chip(c, `bh-${kind}-${name}`, name, ticked.includes(name), (_e, cx) => toggle(name, cx)))));
   }
 
   /** A custom agent's Remove: the entry leaves the roster and the card closes with it. */
@@ -1084,6 +1133,9 @@ export class MoreSheet {
     this.p = given ?? props() ?? {};
     this.handle = cx.focus_handle();
     this.handle.focus();
+    // An agent's sheet lists its harness's skills and MCP servers: ask for them as it opens.
+    const agent = this.p.kind === "agent" ? this.page()?.list().find((a) => a.id === this.p.key) : null;
+    if (agent) this.page().loadTools(agent.harness, cx);
   }
 
   /** The live page this dialog belongs to, or undefined once it is gone. */

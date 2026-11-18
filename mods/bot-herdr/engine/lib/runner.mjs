@@ -21,7 +21,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { HEADLESS, argvOf, effortsOf, headless } from "../../roster.js";
+import { HEADLESS, argvOf, effortsOf, headless, limitArgs } from "../../roster.js";
 import { BH, DATA, ensureDir } from "./core.mjs";
 
 export { HEADLESS, headless };
@@ -321,7 +321,7 @@ function codexTurn({ agent, known, state, brief, prompt, cwd, on, access, idleMs
   const argv = [
     ...run, "exec", "--json", "--skip-git-repo-check",
     "-s", access === "full" ? "danger-full-access" : "workspace-write", "-c", "approval_policy=never",
-    ...(agent.model ? ["-m", agent.model] : []), ...effort, ...extra(agent),
+    ...(agent.model ? ["-m", agent.model] : []), ...effort, ...extra(agent), ...limitArgs(agent),
     ...(state.session ? ["resume", state.session] : []), "-",
   ];
   const text = state.session ? prompt : `${brief}\n\n${prompt}`;

@@ -112,6 +112,9 @@ export function migrateArgs(a) {
   return { ...a, instructions, args: "" };
 }
 
+/** A list of names: trimmed, non-empty and each once. */
+const names = (list) => [...new Set((Array.isArray(list) ? list : []).map((x) => String(x ?? "").trim()).filter(Boolean))];
+
 const clean = (a, i, fallback) => migrateArgs({
   id: String(a.id ?? `a${i}`),
   role: String(a.role ?? "custom"),
@@ -123,6 +126,9 @@ const clean = (a, i, fallback) => migrateArgs({
   instructions: String(a.instructions ?? "").trim(),
   does: String(a.does ?? "").trim(),
   lead: Boolean(a.lead),
+  // The skills and MCP servers it may use; empty = whatever its harness has installed.
+  skills: names(a.skills),
+  mcp: names(a.mcp),
 });
 
 /** A name no one else has: when it is taken, " 2", " 3"… (the first free one). */
@@ -158,7 +164,7 @@ export function roster(stored, known = []) {
   const stock = ROLES.map((r) => {
     // A roster from before the roles: its lead is the Orchestrator.
     const saved = take((a) => a.role === r.role) ?? (r.role === "orchestrator" ? take((a) => a.role === "custom" && (a.id === "orchestrator" || a.lead)) : null);
-    return { ...(saved ?? { id: r.role, harness: fallback, model: "", effort: "", args: "", instructions: "" }), role: r.role, name: r.name, lead: r.role === "orchestrator" };
+    return { ...(saved ?? { id: r.role, harness: fallback, model: "", effort: "", args: "", instructions: "", skills: [], mcp: [] }), role: r.role, name: r.name, lead: r.role === "orchestrator" };
   });
   // The six roles first: the user's own agents follow them.
   return [...stock, ...ownAgents(list, used)];
@@ -180,8 +186,31 @@ export function argvOf(agent, known = [], over = {}) {
     ...base,
     ...(model ? h.model(model) : []),
     ...(effort && h.effort && effortsOf(agent.harness, model).includes(effort) ? h.effort(effort) : []),
+    ...limitArgs(agent),
     ...(agent.args ? agent.args.split(/\s+/).filter(Boolean) : []),
   ];
+}
+
+/** Installed names the agent may not use: none when it ticked nothing (no restriction). */
+const unticked = (picked, installed) => (picked?.length ? (installed ?? []).filter((n) => !picked.includes(n)) : []);
+
+/**
+ * The flags that keep an agent to the skills and MCP servers it ticked, by denying the rest of
+ * what its harness has installed (`agent.installed`, which the engine adds from `bh tools`).
+ * Claude Code: a session-only `--settings` deny list (code.claude.com/docs/en/permissions).
+ * Codex: `-c mcp_servers.<id>.enabled=false`; it has no per-launch switch for skills. Every
+ * other harness, and Codex's skills, are held to the picks by the brief alone.
+ */
+export function limitArgs(agent) {
+  const skills = unticked(agent.skills, agent.installed?.skills);
+  const mcp = unticked(agent.mcp, agent.installed?.mcp);
+  if (agent.harness === "claude" && (skills.length || mcp.length)) {
+    // Other characters in a server's name become _ in its tool names.
+    const deny = [...skills.map((s) => `Skill(skill:${s})`), ...mcp.map((m) => `mcp__${m.replace(/[^\w-]/g, "_")}`)];
+    return ["--settings", JSON.stringify({ permissions: { deny } })];
+  }
+  if (agent.harness === "codex") return mcp.filter((m) => /^[\w-]+$/.test(m)).flatMap((m) => ["-c", `mcp_servers.${m}.enabled=false`]);
+  return [];
 }
 
 /** Whether the harness an agent names is installed here. */

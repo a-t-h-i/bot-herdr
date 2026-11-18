@@ -78,7 +78,8 @@ Used by the bot-herdr chat and Settings (--data takes URI-encoded JSON; agents c
   bh access [standard|full] [--allow "npm test, git commit"] [--repo-history on|off]   how agents run, what they may do without asking
   bh mockup <file.html> | --data <html>     bh clip     bh preview <image>…     pictures for the chat
   bh files [<path>] [--all]                 a folder's entries for the composer's file browser
-  bh models <harness> [--command <exe>] [--refresh]   the models that harness really offers`;
+  bh models <harness> [--command <exe>] [--refresh]   the models that harness really offers
+  bh tools <harness> [--refresh]            the skills and MCP servers that harness has installed (JSON)`;
 
 /**
  * Settings that decide what agents may do are the user's: refused when a headless agent runs
@@ -836,6 +837,13 @@ async function main(argv) {
       }
       const shown = await M.modelsFor(sub, { command: typeof flags.command === "string" ? flags.command : null, refresh: Boolean(flags.refresh) });
       return out(flags, shown, (r) => [`${r.harness}: ${r.models.length} models, ${r.source} (${r.method})${r.cached ? ", cached" : ""}${r.error ? ` — ${r.error}` : ""}`, ...r.models.map((m) => `${m.id}${m.name && m.name !== m.id ? `  ${m.name}` : ""}${m.efforts?.length ? `  [${m.efforts.join(", ")}]` : ""}`)].join("\n"));
+    }
+
+    case "tools": {
+      // Settings' skills and MCP picker: what the harness has installed, always as JSON.
+      const { listTools } = await import("./lib/tools.mjs");
+      const harness = need(sub, "bh tools <harness> [--refresh]");
+      return console.log(JSON.stringify(listTools(harness, { root, refresh: Boolean(flags.refresh) }), null, 2));
     }
 
     case "path":

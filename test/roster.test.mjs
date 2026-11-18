@@ -50,6 +50,14 @@ test("the user's own agents keep their names unique and their one-line descripti
   assert.equal(blank(list, known).does, "");
 });
 
+test("skills and MCP picks are trimmed, non-empty names, each once; empty when unset", () => {
+  const list = roster([{ id: "x", role: "dev", harness: "claude", skills: [" review ", "", "review", 3, null], mcp: "github" }], known);
+  const dev = list.find((a) => a.role === "dev");
+  assert.deepEqual(dev.skills, ["review", "3"]);
+  assert.deepEqual(dev.mcp, []);
+  assert.deepEqual([list[0].skills, list[0].mcp], [[], []]);
+});
+
 test("models and effort levels come from the harness, and for Claude Code from the model", () => {
   assert.ok(modelsOf("claude").some((m) => m.id === "claude-opus-5-5" && m.current));
   assert.deepEqual(modelsOf("aider"), []);

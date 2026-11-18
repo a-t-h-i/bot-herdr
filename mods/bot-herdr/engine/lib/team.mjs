@@ -6,12 +6,14 @@
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { readdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { QUIET, ROLES, argvOf, effortsOf, findAgent, looksLikeInstructions, migrateArgs, roleOf, roster, slug } from "../../roster.js";
 import { BH, DATA, ENGINE, accessOf, bhCommand, ensureDir, exists, readJson, readText, writeJson, writeText } from "./core.mjs";
 import { headless } from "./runner.mjs";
 import * as knowledge from "./knowledge.mjs";
+import { SUPPORTED, installedNames } from "./tools.mjs";
 
 export function team() {
   const file = join(DATA, "agents.json");
@@ -22,7 +24,16 @@ export function team() {
     saved.agents = saved.agents.map((a) => (a && typeof a === "object" ? migrateArgs(a) : a));
     writeJson(file, saved);
   }
-  return { agents: roster(saved.agents, known), known };
+  return { agents: roster(saved.agents, known).map(withInstalled), known };
+}
+
+/**
+ * An agent kept to some skills or MCP servers carries what its harness has installed (the cached
+ * `bh tools` answer), so its launch (argvOf) can deny the rest.
+ */
+function withInstalled(a) {
+  if (!(a.skills.length || a.mcp.length) || !SUPPORTED.includes(a.harness)) return a;
+  return { ...a, installed: installedNames(a.harness, { root: process.cwd() }) };
 }
 
 export function findMember(word) {
@@ -69,6 +80,14 @@ function reportSection({ parent, task, name, step = null }) {
   return lines.join("\n");
 }
 
+/** The skills and MCP servers the user ticked for this agent; null when it may use all installed. */
+export function toolsSection(agent) {
+  const lines = [];
+  if (agent.skills?.length) lines.push(`Use only these skills: ${agent.skills.join(", ")}.`);
+  if (agent.mcp?.length) lines.push(`Use only these MCP servers: ${agent.mcp.join(", ")}.`);
+  return lines.length ? ["## Your skills and MCP servers", ...lines].join("\n") : null;
+}
+
 /**
  * Everything an agent is told when it starts. `mode`: "lead" (the Orchestrator, or an agent the
  * user talks to in its own tab), "child" (started by another agent), "panel" or "review".
@@ -87,6 +106,7 @@ export function brief(agent, { mode = "child", parent = null, task = null, plan 
   if (mode === "panel") parts.push(role("panel"));
   else if (mode === "review") parts.push(role("reviewer"));
   else if ((r?.edits || agent.role === "custom") && !lead) parts.push(role("worker"));
+  parts.push(toolsSection(agent));
 
   const tools = [
     "## Your tools here",
@@ -211,7 +231,19 @@ export function writeTemplate(agent, known, { name = slug(agent.name), body, eff
 export function sync(root) {
   const { agents, known } = team();
   ensureDir(templatesDir());
-  return agents.filter((a) => !a.lead).map((a) => writeTemplate(a, known, { body: brief(a, { mode: "child", root }) })).filter(Boolean);
+  const written = agents.filter((a) => !a.lead).map((a) => writeTemplate(a, known, { body: brief(a, { mode: "child", root }) })).filter(Boolean);
+  removeStale(new Set(agents.map((a) => slug(a.name))));
+  return written;
+}
+
+/** Our templates (they hold MARK) for agents no longer on the team: removed or renamed. A user's own, and the bh-* ones bh spawn writes, are kept. */
+function removeStale(current) {
+  const dir = templatesDir();
+  for (const f of readdirSync(dir)) {
+    const file = join(dir, f);
+    if (!f.endsWith(".md") || f.startsWith("bh-") || current.has(f.slice(0, -3))) continue;
+    if (readText(file).includes(MARK)) rmSync(file, { force: true });
+  }
 }
 
 /** `hc …`, its output passed back. A call that hangs is ended after `timeout` ms (30 s). */
