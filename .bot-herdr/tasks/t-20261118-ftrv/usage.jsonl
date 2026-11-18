@@ -1,0 +1,2 @@
+{"at":"2026-11-18T08:34:08.714Z","agent":"design-agents","harness":"omp","model":"deepseek/deepseek-flash","effort":"high","task":"t-20261118-ftrv","step":2,"ms":262417}
+{"at":"2026-11-18T08:41:46.681Z","agent":"qa-gate","harness":"claude","model":"claude-opus-5-5","effort":"medium","task":"t-20261118-ftrv","step":null,"input":30,"output":8211,"cacheRead":721821,"cacheWrite":44020,"costUsd":0.6608642000000002,"ms":167415}

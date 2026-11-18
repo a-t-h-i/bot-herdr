@@ -673,7 +673,7 @@ async function main(argv) {
       const agent = { ...a, ...(flags.model ? { model: flags.model } : {}) };
       const parent = myAddress();
       const current = task ? T.loadTask(root, task) : null;
-      const editing = mode === "child" && Boolean(roleOf(a.role)?.edits) && !flags.shared;
+      const editing = mode === "child" && (Boolean(roleOf(a.role)?.edits) || a.role === "custom") && !flags.shared;
       const open = editing ? (current?.children ?? []).find((c) => c.state === "open" && c.agent === a.name) : null;
       if (open) throw new Error(`${a.name} already has an open worktree ${open.name}: merge or drop it first`);
       const made = editing ? W.createChildWorktree({ task: current, name, cwd: W.taskCwd(current, root), root }) : "";

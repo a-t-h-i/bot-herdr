@@ -18,7 +18,7 @@ test("the six roles are always there, in order, on the first installed harness",
   assert.equal(roster(null, [])[0].harness, "claude");
 });
 
-test("saved choices stick to their role; the team is the six roles only; an old lead becomes the Orchestrator", () => {
+test("saved choices stick to their role; the user's own agents follow them; an old lead becomes the Orchestrator", () => {
   const list = roster([
     { id: "x", role: "dev", name: "Backend person", harness: "codex", model: "gpt-6.1-sol", effort: "high" },
     { id: "mine", role: "custom", name: "Reviewer", harness: "codex" },
@@ -29,11 +29,25 @@ test("saved choices stick to their role; the team is the six roles only; an old 
   assert.equal(dev.model, "gpt-6.1-sol");
   assert.equal(list[0].harness, "codex"); // the old lead's choices
   assert.equal(list[0].name, "Orchestrator");
-  assert.equal(list.length, 6); // an agent of the user's own isn't part of the team
-  assert.ok(!list.some((a) => a.role === "custom"));
+  assert.equal(list.length, 7); // the user's own agent follows the six roles
+  assert.equal(list[6].role, "custom");
+  assert.equal(list[6].name, "Reviewer");
+  assert.equal(list[6].lead, false);
   assert.equal(findAgent(list, "@backend")?.role, "dev");
   assert.equal(findAgent(list, "frontend")?.role, "design");
-  assert.equal(findAgent(list, "reviewer"), null);
+  assert.equal(findAgent(list, "reviewer")?.name, "Reviewer");
+});
+
+test("the user's own agents keep their names unique and their one-line description", () => {
+  const list = roster([
+    { id: "1", role: "custom", name: "Dev", harness: "codex" },
+    { id: "2", role: "custom", name: "frontend", harness: "codex" },
+    { id: "3", role: "custom", name: "Helper", harness: "codex", does: "Checks the docs." },
+    { id: "4", role: "custom", name: "Helper", harness: "codex" },
+  ], known);
+  assert.deepEqual(list.slice(6).map((a) => a.name), ["Dev 2", "frontend 2", "Helper", "Helper 2"]);
+  assert.equal(list[8].does, "Checks the docs.");
+  assert.equal(blank(list, known).does, "");
 });
 
 test("models and effort levels come from the harness, and for Claude Code from the model", () => {

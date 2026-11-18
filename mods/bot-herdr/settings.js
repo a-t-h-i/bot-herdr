@@ -20,7 +20,7 @@ import { actionButton } from "./button.js";
 import { stateView, pill, avatar, segmented } from "./switch.js";
 import { mentionTone, alpha } from "./indicators.js";
 import { colors } from "./theme.js";
-import { ROSTER_KEY, HEADLESS_KEY, HEADLESS, ROLES, roster, roleOf, argvOf, runnable, runningAs, effortsOf, modelsOf, slug } from "./roster.js";
+import { ROSTER_KEY, HEADLESS_KEY, HEADLESS, ROLES, blank, roster, roleOf, argvOf, runnable, runningAs, effortsOf, modelsOf, slug } from "./roster.js";
 import { bh, bhJson, enc, currentSpace, ROUTING_KEY } from "./bh.js";
 import { PICKED, REFRESH, openPick, harnessMark } from "./pick.js";
 import { withQuiet } from "./live.js";
@@ -62,6 +62,7 @@ const NO_MODELS = "This harness could not be asked for its models; type a model 
 
 const FIELDS = [
   { key: "name", placeholder: "Name" },
+  { key: "does", placeholder: "One line: what this agent is for (the Orchestrator reads it)" },
   { key: "model", placeholder: "The harness's default" },
   { key: "args", placeholder: "Flags only, e.g. --verbose" },
   { key: "instructions", placeholder: "What this agent should always do, in plain words", rows: 3 },
@@ -564,7 +565,12 @@ export class Settings {
               .when(section === "agents", (el) => el
                 .children(rows.map((row, r) =>
                   // Cards in a row share its height; every card is at least the height of a full one.
-                  h_flex().id(`bh-row-${r}`).flex_none().gap(GAP).items_stretch().children(row.map((a) => this.card(c, a, cardW, running, space))))))
+                  h_flex().id(`bh-row-${r}`).flex_none().gap(GAP).items_stretch().children(row.map((a) => this.card(c, a, cardW, running, space)))))
+                .child(h_flex().flex_none().child(this.button(c, "bh-add-agent", "plus", "Add agent", (_e, cx) => {
+                  const list = this.list();
+                  this.save([...list, blank(list, this.known)], cx);
+                  cx.notify();
+                }))))
               // Access and the classifier together: side by side when there's room, else stacked.
               .when(section === "general", (el) => el.child(v_flex().w(Math.min(640, content)).gap(GAP)
                 .child(this.accessCard(c))
@@ -903,10 +909,23 @@ export class Settings {
     const a = this.list().find((x) => x.id === id);
     const inputs = this.inputs[id];
     if (!a || !inputs) return div().text_size(TYPE.sm).text_color(c.muted).child("This agent is no longer on the team.");
+    const custom = a.role === "custom";
     return v_flex().gap(SPACE[4])
+      .when(custom, (el) => el
+        .child(v_flex().gap(SPACE[2]).child(this.label(c, "Name")).child(this.field(c, inputs.name)))
+        .child(v_flex().gap(SPACE[2]).child(this.label(c, "What it does")).child(this.field(c, inputs.does))))
       .child(v_flex().gap(SPACE[2]).child(this.label(c, "Arguments")).child(this.field(c, inputs.args)))
       .child(v_flex().gap(SPACE[2]).child(this.label(c, "Instructions")).child(this.textarea(c, inputs.instructions)))
-      .child(div().text_size(TYPE.xs).text_color(c.faint).child(argvOf(a, this.known).join(" ")));
+      .child(div().text_size(TYPE.xs).text_color(c.faint).child(argvOf(a, this.known).join(" ")))
+      .when(custom, (el) => el.child(h_flex().child(this.removeAgent(c, a))));
+  }
+
+  /** A custom agent's Remove: the entry leaves the roster and the card closes with it. */
+  removeAgent(c, a) {
+    return actionButton(c, "bh-remove-agent-" + a.id, "Remove agent", (_e, cx) => {
+      this.save(this.list().filter((x) => x.id !== a.id), cx);
+      cx.notify();
+    }, { icon: "trash", tone: "danger" });
   }
 
   /** The classifier's dialog: what it decides, and the thresholds the card kept under Advanced. */

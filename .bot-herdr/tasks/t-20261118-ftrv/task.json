@@ -1,0 +1,103 @@
+{
+  "id": "t-20261118-ftrv",
+  "title": "User-defined custom agents",
+  "request": "Allow user to setup their own agents.",
+  "status": "active",
+  "track": "full",
+  "plan": null,
+  "by": "t5j",
+  "created": "2026-11-18T08:27:31.044Z",
+  "updated": "2026-11-18T08:41:40.616Z",
+  "archived": false,
+  "steps": [
+    {
+      "n": 1,
+      "title": "Keep the user's own agents in the roster, with a 'what it does' line, in briefs, spawn and templates",
+      "agent": "dev-roster",
+      "status": "done",
+      "started": "2026-11-18T08:29:45.751Z",
+      "finished": "2026-11-18T08:38:50.532Z",
+      "workedMs": 544781,
+      "note": ""
+    },
+    {
+      "n": 2,
+      "title": "Settings: add, edit and remove the user's own agents",
+      "agent": "design-agents",
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-18T08:34:28.160Z",
+      "workedMs": 253803,
+      "note": "",
+      "report": {
+        "file": ".bot-herdr/tasks/t-20261118-ftrv/reports/design-agents.md",
+        "summary": "Settings Agents: add/edit/remove custom agents; @mention already reaches them",
+        "from": "design-agents",
+        "at": "2026-11-18T08:33:59.815Z"
+      }
+    }
+  ],
+  "triage": {
+    "size": "medium",
+    "sizeConfidence": 0.48,
+    "kind": "feature",
+    "domains": {
+      "design": 0.82,
+      "dev": 0.87,
+      "qa": 0.72
+    },
+    "research": 0.57,
+    "ambiguous": 0.79,
+    "solo": 0.14,
+    "by": "classifier"
+  },
+  "qa": {
+    "risk": "medium",
+    "qaRequired": true,
+    "testBudget": {
+      "min": 0,
+      "max": 3
+    },
+    "focusAreas": [
+      "security boundaries: the wrong user, no user and an expired session are refused, and no secret leaks",
+      "concurrency: races, ordering, double runs, and a lock or claim that is never released",
+      "isolation: work stays inside its branch, worktree and permission boundaries",
+      "public contracts: existing callers and saved data keep working (backwards compatibility)"
+    ],
+    "riskFactors": [
+      "security: .bot-herdr/tasks/t-20261118-ftrv/task.json (\"permission\")",
+      "concurrency: .bot-herdr/plans/p-20261111-9dkc/comments.json (\"locks\")",
+      "isolation: .bot-herdr/tasks/t-20261118-ftrv/board.jsonl (\"worktree\")",
+      "a wide change: 19 files, 234 changed lines across 5 modules (mods/bot-herdr, mods/bot-herdr/engine, .bot-herdr/tasks/t-20261118-ftrv and 2 more)",
+      "tests changed with it: test/roster.test.mjs",
+      "a public contract: Jev reads it in the diff (0.62)"
+    ],
+    "existingTestsLikelySufficient": true,
+    "reasoning": "MEDIUM: security: .bot-herdr/tasks/t-20261118-ftrv/task.json (\"permission\"); concurrency: .bot-herdr/plans/p-20261111-9dkc/comments.json (\"locks\"); isolation: .bot-herdr/tasks/t-20261118-ftrv/board.jsonl (\"worktree\"). Jev read the diff as medium (0.63).",
+    "source": "classifier",
+    "at": "2026-11-18T08:38:50.369Z"
+  },
+  "summary": "",
+  "base": "031bfe344fd1244a291cd08470072ec919f686d4",
+  "comments": [
+    {
+      "id": "c1",
+      "step": null,
+      "quote": "",
+      "text": "Also add the ability to configure skills for agents (e.g frontend skills for design, planning skills for orchestrator etc) and also mcp tools. These can be picked up by the mod if they are installed on the harness",
+      "at": "2026-11-18T08:40:05.729Z",
+      "open": true
+    }
+  ],
+  "gates": [
+    {
+      "round": 1,
+      "verdict": "PASS",
+      "file": ".bot-herdr/tasks/t-20261118-ftrv/reports/qa-gate.md",
+      "summary": "PASS: custom agents work end to end; minor: stale hc template after remove/rename",
+      "from": "qa-gate",
+      "at": "2026-11-18T08:41:40.488Z",
+      "head": "031bfe344fd1244a291cd08470072ec919f686d4"
+    }
+  ]
+}

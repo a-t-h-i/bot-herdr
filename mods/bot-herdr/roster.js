@@ -121,8 +121,24 @@ const clean = (a, i, fallback) => migrateArgs({
   effort: String(a.effort ?? "").trim(),
   args: String(a.args ?? "").trim(),
   instructions: String(a.instructions ?? "").trim(),
+  does: String(a.does ?? "").trim(),
   lead: Boolean(a.lead),
 });
+
+/** A name no one else has: when it is taken, " 2", " 3"… (the first free one). */
+function uniqueName(name, taken) {
+  const base = String(name ?? "").trim() || "Agent";
+  let out = base;
+  for (let n = 2; taken.has(slug(out)); n++) out = `${base} ${n}`;
+  taken.add(slug(out));
+  return out;
+}
+
+/** The user's own agents, after the six roles, each under a name no role or earlier agent has. */
+function ownAgents(list, used) {
+  const taken = new Set(ROLES.flatMap((r) => [slug(r.name), ...r.aliases]));
+  return list.filter((a) => a.role === "custom" && !used.has(a)).map((a) => ({ ...a, name: uniqueName(a.name, taken), lead: false }));
+}
 
 /**
  * The roster as stored, made whole: the six roles in order (each with what was saved for it),
@@ -144,8 +160,8 @@ export function roster(stored, known = []) {
     const saved = take((a) => a.role === r.role) ?? (r.role === "orchestrator" ? take((a) => a.role === "custom" && (a.id === "orchestrator" || a.lead)) : null);
     return { ...(saved ?? { id: r.role, harness: fallback, model: "", effort: "", args: "", instructions: "" }), role: r.role, name: r.name, lead: r.role === "orchestrator" };
   });
-  // The team is the six roles: agents of the user's own aren't kept (nor reachable).
-  return stock;
+  // The six roles first: the user's own agents follow them.
+  return [...stock, ...ownAgents(list, used)];
 }
 
 /** The roster entry a name, @handle or alias points at ("frontend" is Design). */
@@ -186,7 +202,7 @@ export function blank(list, known = []) {
   const installed = known.filter((k) => k.installed);
   let n = 1;
   while (list.some((a) => a.name === `Agent ${n}`)) n++;
-  return { id: `a${Date.now().toString(36)}`, role: "custom", name: `Agent ${n}`, harness: installed[0]?.key ?? "claude", model: "", effort: "", args: "", instructions: "", lead: false };
+  return { id: `a${Date.now().toString(36)}`, role: "custom", name: `Agent ${n}`, harness: installed[0]?.key ?? "claude", model: "", effort: "", args: "", instructions: "", does: "", lead: false };
 }
 
 /** Parses `pi --list-models`-style output into model ids (provider/model), best effort. */

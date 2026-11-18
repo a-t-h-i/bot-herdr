@@ -52,6 +52,9 @@ export function templatesDir(env = process.env) {
 
 const role = (name) => readText(join(ENGINE, "roles", `${name}.md`)).trim();
 
+/** What an agent does, in one line: its role's, or the user's own for a custom agent. */
+const doesOf = (a) => roleOf(a.role)?.does ?? String(a.does ?? "").trim();
+
 /** The report a child writes, records on the task with `bh report`, and sends its parent. */
 function reportSection({ parent, task, name, step = null }) {
   const who = name ?? "you";
@@ -83,7 +86,7 @@ export function brief(agent, { mode = "child", parent = null, task = null, plan 
   else if (r) parts.push(role(agent.role));
   if (mode === "panel") parts.push(role("panel"));
   else if (mode === "review") parts.push(role("reviewer"));
-  else if (r?.edits && !lead) parts.push(role("worker"));
+  else if ((r?.edits || agent.role === "custom") && !lead) parts.push(role("worker"));
 
   const tools = [
     "## Your tools here",
@@ -99,7 +102,7 @@ export function brief(agent, { mode = "child", parent = null, task = null, plan 
   parts.push(tools.join("\n"));
 
   if (mode !== "panel" && mode !== "review") {
-    const members = agents.filter((a) => a.id !== agent.id && !a.lead).map((a) => `- ${a.name} (\`bh spawn ${slug(a.name)}\`): ${roleOf(a.role)?.does ?? "an agent the user added."}`);
+    const members = agents.filter((a) => a.id !== agent.id && !a.lead).map((a) => `- ${a.name} (\`bh spawn ${slug(a.name)}\`): ${doesOf(a) || "an agent the user added."}`);
     parts.push(childAgents({ lead, mode, members }));
   }
 
@@ -186,13 +189,13 @@ export function writeTemplate(agent, known, { name = slug(agent.name), body, eff
   if (exists(file) && !readText(file).includes(MARK)) return null;
   if (runsHeadless(agent)) {
     const argv = agentArgv(agent, { mode, effort });
-    writeText(file, ["---", `description: ${roleOf(agent.role)?.does ?? `${agent.name}, an agent set up in bot-herdr.`}`, `command: ${commandLine(argv)}`, MARK, "---", ""].join("\n"));
+    writeText(file, ["---", `description: ${doesOf(agent) || `${agent.name}, an agent set up in bot-herdr.`}`, `command: ${commandLine(argv)}`, MARK, "---", ""].join("\n"));
     return { file, name, argv };
   }
   const argv = argvOf(agent, known, effort ? { effort } : {});
   writeText(file, [
     "---",
-    `description: ${roleOf(agent.role)?.does ?? `${agent.name}, an agent set up in bot-herdr.`}`,
+    `description: ${doesOf(agent) || `${agent.name}, an agent set up in bot-herdr.`}`,
     `command: ${commandLine(argv)}`,
     // It never reports a status, so core would wait for one in vain and never type the brief.
     ...(QUIET.has(agent.harness) ? ["ready: quiet"] : []),
