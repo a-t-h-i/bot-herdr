@@ -28,12 +28,12 @@ export function team() {
 }
 
 /**
- * An agent kept to some skills or MCP servers carries what its harness has installed (the cached
- * `bh tools` answer), so its launch (argvOf) can deny the rest.
+ * An agent kept to some skills or MCP servers carries what its harness has installed (read fresh,
+ * so a skill installed today is denied too), so its launch (argvOf) can deny the rest.
  */
 function withInstalled(a) {
   if (!(a.skills.length || a.mcp.length) || !SUPPORTED.includes(a.harness)) return a;
-  return { ...a, installed: installedNames(a.harness, { root: process.cwd() }) };
+  return { ...a, installed: installedNames(a.harness, { root: process.cwd(), refresh: true }) };
 }
 
 export function findMember(word) {

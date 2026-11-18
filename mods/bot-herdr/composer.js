@@ -527,6 +527,14 @@ export class Composer {
     return { note, steps: [{ do: "start", run: argvOf(entry, this.known), name: entry.name, tab: entry.name, entry: entry.id, text: step.text, files: step.files }] };
   }
 
+  /** A CLI start of an agent kept to some skills or MCP servers: its argv denies the rest of what is installed. */
+  async launchArgv(entry, run) {
+    if (!entry.skills?.length && !entry.mcp?.length) return run;
+    const got = await bhJson(["tools", entry.harness, "--refresh"], { timeout: 60000 });
+    if (!got?.supported) return run;
+    return argvOf({ ...entry, installed: { skills: got.skills.map((s) => s.name), mcp: got.mcp.map((m) => m.name) } }, this.known);
+  }
+
   /** Agents we started carry the brief in their task: once one shows up, mark it as briefed. */
   adopt() {
     if (!this.starts.length) return;
@@ -1258,7 +1266,7 @@ export class Composer {
         // Headless: the agent terminal builds its own brief; the message is its first turn. A CLI
         // gets it as its first prompt (after -i for agy and the like, which would run a bare one
         // once and exit).
-        argv: headlessly ? ["node", bhPath(), "agent", slug(entry.name), "--mode", "lead", "--"] : withPrompt(step.run, task),
+        argv: headlessly ? ["node", bhPath(), "agent", slug(entry.name), "--mode", "lead", "--"] : withPrompt(entry ? await this.launchArgv(entry, step.run) : step.run, task),
         task,
         space: space?.id,
       });

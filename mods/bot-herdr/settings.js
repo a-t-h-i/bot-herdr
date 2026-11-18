@@ -937,7 +937,8 @@ export class Settings {
     if (TOOLS_ASKING.has(harness) || (!refresh && TOOLS_CACHE.has(harness))) return;
     TOOLS_ASKING.add(harness);
     cx.spawn(async (cx) => {
-      TOOLS_CACHE.set(harness, await fetchTools(harness, refresh));
+      // Always read fresh: the engine's cache could miss a skill installed since.
+      TOOLS_CACHE.set(harness, await fetchTools(harness, true));
       TOOLS_ASKING.delete(harness);
       cx.notify();
     });

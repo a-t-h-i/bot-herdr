@@ -7,7 +7,7 @@
   "plan": null,
   "by": "t5j",
   "created": "2026-11-18T08:27:31.044Z",
-  "updated": "2026-11-18T09:22:04.102Z",
+  "updated": "2026-11-18T09:43:59.002Z",
   "archived": false,
   "steps": [
     {
@@ -116,30 +116,32 @@
     "by": "classifier"
   },
   "qa": {
-    "risk": "medium",
+    "risk": "high",
     "qaRequired": true,
     "testBudget": {
       "min": 0,
-      "max": 3
+      "max": 6
     },
     "focusAreas": [
       "security boundaries: the wrong user, no user and an expired session are refused, and no secret leaks",
+      "destructive operations: they touch only what they should, and a failure halfway leaves things recoverable",
       "concurrency: races, ordering, double runs, and a lock or claim that is never released",
       "isolation: work stays inside its branch, worktree and permission boundaries",
       "public contracts: existing callers and saved data keep working (backwards compatibility)"
     ],
     "riskFactors": [
-      "security: .bot-herdr/tasks/t-20261118-ftrv/task.json (\"permission\")",
+      "security: .bot-herdr/tasks/t-20261118-ftrv/task.json (\"secret\")",
+      "destructive operations: mods/bot-herdr/engine/lib/team.mjs (\"rmSync(\")",
       "concurrency: .bot-herdr/plans/p-20261111-9dkc/comments.json (\"locks\")",
       "isolation: .bot-herdr/tasks/t-20261118-ftrv/board.jsonl (\"worktree\")",
-      "a wide change: 19 files, 234 changed lines across 5 modules (mods/bot-herdr, mods/bot-herdr/engine, .bot-herdr/tasks/t-20261118-ftrv and 2 more)",
-      "tests changed with it: test/roster.test.mjs",
-      "a public contract: Jev reads it in the diff (0.62)"
+      "a wide change: 21 files, 587 changed lines across 5 modules (.bot-herdr/tasks/t-20261118-ftrv, mods/bot-herdr, mods/bot-herdr/engine and 2 more)",
+      "tests changed with it: test/roster.test.mjs, test/tools.test.mjs",
+      "a public contract: Jev reads it in the diff (0.78)"
     ],
     "existingTestsLikelySufficient": true,
-    "reasoning": "MEDIUM: security: .bot-herdr/tasks/t-20261118-ftrv/task.json (\"permission\"); concurrency: .bot-herdr/plans/p-20261111-9dkc/comments.json (\"locks\"); isolation: .bot-herdr/tasks/t-20261118-ftrv/board.jsonl (\"worktree\"). Jev read the diff as medium (0.63).",
+    "reasoning": "HIGH: security: .bot-herdr/tasks/t-20261118-ftrv/task.json (\"secret\"); destructive operations: mods/bot-herdr/engine/lib/team.mjs (\"rmSync(\"); concurrency: .bot-herdr/plans/p-20261111-9dkc/comments.json (\"locks\"). Jev read the diff as high (0.92).",
     "source": "classifier",
-    "at": "2026-11-18T08:38:50.369Z"
+    "at": "2026-11-18T09:42:00.556Z"
   },
   "summary": "",
   "base": "031bfe344fd1244a291cd08470072ec919f686d4",
@@ -171,6 +173,15 @@
       "from": "qa-gate2",
       "at": "2026-11-18T09:22:03.955Z",
       "head": "cff216a9464fb08cf56a0d86cee4253452effc44"
+    },
+    {
+      "round": 3,
+      "verdict": "PASS",
+      "file": ".bot-herdr/tasks/t-20261118-ftrv/reports/qa-gate3.md",
+      "summary": "PASS: CLI starts get deny flags, fresh tool listings; failure falls back cleanly",
+      "from": "qa-gate3",
+      "at": "2026-11-18T09:43:58.849Z",
+      "head": "ccddd47571f5989fae744a74d0500acc69bac73c"
     }
   ],
   "children": [

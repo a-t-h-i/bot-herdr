@@ -16,3 +16,5 @@
 {"n":16,"at":"2026-11-18T09:18:44.709Z","kind":"done","from":"Orchestrator","to":null,"text":"Merged dev-tools: 6 files, +382 −4","step":3,"file":null}
 {"n":17,"at":"2026-11-18T09:22:03.961Z","kind":"done","from":"qa-gate2","to":null,"text":"Skills/MCP per agent meets all 5 criteria; 256/257 pass; minor: synced-skill naming unverified live","step":null,"file":".bot-herdr/tasks/t-20261118-ftrv/reports/qa-gate2.md"}
 {"n":18,"at":"2026-11-18T09:22:04.109Z","kind":"done","from":"qa-gate2","to":"t5p","text":"PASS: skills/MCP per agent; round-1 stale-template finding fixed","step":null,"file":".bot-herdr/tasks/t-20261118-ftrv/reports/qa-gate2.md"}
+{"n":19,"at":"2026-11-18T09:43:58.854Z","kind":"done","from":"qa-gate3","to":null,"text":"PASS: CLI starts get deny flags, fresh tool listings; failure falls back cleanly","step":null,"file":".bot-herdr/tasks/t-20261118-ftrv/reports/qa-gate3.md"}
+{"n":20,"at":"2026-11-18T09:43:59.008Z","kind":"done","from":"qa-gate3","to":"t5p","text":"PASS: skills/MCP follow-up; minor: limits fail open if bh tools fails","step":null,"file":".bot-herdr/tasks/t-20261118-ftrv/reports/qa-gate3.md"}
