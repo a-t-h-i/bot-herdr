@@ -118,6 +118,8 @@ export class Chat {
     this.entries = load("feed", []).filter((e) => !(e.kind === "agent" && isHandled(e.text)));
     this.seen = load("seen", {}); // address → the last reply text shown
     this.logSeen = load("logSeen", {}); // a reply log's key → the last turn time shown from it
+    this.logFloor = load("logFloor", null) ?? new Date().toISOString(); // turns before it are history
+    save("logFloor", this.logFloor);
     this.kidsOpen = new Set(); // child groups opened in place (item ids)
     this.kidsHeights = new Map(); // child group item id → its drawn height, so opening animates to it
     this.waits = {}; // address → { name, worked, stopped, blocked }: agents we wrote to
@@ -389,7 +391,8 @@ export class Chat {
   /**
    * Every turn in every reply log (`replies/<key>.jsonl`), whether or not its agent is still
    * live: a reply reaches the feed even when the agent was killed before the next poll. A log
-   * seen for the first time is history — its newest line is recorded and nothing is added.
+   * seen for the first time adds its turns since the chat began watching (a new agent's first
+   * reply); anything older is history.
    * Returns the keys that have a log, so their `.md` is left alone.
    */
   async readLogs(live, cx) {
@@ -401,7 +404,7 @@ export class Chat {
     }
     for (const name of names) {
       const key = name.slice(0, -".jsonl".length);
-      const { entries, at } = logNew(await this.logText(key), this.logSeen[key]);
+      const { entries, at } = logNew(await this.logText(key), this.logSeen[key], this.logFloor);
       if (at !== this.logSeen[key]) {
         this.logSeen[key] = at;
         save("logSeen", this.logSeen);

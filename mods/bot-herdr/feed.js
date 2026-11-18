@@ -33,13 +33,15 @@ export function logEntries(text) {
 /**
  * What a reply log adds to the feed: the turns later than `sinceAt` (an ISO time), and the newest
  * time the log holds, for the caller to keep. A log never read before (`sinceAt` null or empty)
- * adds nothing — the history behind it is not the feed's — and only its newest time is recorded.
+ * adds its turns later than `floorAt`, the time the chat began watching logs, so a new agent's
+ * first reply shows while older history stays out; with no floor either it adds nothing.
  */
-export function logNew(text, sinceAt) {
+export function logNew(text, sinceAt, floorAt = null) {
   const lines = logEntries(text);
   const newest = lines.length ? lines[lines.length - 1].at : sinceAt ?? null;
-  if (!sinceAt) return { entries: [], at: newest };
-  const since = Date.parse(sinceAt);
+  const cutoff = sinceAt || floorAt;
+  if (!cutoff) return { entries: [], at: newest };
+  const since = Date.parse(cutoff);
   return { entries: lines.filter((line) => Date.parse(line.at) > since), at: newest };
 }
 

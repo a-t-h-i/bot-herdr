@@ -30,6 +30,17 @@ test("feed log: a log never read before is history, not the feed", () => {
   assert.deepEqual(empty, { entries: [], at: null });
 });
 
+test("feed log: a new agent's first reply shows: a log never read adds its turns since the floor", () => {
+  const got = logNew(LOG, null, "2026-11-13T10:01:00.000Z");
+  assert.deepEqual(got.entries.map((l) => l.text), ["Second turn", "Third turn"]);
+  assert.equal(got.at, "2026-11-13T10:09:00.000Z");
+  // One turn only, written after the chat began watching: the case that used to vanish.
+  const one = line("2026-11-13T10:00:00.000Z", "Only turn");
+  assert.deepEqual(logNew(one, undefined, "2026-11-13T09:00:00.000Z").entries.map((l) => l.text), ["Only turn"]);
+  // A log already read follows its own time, not the floor.
+  assert.equal(logNew(LOG, "2026-11-13T10:05:00.000Z", "2026-11-13T09:00:00.000Z").entries.length, 1);
+});
+
 test("feed log: every turn after the last one seen, in order, and the newest time kept", () => {
   const got = logNew(LOG, "2026-11-13T10:00:00.000Z");
   assert.deepEqual(got.entries.map((l) => l.text), ["Second turn", "Third turn"]);
