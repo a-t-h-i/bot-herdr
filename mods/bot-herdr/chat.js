@@ -10,7 +10,7 @@ import { div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextView, InputState, Input } from "gpui-base";
 import { terminals, spaces, focused, settings, shared, setShared, readTextFile, appHome } from "herdr";
 import * as fs from "fs/promises";
-import { SIZE, ICON, TYPE, LINE, SPACE, CHIP, CONTROL, TARGET, GLYPH, MOTION, SCRIM, textWidth, agentInk, clickable, isLight } from "./look.js";
+import { SIZE, ICON, TYPE, LINE, SPACE, ROW, CHIP, CONTROL, TARGET, GLYPH, MOTION, SCRIM, textWidth, agentInk, clickable, isLight } from "./look.js";
 import { actionButton } from "./button.js";
 import { stateView } from "./switch.js";
 import { colors } from "./theme.js";
@@ -20,7 +20,9 @@ import { FOCUS, OUTGOING, activePage, openTerminal } from "./pages.js";
 import { replyFile, replyBody, push, shown, scrollBy, clampScroll, isNew, isHandled, outcome, clock, segments, fold, linkFiles, addComment, editComment, resolveComment, deleteComment, fileKey, logNew, groupChildren, entryName } from "./feed.js";
 import { openFile, openLink } from "./viewer.js";
 import { projectDir } from "./bh.js";
-import { mentionTone, alpha } from "./indicators.js";
+import { roleWord, roleTone, mentionTone, alpha } from "./indicators.js";
+import { indicatorFor, roleOf, onTurn, TURN_MS } from "./working.js";
+import { findAgent } from "./roster.js";
 import { summary } from "./drawer.js";
 import { mockup, openInBrowser, previews, isImage } from "./media.js";
 import { commentRow } from "./plandoc.js";
@@ -134,6 +136,10 @@ export class Chat {
     this.reading = false;
     this.open = new OpenQuestions();
     this.unfolded = new Set(); // your long messages opened with Show more
+    this.turn = null; // the agent on the working line when several work (its address)
+    this.turnShown = true; // the line's first frame is drawn low and clear, then slides up
+    this.drawnFx = null; // the motion the working line showed last, to redraw when it changes
+    this.verbShown = true; // false for the one frame before a new verb fades in
     this.hovered = null; // entry id under the pointer: its actions show
     this.arrived = new Set(); // entry ids already drawn once: new ones arrive with MOTION.arrive
     this.primed = false; // the first draw is not an arrival
@@ -155,6 +161,9 @@ export class Chat {
       }
     });
     cx.timer.every(POLL_MS, (cx) => this.poll(cx));
+    // The working line: one agent at a time, the next one's turn every few seconds; and a new
+    // word when its 30 to 60 seconds are up.
+    cx.timer.every(TURN_MS, (cx) => this.nextTurn(cx));
     cx.timer.after(300, () => this.composer.focus());
   }
 
@@ -434,6 +443,35 @@ export class Chat {
     this.add({ kind: "agent", space: agent?.space ?? this.space(), text, from: { address, name, tile: agent?.tile ?? null } }, cx);
   }
 
+  /** The working line moves to the next agent (with more than one at work), or shows a new word. */
+  nextTurn(cx) {
+    const list = this.workers();
+    if (list.length > 1) {
+      const next = onTurn(list, this.turn, 1);
+      this.turn = next.agent.address;
+      this.turnShown = false;
+      cx.notify();
+      cx.timer.after(16, (cx) => {
+        this.turnShown = true;
+        cx.notify();
+      });
+      return;
+    }
+    if (list.length === 1 && indicatorFor(roleOf(list[0].role)).fx !== this.drawnFx) cx.notify();
+  }
+
+  /** Who works in this space now, and in what role. */
+  workers() {
+    const space = this.space();
+    const team = this.composer.roster();
+    const byAddress = this.composer.entriesByAddress();
+    return this.live().filter((a) => a.space === space && a.status === "working").map((a) => {
+      const name = this.composer.nameOf(a.address);
+      const role = byAddress.get(a.address)?.role ?? findAgent(team, name)?.role ?? (/(^|[-_ ])(dev|design|qa|scout|research|planner|panel)/i.exec(name)?.[2] ?? "agent");
+      return { address: a.address, name, tile: a.tile, role };
+    });
+  }
+
   /** Reads new question files; a file that went (answered) drops its card; the tabs keep the count. */
   async readQuestions(cx) {
     if (await this.open.poll()) cx.notify();
@@ -496,6 +534,7 @@ export class Chat {
       cx.notify();
     });
     const up = this.back > 0 || this.px > 0;
+    const working = this.workers();
     this.composer.questions = this.open.list;
     // A pane with nothing to draw (a suggestion list that matches nothing) dims nothing either.
     const pane = this.composer.paneShown() ? this.composer.paneNow() : null;
@@ -548,7 +587,8 @@ export class Chat {
                 .w(width)
                 .gap(SPACE[4])
                 .pt(SPACE[4])
-                .children(view.list.map((e) => this.entry(c, e, width))),
+                .children(view.list.map((e) => this.entry(c, e, width)))
+                .when(!up && working.length > 0, (col) => col.child(this.working(c, working, width))),
             ))
           // Stays put over the feed while the column scrolls under it.
           .when(up, (el) => el.child(this.newer(c, view.back))),
@@ -957,6 +997,52 @@ export class Chat {
     return actionButton(c, id, label, onClick, { tone: "quiet" })
       .opacity(show ? 1 : 0.5)
       .transition("opacity", MOTION.hover);
+  }
+
+  /**
+   * The working line: one agent at a time, only its role's word, shimmering in its colour beside
+   * the motion that acts out its job (no name, nothing else). With several at work they take
+   * turns, each sliding in over the last.
+   */
+  working(c, list, width) {
+    const now = onTurn(list, this.turn, 0);
+    this.turn = now.agent.address;
+    const a = now.agent;
+    // Coloured by the agent's type, so a glance says who is at work.
+    const tone = roleTone(c, a.role);
+    const fx = indicatorFor(roleOf(a.role)).fx;
+    if (fx !== this.drawnFx) {
+      // A new verb: drawn clear for one frame, then faded in.
+      this.verbShown = false;
+      this.cx.timer.after(16, (cx) => {
+        this.verbShown = true;
+        cx.notify();
+      });
+    }
+    this.drawnFx = fx;
+    const line = h_flex()
+      .id(`bh-working-${a.address}`)
+      .absolute()
+      .left(0)
+      .right(0)
+      .top(this.turnShown ? SPACE[2] : SPACE[4])
+      .transition("top", MOTION.turn)
+      .opacity(this.turnShown ? 1 : 0)
+      .transition("opacity", MOTION.turn)
+      .gap(SPACE[3])
+      .items_start()
+      .text_size(TYPE.sm)
+      .child(div()
+        .id("bh-working-verb")
+        // Shrinks before the line overflows a narrow window; the word clips rather than collides.
+        .flex_shrink(1)
+        .min_w(0)
+        .overflow_hidden()
+        .opacity(this.verbShown === false ? 0 : 1)
+        .transition("opacity", MOTION.verb)
+        .child(roleWord(c, { role: a.role, tone, id: `bh-rw-${a.address}` })));
+    // Not clipped: some motions reach a little past the word.
+    return div().id("bh-working").relative().flex_none().w(width).h(ROW).child(line);
   }
 
   newer(c, back) {
