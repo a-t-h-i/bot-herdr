@@ -1,14 +1,17 @@
 #!/usr/bin/env node
 // purpose: typecheck and lint only what changed on this branch (or given files) with the project's own tools; prints each check's findings and a pass/fail line, and with --json the counts that ran
 // usage: node {script} [files…] [--base <ref>] [--timeout <seconds>] [--json]
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { baseRef, changedFiles, detect, parseArgs, projectRoot, sh, tail } from "./lib/common.mjs";
+import { baseRef, changedFiles, detect, parseArgs, projectRoot, resolveCmd, resolveLocalBin, sh, tail, toPosix } from "./lib/common.mjs";
 
 const { flags, rest } = parseArgs();
 const root = projectRoot();
 const tool = detect(root);
-const files = rest.length > 0 ? rest : changedFiles(root, baseRef(root, flags.base));
+const files = rest.length > 0 ? rest.map(toPosix) : changedFiles(root, baseRef(root, flags.base));
+// Local tooling runs as this Node plus its JS entry (or its native binary), never as a `.cmd` shim.
+const local = (tool, args) => resolveLocalBin(root, tool, { args });
+const python = resolveCmd("python3");
 const timeout = Number(flags.timeout ?? 240) * 1000;
 const has = (name) => existsSync(join(root, name));
 const pick = (pattern) => files.filter((file) => pattern.test(file));
@@ -17,16 +20,17 @@ const report = [];
 const say = (line = "") => report.push(line);
 
 const ts = pick(/\.[cm]?tsx?$/);
-if (ts.length > 0 && has("tsconfig.json")) checks.push({ name: "typecheck (whole project: tsc cannot check one file with the project's settings)", kind: "typecheck", cmd: "npx", args: ["tsc", "--noEmit", "-p", "."] });
+if (ts.length > 0 && has("tsconfig.json")) checks.push({ name: "typecheck (whole project: tsc cannot check one file with the project's settings)", kind: "typecheck", ...local("tsc", ["--noEmit", "-p", "."]) });
 const js = pick(/\.[cm]?[jt]sx?$/);
 const eslint = ["eslint.config.js", "eslint.config.mjs", "eslint.config.ts", ".eslintrc", ".eslintrc.js", ".eslintrc.cjs", ".eslintrc.json"].some(has) || tool.pkg?.eslintConfig;
-if (js.length > 0 && eslint) checks.push({ name: "eslint", kind: "lint", cmd: "npx", args: ["eslint", ...js] });
-if (js.length > 0 && (has("biome.json") || has("biome.jsonc"))) checks.push({ name: "biome", kind: "lint", cmd: "npx", args: ["biome", "check", ...js] });
+if (js.length > 0 && eslint) checks.push({ name: "eslint", kind: "lint", ...local("eslint", js) });
+if (js.length > 0 && (has("biome.json") || has("biome.jsonc"))) checks.push({ name: "biome", kind: "lint", ...local("biome", ["check", ...js]) });
 const py = pick(/\.py$/);
 if (py.length > 0) {
   if (sh("ruff", ["--version"]).code === 0) checks.push({ name: "ruff", kind: "lint", cmd: "ruff", args: ["check", ...py] });
-  else checks.push({ name: "python syntax", kind: "lint", cmd: "python3", args: ["-m", "py_compile", ...py] });
-  if (has("mypy.ini") || /\[tool\.mypy\]/.test(sh("cat", ["pyproject.toml"], { cwd: root }).out)) checks.push({ name: "mypy", kind: "typecheck", cmd: "python3", args: ["-m", "mypy", ...py] });
+  else checks.push({ name: "python syntax", kind: "lint", cmd: python, args: ["-m", "py_compile", ...py] });
+  const pyproject = (() => { try { return readFileSync(join(root, "pyproject.toml"), "utf8"); } catch { return ""; } })();
+  if (has("mypy.ini") || /\[tool\.mypy\]/.test(pyproject)) checks.push({ name: "mypy", kind: "typecheck", cmd: python, args: ["-m", "mypy", ...py] });
 }
 const go = pick(/\.go$/);
 if (go.length > 0 && tool.go) checks.push({ name: "go vet", kind: "lint", cmd: "go", args: ["vet", ...new Set(go.map((file) => `./${file.split("/").slice(0, -1).join("/") || "."}`))] });

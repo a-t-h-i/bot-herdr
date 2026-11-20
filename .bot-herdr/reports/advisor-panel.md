@@ -2,40 +2,75 @@
 OPEN
 
 ## Summary
-Reviewed plan `p-20261120-7rw6` against the repository and all five panel reports; found six concrete gaps across task splitting, real usage capture, headless skill-allowlist plumbing, compaction races, missing `pi`/cache fixes, and an Advisor/brief-trim mismatch.
-Read-only review; no repository code was modified.
+Reviewed `engine/scripts/`, `engine/classifier/`, `engine/roles/`, and headless permission/install plumbing for plan `p-20261121-0b9c`.
+Ripgrep (`rg`) already supports Windows and Unix natively; the real gaps are `git grep`-only scripts + `standard` access blocking direct search CLIs, an unwired `pickScripts()` classifier feature, and no file triage or token-budgeted code-reading scripts.
 
 ## Changes
-- `.bot-herdr/reports/advisor-panel.md` — advisor review of plan `p-20261120-7rw6`.
-
-## Review (6 points, most important first)
-1. **Split and reorder the 14-step monolith (sequencing/turnaround):** One 14-step task holds four unrelated tracks behind a single QA gate (`mods/bot-herdr/engine/roles/orchestrator.md:190`) and one open worktree per agent (`mods/bot-herdr/engine/bh.mjs:678-679`), while putting speed/token cuts last; split into four focused tasks — (A) Speed, briefs & compaction (steps 1, 11–14 + `test/mockup-browser.test.mjs:42`), (B) Usage & Metrics (steps 2–5), (C) Skill discovery & allowlist (steps 6–7, 9), (D) Custom panel seats & UI polish (steps 8, 10) — and run A first so B–D already benefit from faster `bh` and leaner briefs.
-2. **Capture real ACP/`pi` usage before time-estimating (metrics/accuracy):** `Acp.message` (`mods/bot-herdr/engine/lib/runner.mjs:533-578`) drops OpenCode's `usage_update` and `piTurn` (`mods/bot-herdr/engine/lib/runner.mjs:367-387`, Dev's active harness) emits no usage, so Step 3's "all reported turns" fallback would apply Claude's 94.7%-cached token rate to non-Claude agents; parse ACP `usage_update` (and `pi` `message_end` usage if emitted) in Step 2, and base Step 3's time-only fallback rate on uncached tokens/min rather than total cached+uncached tokens.
-3. **Fix headless skill-allowlist plumbing and the Step 7 vs Step 12 conflict (skill discovery/turnaround):** `bh spawn` has no channel to pass per-task skill picks into headless `agentArgv`/`runAgent` (`mods/bot-herdr/engine/bh.mjs:699-703`, `mods/bot-herdr/engine/lib/team.mjs:193-200`, `mods/bot-herdr/engine/lib/agent.mjs:226-234`), `unticked` (`mods/bot-herdr/roster.js:195`) treats `[]` as "allow all", and enforcing an allowlist at spawn cannot stay off the spawn critical path unless precomputed; precompute per-role skill picks in `bh task new`/`bh plan new` (or batch `effort` + `skills` in one `c.ask` call in `mods/bot-herdr/engine/classifier/index.mjs:256-307`), persist them on the task/plan so `agent.mjs` unions pins + picks + respawn additions before `limitArgs`, and distinguish `null` (off/fallback) from `[]` (none needed).
-4. **Fix the Step 13 compaction race and add a universal handoff fallback (token efficiency):** `bh task status done` and `bh plan task` (`mods/bot-herdr/engine/bh.mjs:342-346,478-488`) run in short-lived CLI processes while `runAgent` overwrites `stateFile` at turn end (`mods/bot-herdr/engine/lib/agent.mjs:380-382`) and headless `-p` compaction (`mods/bot-herdr/engine/lib/runner.mjs:277-286`) is unverified; have Step 13 write a `compactPending` marker consumed by `agent.mjs` between turns, running native compaction where verified and otherwise resetting the session (`/new`, `mods/bot-herdr/engine/lib/agent.mjs:431-438`) seeded with a compact task-handoff summary so every harness gets the token savings.
-5. **Close skill-discovery and perf gaps for the real team (performance/skill discovery):** `bh team` runs Dev on `pi`, yet Step 6 adds only Gemini/Qwen/Antigravity to `SUPPORTED` (`mods/bot-herdr/engine/lib/tools.mjs:16`) while omitting `pi`/`omp` (`mods/bot-herdr/roster.js:45-46`), and misses the second `--refresh` cache bypass at `mods/bot-herdr/composer.js:533`; add `pi`/`omp` skill readers (or explicitly note their absence) in Step 6, drop `--refresh` in `mods/bot-herdr/composer.js:533` alongside `mods/bot-herdr/engine/lib/team.mjs:36`, and replace `projectRoot()`'s `git rev-parse` subprocess (`mods/bot-herdr/engine/lib/core.mjs:40-46`) with an upward `.git` walk in Step 12 for a cheaper speedup across every `bh` command.
-6. **Fix the Step 8 Advisor exclusion and Step 11 brief-trim target (UX/agent experience):** The draft's Assumptions exclude Advisor ("Scout and Advisor keep their current roles"), yet `Advisor` is a `role: "custom"` agent (`mods/bot-herdr/roster.js:11-18` has no `advisor` role) and `mods/bot-herdr/engine/roles/panel.md:4` hard-codes the four built-in seats, while Step 11's "knowledge pointer" (`mods/bot-herdr/engine/lib/agent.mjs:296`) only fires after mid-session edits whereas `mods/bot-herdr/engine/lib/team.mjs:119-120` injects 650+ bytes of `bh ask`/mockup HTML rules into every child and `mods/bot-herdr/engine/bh.mjs:691-697` duplicates `team.mjs:140`; remove Advisor from the Step 8 exclusion (update `panel.md:4` and `mods/bot-herdr/work.js:67,320,483,1793`), and target `team.mjs:119-120,124-127` + `bh.mjs:691-697` in Step 11.
+- `.bot-herdr/reports/advisor-panel.md` — planning panel advice and strategic questions for `p-20261121-0b9c` (read-only; no repository code changed).
 
 ## Questions
-1. [ADVISOR] How should we ship the 14 steps of this plan?
-   - Four small tasks, speed first (Recommended) — ship (1) Speed/briefs/compaction, (2) Usage & Metrics, (3) Skills & classifier allowlist, (4) Custom panel seats & UI polish as separate tasks with independent QA gates so each lands sooner and later tasks benefit from the speedups
-   - Two tasks — ship engine speedups, compaction and Metrics first, then skills, custom seats and UI polish
-   - One 14-step task — keep everything in a single task and single final QA gate as drafted
+1. [ADVISOR] How should bot-herdr provide fast cross-platform code search on Windows and Unix?
+   - Auto-detect in bh scripts — use `rg` when on PATH, fall back to `git grep` (including untracked files) and pure Node.js in non-git folders; keeps zero dependencies and works under standard access across all harnesses
+   - Auto-detect plus install helper — same 3-tier `bh scripts` backend, plus a guided check or command to install `rg` when missing
+   - Bundle ripgrep with mod — ship or manage platform `rg` binaries with bot-herdr for guaranteed speed out of the box, accepting larger installs and cross-OS binary maintenance
+   - Add CLIs to standard access — keep `bh scripts` thin and also allow agents to call `rg` or `git grep` directly under standard access
+
+2. [ADVISOR] How much of script and file triage should the classifier own versus deterministic scripts and Scout?
+   - Auto-pick scripts, deterministic files — wire existing `pickScripts` into `bh spawn` (batched with effort) and pass folder layout into task triage, while locating exact files via fast deterministic `bh` scripts and Scout
+   - Scripts plus folder triage — auto-pick scripts at spawn and have task triage narrow to 1–3 relevant directories from `repo_map`, leaving file-level selection to Scout and workers
+   - Scripts plus file shortlist — auto-pick scripts and add two-stage file triage (deterministic search/import pre-filter → classifier reranks top ~25 files) to seed briefs and skip Scout on small tasks
+   - Scripts and prompts only — keep the classifier out of script/file retrieval and rely on upgraded `bh` scripts plus tighter role prompts
 
 ## Notes
-- Settled user decisions (allowlist + pins, price-table estimation, Metrics as agent cards, Orchestrator compaction between tasks) are all preserved; points 2–4 only fix implementation mechanics where the current code would miscompute, race, or bypass them.
-- In Step 12, replacing `execFileSync("git", ["rev-parse", "--show-toplevel"])` in `mods/bot-herdr/engine/lib/core.mjs:40-46` with a pure filesystem `.git` walk (handling `.git` files in worktrees) removes a subprocess spawn from every `bh` call made by both agents and the UI's 2.5–4 s poll loops.
+
+### 1. Cross-platform tooling & `bh scripts` vs direct CLIs (facts & trade-offs)
+- **Ripgrep is already cross-platform:** `rg` ships native single binaries for Windows, macOS, and Linux — no separate Windows alternative is needed.
+- **Zero-dependency architecture:** `package.json` has zero runtime dependencies and `install.mjs:33-38` copies `mods/bot-herdr/` verbatim. Bundling native `rg` binaries across OS/arch breaks that model (repo bloat, Windows Defender/signing friction, upgrade burden).
+- **Why wrapping in `bh scripts` beats direct CLIs (especially for this team):**
+  - Under default `standard` access (`mods/bot-herdr/engine/lib/runner.mjs:252-268,477-484`), `standardCommands()` permits `node "<bh>"`, `hc`, and `git status|diff|log|show` — **not** `rg`, `fd`, `git grep`, or `findstr`.
+  - `bh team` runs Orchestrator/Design/QA/Advisor on `agy`, Dev on `pi`, and Research/Scout on `opencode`, so agents do not share uniform built-in search tools. Wrapping search behind `bh scripts run` gives every harness and OS identical output and zero permission prompts.
+- **Concrete Windows & non-git bugs/gaps in current scripts:**
+  - `mods/bot-herdr/engine/scripts/find_symbol.mjs:13,55`, `check_contract_breakage.mjs:67,71`, and `scripts/lib/common.mjs:114` hardcode `git grep`, which silently misses untracked files created mid-task and fails outside git repos.
+  - `mods/bot-herdr/engine/scripts/repo_map.mjs:12` and `common.mjs:123,192` hardcode `git ls-files` (fails in non-git folders).
+  - `mods/bot-herdr/engine/scripts/check_changed.mjs:29` calls Unix-only `sh("cat", ["pyproject.toml"])` instead of `readFileSync` — broken on Windows.
+  - `mods/bot-herdr/engine/scripts/find_symbol.mjs:29,66` parses matches with `hit.split(":")`, which breaks if a backend emits Windows drive-letter paths (`C:\...`); any new backend must emit repo-relative `/`-normalized paths.
+  - `mods/bot-herdr/engine/roles/scout.md:39` tells agents `"Prefer grep and find to locate code"` — on Windows `find` is `FIND.EXE`, and shell `grep`/`find` are blocked under standard access.
+
+### 2. Classifier triage reality (what works, what is unwired, and cost/latency traps)
+- **Script triage already exists — but is dead in automation:**
+  - `pickScripts()` (`mods/bot-herdr/engine/classifier/index.mjs:374-393`), `DEFAULTS.features.scripts: true` (`index.mjs:46`), and `bh scripts pick` (`mods/bot-herdr/engine/bh.mjs:639-644`) are implemented, **yet nothing in `bh task new`, `bh plan new`, or `bh spawn` calls `pickScripts()`**. Only `roles/worker.md:18` mentions it passively, so workers either skip it or pay an extra tool turn.
+  - **Low-cost fix:** Batch `pickScripts` with `scoreEffort` in a single `c.ask` call during `bh spawn` (mirroring `triageAndSkills` at `index.mjs:255-261`), injecting only the 1–3 matched script names + `usage` lines into the child's brief — zero extra round-trips and minimal brief bytes.
+- **File triage does not exist — and naive file triage is a trap:**
+  - `bh task new` (`bh.mjs:362`) calls `triageAndSkills(c, request, { roles })` without passing `layout`, leaving `triageState`'s `repository_layout` (`index.mjs:228`) unused.
+  - `LIMITS.choiceOptions` is `250` (`mods/bot-herdr/engine/classifier/limits.mjs:4`), whereas real repos have hundreds to tens of thousands of files (`bot-herdr` alone has 902).
+  - When a user runs the classifier on a local harness (`mods/bot-herdr/engine/classifier/harness.mjs:135`), every extra call spawns a CLI with up to 60 s timeout (though this machine currently uses OpenRouter Jev via `bh config`).
+  - A classifier reading only file paths cannot verify `path:line` contracts or hidden callers — blind path-picking risks steering workers to the wrong files. If classifier file triage is wanted, it should either (a) narrow to 1–3 folders from `repo_map` inside the existing `triageAndSkills` call, or (b) rerank a small deterministic shortlist (≤25 files) rather than raw repo paths, keeping Scout authoritative on full/complex tasks.
+
+### 3. Out-of-the-box, high-leverage retrieval upgrades (small code, large token savings)
+- **One shared 3-tier search/list helper in `mods/bot-herdr/engine/scripts/lib/common.mjs`:** Add `searchFiles` / `listProjectFiles` (`rg` on PATH → `git grep --untracked` / `git ls-files` → pure Node `fs` fallback respecting `.gitignore`/noise). Every existing script and any new script inherits fast cross-platform + non-git support with zero dependencies.
+- **Collapse 3-turn read loops into 1 call:** Today agents burn multiple turns (`find_symbol` → `outline_file` → `read` line range), bloating long resumed sessions (where `bh metrics` shows cached context dominates spend). Three tiny, composable wins:
+  1. Surface `outline_file` (`scripts/outline_file.mjs`) in `roles/global.md:26` and `roles/scout.md:35-36` (it already exists in pure Node and isn't even mentioned there).
+  2. Add a token-budgeted `search_code` script (literal/regex search with glob filters, noise exclusion, optional context lines, and hard output caps) to fill the gap between whole-word `find_symbol` and raw shell grep.
+  3. Add `--body` to `find_symbol` (reusing `declarations()` in `common.mjs:257`) or a multi-range `read_slice` script so an agent fetches exact symbol bodies or batched `file:start-end` slices in one tool call.
+- **Deterministic `locate` / `context_pack` script (0 classifier tokens):** Combine symbol/keyword matches + `importGraph` (`common.mjs:232`) + `testsFor` (`common.mjs:123`) into a compact ranked shortlist of files + key declarations. Useful standalone for Scout/workers AND doubles as Stage-1 pre-filter if classifier file reranking is chosen.
+- **Scope boundary:** Keep UI untouched (`mods/bot-herdr/settings.js`, Design domain) unless Question 2 adds a new classifier feature toggle (e.g. `files`) or Question 1 adds a Settings tool-status/install indicator.
+
+### 4. Advisor "Done when" criteria for the plan
+- One unified cross-platform search/list primitive tested across all 3 tiers (`rg` mocked/present, `git grep` with untracked files, pure Node non-git fallback) and Windows path edge cases (`C:\...`, backslashes, no Unix-only `cat`/`grep`/`find`).
+- Zero unapproved dependencies added to `package.json` (unless bundling is explicitly chosen).
+- Any new classifier triage adds zero extra round-trips on the `bh task new` / `bh spawn` critical path and degrades cleanly when the classifier is off or on a slow local harness.
+- Role prompts (`global.md`, `scout.md`, `worker.md`, `orchestrator.md`) teach the exact new retrieval path and drop Unix-only `grep`/`find` phrasing.
+- Before/after brief size and `bh` latency checked via `node test/bench/baseline.mjs`.
 
 ## Brief Check
-- Reviewed draft plan and all five panel reports: met (`bh plan show p-20261120-7rw6`, `.bot-herdr/reports/{dev,design,qa,research}-panel.md`, `design-ui.md`).
-- At most 6 points, most important first, each one line with `path:line` evidence and concrete draft change: met (6 points above).
-- Covered sequencing/splitting, all user goals (performance, token efficiency, skill discovery, UX, agent experience, turnaround, metrics), and cheaper alternatives: met.
-- Did not reopen settled user decisions: met.
-- At most one user question, only for a genuinely user-owned choice: met (1 question on splitting/shipping).
-- Report written to `.bot-herdr/reports/advisor-panel.md`: met.
+- Reviewed `mods/bot-herdr/engine/scripts/`, `mods/bot-herdr/engine/classifier/`, and `mods/bot-herdr/engine/roles/`: met.
+- Weighed architecture, YAGNI, token/latency trade-offs (wrapping in `bh scripts` vs agent-direct CLIs, bundling vs auto-detecting tools, classifier file/script triage cost vs payoff vs Scout): met.
+- Brought at most two sharp strategic questions in Planning Panel format: met (2 questions, 4 neutral options each).
+- Read-only (no project code modified) and written to `.bot-herdr/reports/advisor-panel.md`: met.
 
 ## Verification
-- `bh plan show p-20261120-7rw6` — read round 4 draft (14 steps, assumptions, open comments).
-- `bh team` — verified live roster (Orchestrator/Design on `claude`, Dev on `pi`, QA/Advisor on `agy`, Research/Scout on `opencode`).
-- `bh config` — verified classifier enabled via OpenRouter.
-- `bh scripts run find_symbol SEATS` / `seatsNow` / `piTurn` and direct reads of `runner.mjs`, `agent.mjs`, `team.mjs`, `tools.mjs`, `bh.mjs`, `core.mjs`, `roster.js`, `composer.js`, `work.js`, `panel.md`, `orchestrator.md` — verified every cited `path:line`.
+- `node "/home/athi/.config/herdr-app/mods/bot-herdr/engine/bh.mjs" plan show p-20261121-0b9c` — verified round 0, no draft yet.
+- `node "/home/athi/.config/herdr-app/mods/bot-herdr/engine/bh.mjs" scripts run repo_map` — verified 902 files, 154 under `mods/bot-herdr/`.
+- `node "/home/athi/.config/herdr-app/mods/bot-herdr/engine/bh.mjs" team` — verified live harnesses (`agy`, `pi`, `opencode`).
+- `node "/home/athi/.config/herdr-app/mods/bot-herdr/engine/bh.mjs" config` — verified classifier enabled on OpenRouter.
+- `git grep` + direct reads of `engine/classifier/{index,client,harness,limits}.mjs`, `engine/scripts/{find_symbol,repo_map,outline_file,check_contract_breakage,affected_packages,find_tests_for,find_test_fixtures}.mjs`, `engine/scripts/lib/common.mjs`, `engine/bh.mjs`, `engine/lib/{scripts,core,team,agent,runner}.mjs`, `engine/roles/{global,scout,worker,orchestrator,panel,dev,qa}.md`, `package.json`, `install.mjs`, `settings.js` — verified every cited `path:line`.

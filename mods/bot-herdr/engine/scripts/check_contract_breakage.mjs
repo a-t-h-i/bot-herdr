@@ -2,8 +2,8 @@
 // purpose: list breaking changes to the public surface since the base: exported functions, classes, types and constants removed, renamed or with a changed signature, and the files that still use each
 // usage: node {script} [--base <ref>]
 import { readFileSync } from "node:fs";
-import { basename, dirname, join, normalize } from "node:path";
-import { baseRef, changedFiles, isCode, isNoise, isTest, lines, parseArgs, projectRoot, sh } from "./lib/common.mjs";
+import { basename, dirname, join } from "node:path";
+import { baseRef, changedFiles, isCode, isNoise, isTest, lines, parseArgs, projectRoot, searchProject, sh, stripBomAndCr, toPosix } from "./lib/common.mjs";
 
 const { flags } = parseArgs();
 const root = projectRoot();
@@ -13,7 +13,7 @@ const old = base === "HEAD" ? "HEAD" : base;
 /** Exported names and their one-line signature (whitespace squeezed). */
 function surface(text, file) {
   const out = new Map();
-  const rows = text.split("\n");
+  const rows = stripBomAndCr(text).split("\n");
   const sig = (index) => {
     // A signature runs while its brackets are open, at most a few lines.
     let joined = "";
@@ -50,36 +50,38 @@ function surface(text, file) {
   return out;
 }
 
-const read = (file) => { try { return readFileSync(join(root, file), "utf8"); } catch { return undefined; } };
+const read = (file) => { try { return stripBomAndCr(readFileSync(join(root, file), "utf8")); } catch { return undefined; } };
 const before = (file) => {
-  const shown = sh("git", ["show", `${old}:${file}`], { cwd: root });
+  const shown = sh("git", ["-c", "core.quotepath=false", "show", `${old}:${file}`], { cwd: root });
   return shown.code === 0 ? shown.out : undefined;
 };
-const deleted = lines(sh("git", ["diff", "--name-only", "--diff-filter=D", ...(base === "HEAD" ? ["HEAD"] : [base])], { cwd: root }).out);
+const deleted = lines(sh("git", ["-c", "core.quotepath=false", "diff", "--name-only", "--diff-filter=D", ...(base === "HEAD" ? ["HEAD"] : [base])], { cwd: root }).out).map(toPosix);
 // Renamed files count as a removal at the old path.
-const renamed = lines(sh("git", ["diff", "--name-status", "-M", "--diff-filter=R", ...(base === "HEAD" ? ["HEAD"] : [base])], { cwd: root }).out).map((row) => row.split("\t")[1]);
+const renamed = lines(sh("git", ["-c", "core.quotepath=false", "diff", "--name-status", "-M", "--diff-filter=R", ...(base === "HEAD" ? ["HEAD"] : [base])], { cwd: root }).out).map((row) => toPosix(row.split("\t")[1]));
 const files = [...new Set([...changedFiles(root, base), ...deleted, ...renamed])].filter((file) => isCode(file) && !isTest(file) && !isNoise(file));
 
 /** Files that import this module (by its file name), else, outside JS/TS, every file naming the symbol. */
 const importers = new Map();
 const users = (name, file) => {
   if (!/\.(m|c)?[jt]sx?$/.test(file)) {
-    return lines(sh("git", ["grep", "-l", "-I", "-w", name, "--", "."], { cwd: root }).out).filter((hit) => hit !== file && isCode(hit) && !isNoise(hit));
+    const found = searchProject(root, { pattern: name, regex: false, word: true, max: Infinity });
+    return found.ok ? [...new Set(found.matches.map((hit) => hit.file))].filter((hit) => hit !== file && isCode(hit) && !isNoise(hit)) : [];
   }
   if (!importers.has(file)) {
     const stem = basename(file).replace(/\.[^.]+$/, "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const hits = lines(sh("git", ["grep", "-l", "-I", "-E", `(from|import|require\\().*['"/]${stem === "index" ? basename(dirname(file)) : stem}(\\.[a-z]+)?['"]`, "--", "."], { cwd: root }).out);
+    const found = searchProject(root, { pattern: `(from|import|require\\().*['"/]${stem === "index" ? basename(dirname(file)) : stem}(\\.[a-z]+)?['"]`, regex: true, max: Infinity });
+    const hits = found.ok ? [...new Set(found.matches.map((hit) => hit.file))] : [];
     const target = file.replace(/\.[^./]+$/, "").replace(/\/index$/, "");
     // A relative import must resolve to this file; a package or alias import is kept, it cannot be checked here.
     const points = (hit) => {
-      const text = readFileSync(join(root, hit), "utf8");
+      const text = stripBomAndCr(readFileSync(join(root, hit), "utf8"));
       return [...text.matchAll(/(?:from|import|require\()\s*['"]([^'"]+)['"]/g)].some(([, spec]) => !spec.startsWith(".")
         ? spec.endsWith(target.split("/").pop())
-        : normalize(join(dirname(hit), spec)).replace(/\.[^./]+$/, "").replace(/\/index$/, "") === target);
+        : toPosix(join(dirname(hit), spec)).replace(/\.[^./]+$/, "").replace(/\/index$/, "") === target);
     };
     importers.set(file, hits.filter((hit) => hit !== file && !isNoise(hit) && points(hit)));
   }
-  return importers.get(file).filter((hit) => name === "default" || new RegExp(`\\b${name.replace(/\$/g, "\\$")}\\b`).test(readFileSync(join(root, hit), "utf8")));
+  return importers.get(file).filter((hit) => name === "default" || new RegExp(`\\b${name.replace(/\$/g, "\\$")}\\b`).test(stripBomAndCr(readFileSync(join(root, hit), "utf8"))));
 };
 
 let breaks = 0;

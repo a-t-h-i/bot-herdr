@@ -3,7 +3,7 @@
 // usage: node {script} [--base <ref>]
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { baseRef, changedFiles, detect, parseArgs, projectRoot, readJson } from "./lib/common.mjs";
+import { baseRef, changedFiles, detect, parseArgs, projectRoot, readJson, toPosix } from "./lib/common.mjs";
 
 const { flags } = parseArgs();
 const root = projectRoot();
@@ -27,7 +27,7 @@ function patterns() {
 
 /** Folders a workspace glob names (`*` one level, `**` any depth). */
 function expand(pattern) {
-  const parts = pattern.replace(/^\.\//, "").replace(/\/$/, "").split("/");
+  const parts = toPosix(pattern).replace(/^\.\//, "").replace(/\/$/, "").split("/");
   let dirs = [""];
   for (const part of parts) {
     const next = [];
@@ -35,15 +35,15 @@ function expand(pattern) {
       const here = join(root, dir);
       if (part === "**") {
         const walk = (rel, depth) => {
-          next.push(rel);
+          next.push(toPosix(rel));
           if (depth > 4) return;
           for (const name of safeList(join(root, rel))) if (!name.startsWith(".") && name !== "node_modules") walk(join(rel, name), depth + 1);
         };
         walk(dir, 0);
       } else if (part.includes("*")) {
         const re = new RegExp(`^${part.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`);
-        for (const name of safeList(here)) if (re.test(name)) next.push(join(dir, name));
-      } else if (existsSync(join(here, part))) next.push(join(dir, part));
+        for (const name of safeList(here)) if (re.test(name)) next.push(toPosix(join(dir, name)));
+      } else if (existsSync(join(here, part))) next.push(toPosix(join(dir, part)));
     }
     dirs = next;
   }
@@ -68,7 +68,7 @@ for (const dir of new Set(patterns().flatMap(expand))) {
     ...[...cargo.matchAll(/^\s*([\w-]+)\s*=\s*\{[^}]*path\s*=/gm)].map((m) => m[1]),
     ...[...gomod.matchAll(/^\s*(?:require\s+)?(\S+)\s+v[\d.]+/gm)].map((m) => m[1]),
   ]);
-  packages.set(name, { name, dir, deps, json: Boolean(json), cargo: Boolean(cargo), go: Boolean(gomod) });
+  packages.set(name, { name, dir: toPosix(dir), deps, json: Boolean(json), cargo: Boolean(cargo), go: Boolean(gomod) });
 }
 if (packages.size === 0) {
   console.log("Not a monorepo: no workspaces declared (package.json workspaces, pnpm-workspace.yaml, Cargo workspace or go.work). The whole project is one package.");

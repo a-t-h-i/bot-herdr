@@ -23,7 +23,7 @@ The Orchestrator knows the whole task; you may be a smaller model that sees only
 
 ## Working fast
 
-Start from the brief's paths and `path:line` anchors, then `bh scripts run repo_map` and `bh scripts run find_symbol`, searching only for what they do not answer and verifying what you rely on. Batch independent reads and searches in one turn, read the lines you need rather than whole files, and re-read only what changed.
+Start from the brief's paths and `path:line` anchors, then the retrieval scripts, run as `bh scripts run <name>`: `repo_map` (layout), `locate` (file shortlist), `search_code`, `find_symbol` (with `--body`), `outline_file`, `read_slice`, `find_files`, and `ast_search` for syntax. Search only for what they do not answer and verify what you rely on. Batch independent reads and searches in one turn, read the lines you need rather than whole files, and re-read only what changed.
 
 ## Hard rules
 

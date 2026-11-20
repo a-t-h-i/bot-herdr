@@ -7,6 +7,7 @@
 
 import { join } from "node:path";
 import { DATA, readJson } from "../lib/core.mjs";
+import { isNoise, listProjectFiles } from "../scripts/lib/common.mjs";
 import { choice, choiceOf, noul, score, scoreOf, systemOne, yesOf } from "./client.mjs";
 import { clip } from "./limits.mjs";
 import { assessQaRisk } from "./qa-risk.mjs";
@@ -227,6 +228,17 @@ function triageQuestions() {
 /** The triage's state: the request, and the repository layout when the caller has one. */
 const triageState = (request, layout = []) => ({ request: clip(request, 6000), ...(layout.length ? { repository_layout: layout.join(", ") } : {}) });
 
+/** Compact `folder (files)` lines for the triage: folders up to three levels deep, biggest first. */
+export function repoLayout(root, max = 40) {
+  const counts = new Map();
+  for (const file of listProjectFiles(root)) {
+    if (file.startsWith(".bot-herdr/") || isNoise(file)) continue;
+    const dir = file.split("/").slice(0, -1).slice(0, 3).join("/") || ".";
+    counts.set(dir, (counts.get(dir) ?? 0) + 1);
+  }
+  return [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, max).map(([dir, n]) => `${dir} (${n})`);
+}
+
 /** The triage from the classifier's answers, or the rules when it did not answer the size. */
 function triageFrom(r, request) {
   const size = scoreOf(r?.answers, "size");
@@ -339,14 +351,18 @@ const EFFORT_TEXT = [
   "complex: design decisions, cross-cutting or concurrent changes, security, or an unclear root cause",
 ];
 
+const effortState = (step, context) => ({ step: clip(step, 6000), ...(context ? { task: clip(context, 3000) } : {}) });
+const effortQuestion = () => score("How much reasoning does an experienced engineer need to do `step` well, given `task`?", EFFORT_TEXT);
+
+function effortFrom(answer) {
+  const s = scoreOf({ effort: answer }, "effort");
+  return s ? { level: EFFORT_LEVELS[Math.max(0, Math.min(3, s.level))], confidence: s.confidence } : null;
+}
+
 export async function scoreEffort(c, step, context = "") {
   if (!c.enabled("effort") || !String(step).trim()) return null;
-  const r = await c.ask("effort", {
-    state: { step: clip(step, 6000), ...(context ? { task: clip(context, 3000) } : {}) },
-    questions: { effort: score("How much reasoning does an experienced engineer need to do `step` well, given `task`?", EFFORT_TEXT) },
-  });
-  const s = scoreOf(r?.answers, "effort");
-  return s ? { level: EFFORT_LEVELS[Math.max(0, Math.min(3, s.level))], confidence: s.confidence } : null;
+  const r = await c.ask("effort", { state: effortState(step, context), questions: { effort: effortQuestion() } });
+  return effortFrom(r?.answers?.effort);
 }
 
 /**
@@ -371,23 +387,55 @@ export async function qaRisk(c, input) {
 
 // ── Scripts for a step ──────────────────────────────────────────────────────────────────────
 
-export async function pickScripts(c, step, candidates) {
-  if (!c.enabled("scripts") || !candidates.length) return null;
-  const list = candidates.slice(0, 24);
+const SCRIPTS_MAX = 24;
+
+/** The script question's candidates (capped) and their criteria keys. */
+export function scriptCandidates(candidates) {
+  const list = (candidates ?? []).slice(0, SCRIPTS_MAX);
   const criteria = Object.fromEntries(list.map((s, i) => [`scripts.${i}`, `${s.name}: ${s.purpose || "no purpose line"}`]));
   criteria.none = "No script does part of this step or checks it.";
-  const r = await c.ask("scripts", {
-    state: { step: clip(step, 4000) },
-    questions: { fit: choice("Which script does part of `step` or checks it? Pick the best fit, or `none`.", criteria) },
-  });
-  const answer = r?.answers?.fit;
-  if (answer?.type !== "choice" || answer.choice === "none") return answer ? [] : null;
-  const probs = answer.probabilities ?? {};
-  const chosen = Object.entries(probs)
-    .filter(([key, p]) => key === answer.choice || (key.startsWith("scripts.") && Number(p) >= 0.6))
-    .sort((a, b) => (b[0] === answer.choice) - (a[0] === answer.choice) || Number(b[1]) - Number(a[1]))
-    .slice(0, 3)
-    .map(([key]) => list[Number(key.slice(8))])
-    .filter(Boolean);
-  return chosen.length ? chosen : [list[Number(answer.choice.slice(8))]].filter(Boolean);
+  return { list, criteria };
+}
+
+export function scriptQuestion(candidates) {
+  return choice("Which script does part of `step` or checks it? Pick the best fit, or `none`.", scriptCandidates(candidates).criteria);
+}
+
+/**
+ * The picked scripts, validated against `list`: the best pick first, then every other candidate
+ * the answer was at least 60% sure of, highest first, at most three. `[]` only when the answer
+ * said `none`; `null` when there is no usable answer, so the caller falls back to keywordPick.
+ */
+function scriptsFrom(answer, list) {
+  if (!answer || answer.type !== "choice") return null;
+  if (answer.choice === "none") return [];
+  const index = (key) => (/^scripts\.\d+$/.test(String(key)) ? Number(String(key).slice(8)) : -1);
+  const primary = list[index(answer.choice)];
+  const others = Object.entries(answer.probabilities ?? {})
+    .filter(([key, p]) => String(key).startsWith("scripts.") && list[index(key)] && Number(p) >= 0.6)
+    .sort((a, b) => Number(b[1]) - Number(a[1]))
+    .map(([key]) => list[index(key)]);
+  const picked = [...new Set([...(primary ? [primary] : []), ...others])].slice(0, 3);
+  return picked.length > 0 ? picked : null;
+}
+
+export async function pickScripts(c, step, candidates) {
+  if (!c.enabled("scripts") || !candidates.length) return null;
+  const { list } = scriptCandidates(candidates);
+  const r = await c.ask("scripts", { state: { step: clip(step, 4000) }, questions: { fit: scriptQuestion(candidates) } });
+  return scriptsFrom(r?.answers?.fit, list);
+}
+
+/**
+ * Effort and scripts for one step, in one classifier request when both are wanted. A wanted answer
+ * the classifier did not give is `null` (the caller falls back to its own rule); `scripts: []`
+ * means it answered `none`.
+ */
+export async function scoreEffortAndScripts(c, step, { context = "", candidates = [], wantEffort = true, wantScripts = true } = {}) {
+  const effort = Boolean(wantEffort && c.enabled("effort") && String(step).trim());
+  const scripts = Boolean(wantScripts && c.enabled("scripts") && candidates.length);
+  if (!effort && !scripts) return { effort: null, scripts: null };
+  const questions = { ...(effort ? { effort: effortQuestion() } : {}), ...(scripts ? { fit: scriptQuestion(candidates) } : {}) };
+  const r = await c.ask(effort ? "effort" : "scripts", { state: effortState(step, context), questions });
+  return { effort: effort ? effortFrom(r?.answers?.effort) : null, scripts: scripts ? scriptsFrom(r?.answers?.fit, scriptCandidates(candidates).list) : null };
 }

@@ -17,7 +17,7 @@ export const canClassify = (key) => Object.hasOwn(CLASSIFIER_HARNESSES, key);
 
 const ANSWER = {
   noul: '{"type":"noul","noul":<probability 0 to 1 that the answer is yes>}',
-  choice: '{"type":"choice","choice":"<one key>","probabilities":{"<key>":<0 to 1>,...},"confidence":<0 to 1>}',
+  choice: '{"type":"choice","choice":"<the best key>","probabilities":{"<key>":<0 to 1>,...},"confidence":<0 to 1>}',
   score: '{"type":"score","score":<the level\'s number, counting from 0>,"confidence":<0 to 1>}',
 };
 
@@ -31,6 +31,7 @@ export function promptFor(request) {
       if (q.criteria.true) lines.push(`- yes: ${q.criteria.true}`);
       if (q.criteria.false) lines.push(`- no: ${q.criteria.false}`);
     }
+    if (q.type === "choice") lines.push("If several keys fit, give up to 3 of them 0.8 or more in probabilities; choice is the best.");
     lines.push(`Answer as: ${ANSWER[q.type] ?? "{}"}`);
     return lines.join("\n");
   });
@@ -49,6 +50,25 @@ export function promptFor(request) {
 }
 
 const prob = (x) => (typeof x === "number" && Number.isFinite(x) ? Math.min(1, Math.max(0, x)) : undefined);
+
+/** A choice answer with only valid keys: a multi-pick in `choices` keeps each high probability. */
+function choiceAnswer(a, criteria = {}) {
+  const valid = (key) => typeof key === "string" && Object.hasOwn(criteria, key);
+  const probabilities = {};
+  if (a && typeof a === "object" && a.probabilities && typeof a.probabilities === "object") {
+    for (const [key, value] of Object.entries(a.probabilities)) {
+      const p = prob(value);
+      if (valid(key) && p !== undefined) probabilities[key] = p;
+    }
+  }
+  const picks = (Array.isArray(a?.choices) ? a.choices : []).filter(valid);
+  for (const key of picks) probabilities[key] = Math.max(probabilities[key] ?? 0, 0.8);
+  const asked = typeof a === "string" ? a : a?.choice;
+  const choice = valid(asked) ? asked : picks[0];
+  if (!choice) return null;
+  probabilities[choice] ??= 0.8;
+  return { type: "choice", choice, probabilities, confidence: prob(a?.confidence) ?? 0.8 };
+}
 
 /** The model's reply as System One answers: every question it answered, each with its type. */
 export function readAnswers(text, request) {
@@ -70,10 +90,8 @@ export function readAnswers(text, request) {
       const p = typeof a === "boolean" ? Number(a) : prob(typeof a === "object" ? a.noul ?? a.probability : a);
       if (p !== undefined) answers[key] = { type: "noul", noul: p };
     } else if (q.type === "choice") {
-      const choice = typeof a === "string" ? a : a.choice;
-      if (typeof choice !== "string" || !(choice in (q.criteria ?? {}))) continue;
-      const probabilities = typeof a === "object" && a.probabilities && typeof a.probabilities === "object" ? a.probabilities : { [choice]: 0.8 };
-      answers[key] = { type: "choice", choice, probabilities, confidence: prob(a.confidence) ?? 0.8 };
+      const answer = choiceAnswer(a, q.criteria ?? {});
+      if (answer) answers[key] = answer;
     } else if (q.type === "score") {
       const score = typeof a === "number" ? a : Number(a.score);
       if (Number.isFinite(score)) answers[key] = { type: "score", score, confidence: prob(a.confidence) ?? 0.8 };

@@ -1,17 +1,22 @@
 #!/usr/bin/env node
 // purpose: a short map of the project: folders with file counts, languages, entry points, test folders and config files, to orient before reading code
-// usage: node {script} [folder] [--depth <n>]
+// usage: node {script} [folder] [--depth <n>] [--include-meta]
 import { existsSync, readFileSync } from "node:fs";
 import { extname, join } from "node:path";
-import { detect, isTest, lines, parseArgs, projectRoot, sh } from "./lib/common.mjs";
+import { detect, fail, isTest, listProjectFiles, parseArgs, projectRoot, toPosix } from "./lib/common.mjs";
 
-const { flags, rest } = parseArgs();
+const { flags, rest } = parseArgs(process.argv.slice(2), ["include-meta"]);
 const root = projectRoot();
-const under = (rest[0] ?? "").replace(/^\.\/?/, "").replace(/\/$/, "");
+const under = toPosix(rest[0] ?? "").replace(/\/$/, "");
 const depth = Number(flags.depth ?? 2);
-const files = lines(sh("git", ["ls-files", "--cached", "--others", "--exclude-standard", ...(under ? ["--", under] : [])], { cwd: root }).out);
+let files;
+try {
+  files = listProjectFiles(root, { paths: under ? [under] : [], includeMeta: Boolean(flags["include-meta"]) });
+} catch (error) {
+  fail(error.message);
+}
 if (files.length === 0) {
-  console.log("No tracked files here.");
+  console.log("No files here.");
   process.exit(0);
 }
 const tool = detect(root);

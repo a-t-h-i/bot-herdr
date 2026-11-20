@@ -1,50 +1,59 @@
-# Research panel — outside facts (bot-herdr mod improvements)
+# Research Panel Report
 
 ## Summary
 
-- Skill storage/discovery is readable per harness: Claude Code `~/.claude/skills` + `.claude/skills` + plugins, Codex `.agents/skills` (CWD→root, `$HOME/.agents/skills`, `$CODEX_HOME/skills`), OpenCode `~/.config/opencode/skills` + `~/.claude/skills` + `~/.agents/skills` + project `.opencode/.claude/.agents/skills`, Gemini CLI `~/.gemini/skills` + `.gemini/skills` + `~/.agents/skills` aliases, Qwen Code `~/.qwen/skills` + `.qwen/skills` + `~/.agents/skills`, Antigravity `~/.gemini/config/skills/` + `<workspace>/.agents/skills/` (all SKILL.md, name/description frontmatter, progressive disclosure).
-- Token usage: Claude Code parses the stream-json result event (`usage.input_tokens/output_tokens/cache_creation_input_tokens/cache_read_input_tokens`, `total_cost_usd`, `duration_ms`) and Codex parses `turn.completed` (`usage.input_tokens/output_tokens/cached_input_tokens`) — both already wired in bot-herdr. OpenCode reports usage over ACP (`usage_update`, ACP RDF, used/size/cost) but bot-herdr's Acp.message ignores it; OpenCode itself shows it via the prompt footer, sidebar, `/usage`, `opencode stats` (v2.3.2). Gemini CLI, Qwen Code and Antigravity: **not verified** (see Unverified).
-- Token-efficiency best practice is well documented: prompt caching (Anthropic "Optimizing for cost and intelligence", 2026-10-21; Codex/OpenCode both report cached input), context trimming/compaction (Anthropic "Effective context engineering for AI agents", 2025-09-29; IAMaestro, Google ADK blog, Microsoft Learn), model routing ladders (PiotrCzerwinski, 2026-09-03; Anthropic), subagents for isolation, and per-harness findings: OpenCode re-sends the whole session every request (LeanOps, 2026-11-18).
+Yes — ripgrep is already the cross-platform answer ("ripgrep for Unix, native support for Windows" is really the same tool: BurntSushi/ripgrep has native Windows MSVC/GNU/aarch64 binaries). I verified comparable alternatives for file discovery (fd), AST/structural search (ast-grep, tree-sitter) and symbol lookup (Universal Ctags, tree-sitter "tags" queries), all checked for Windows compatibility, licensing and Node bundling options. The mod's classifier does not select search tools — it triages task size/kind only.
 
 ## Changes
 
-None — research is read-only. Files read locally: `mods/bot-herdr/engine/lib/tools.mjs`, `mods/bot-herdr/roster.js`, `mods/bot-herdr/models.js`, `mods/bot-herdr/engine/lib/team.mjs`, `mods/bot-herdr/engine/lib/runner.mjs`, `mods/bot-herdr/engine/lib/agent.mjs`, `mods/bot-herdr/engine/lib/models.mjs`, `mods/bot-herdr/engine/lib/plans.mjs`, `mods/bot-herdr/engine/classifier/{index,harness,client}.mjs`, `mods/bot-herdr/engine/bh.mjs`.
+None — read-only research of the repo (`bh scripts run repo_map`, `bh plan show p-20261121-0b9c`, grep for "classifier"). No files modified.
 
-Web sources (URL + date verified): code.claude.com/docs/en/skills (2026), code.claude.com/docs/en/headless (2026), learn.chatgpt.com/docs/build-skills (Codex skills), geminicli.com/docs/cli/skills (2026-04-30), qwenlm.github.io/qwen-code-docs/en/users/features/skills, opencode.ai/docs/skills (2026-11-02), medium.com/google-cloud/confused-about-where-to-put-your-agent-skills-ea778f3c64f3 (Mar 2026), agentskills.io (2026) + qai.io/docs/agent-skills (checked 26 Oct 2026), developers.openai.com/codex/noninteractive + openai/codex exec_events.rs (Codex usage), agentclientprotocol.com/rfds/session-usage (2026-06), leanopstech.com/blog/opencode-token-usage (Nov 18 2026), platform.claude.com/docs/en/build-with-claude/prompt-caching (2026-10-21), platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence (2026-10-21), anthropic.com/engineering/effective-context-engineering-for-ai-agents (2025-09-29), developers.googleblog.com/architecting-efficient-context-aware-multi-agent-framework-for-production (2025-12-04), getcollate.io/blog/token-efficiency-in-production-multi-agent-platform (2026-10-16), iamaestro.academy/.../multi-agent-orchestration/3-3 (2026), piotrczerwinski.dev/writing/model-routing-multi-agent-work (2026-09-03), arXiv:2607.06906 (2026-07-08, harness-effect paper), arXiv:2601.06007 (2026-01-06, cache control paper), learn.microsoft.com/en-us/azure/architecture/ai-ml/guide/ai-agent-design-patterns (2026-02-12).
+## Brief Check
 
-## Brief Check (user's "Done when")
+- Tools usable with the mod, Unix + Windows:
+  - ripgrep — `BurntSushi/ripgrep`; latest release 15.2.0 (published 2026-07-15); Windows assets: ripgrep-15.2.0-{x86_64,i686,aarch64}-pc-windows-msvc.zip and -x86_64-pc-windows-gnu.zip (https://github.com/BurntSushi/ripgrep/releases/tag/15.2.0); license key "unlicense" (repo endpoint). npm bundle: `@vscode/ripgrep` 1.18.0, MIT, published 2026-05-07 (registry.npmjs.org/@vscode/ripgrep), per-platform optional deps @vscode/ripgrep-win32-x64 etc.
+  - ugrep — `Genivia/ugrep`; "Cross-platform support – runs on Linux, macOS, and Windows"; ships x86/x64 Windows binaries in releases (ugrep-windows-x64.zip per Scoop bucket manifest); BSD-3. Caveat: needs PCRE2 installed (release notes: "Building ugrep on Windows takes some serious effort to install and compile PCRE2").
+  - tree-sitter — `tree-sitter/tree-sitter`; v0.27.2 (published 2026-11-07); MIT; `tree-sitter-cli-windows-x64.zip` etc. in the CLI release (https://github.com/tree-sitter/tree-sitter/releases/tag/v0.27.2); npm: `tree-sitter-cli` (https://npmjs.com/package/tree-sitter-cli), plus `web-tree-sitter` (WASM, runs anywhere).
+- Symbol lookup:
+  - Universal Ctags — `universal-ctags/ctags`; v6.2.1 (published 2025-10-25); license GPL-2.0 (repo endpoint); official release is a source tarball — no official prebuilt Windows binaries; Windows builds are community/MinGW/MSYS2 builds.
+  - tree-sitter — "tags" queries per grammar: grammar-based symbol discovery, works cross-platform (see above).
+- AST/structural search:
+  - ast-grep — `ast-grep/ast-grep`; 0.51.3 (published 2026-11-16); MIT; Windows assets app-{x86_64,aarch64,i686}-pc-windows-msvc.zip (https://github.com/ast-grep/ast-grep/releases/tag/0.51.3); npm: `@ast-grep/cli` (https://npmjs.com/package/@ast-grep/cli), binary packages e.g. @ast-grep/cli-win32-x64-msvc, requires Node.js 20+.
+- File discovery (Unix alternatives to find):
+  - fd — `sharkdp/fd` ("A simple, fast and user-friendly alternative to 'find'"); v10.5.2 (published 2026-11-07); Apache-2.0; Windows assets fd-v10.5.2-{x86_64,i686,aarch64}-pc-windows-msvc.zip and -gnullvm variant (https://github.com/sharkdp/fd/releases/tag/v10.5.2); npm: `fd-find` (https://npmjs.com/package/fd-find, pablopunk — downloads official fd releases).
+  - `rg --files` — file listing is built into ripgrep (cross-platform).
+- Fallbacks: git grep (internal search, cross-platform); GNU grep + GNU find on Unix; on Windows: `findstr` (cmd), PowerShell `Select-String` (grep equivalent) + `Get-ChildItem`; Unix tools on Windows via WSL/MSYS2/Cygwin; cscope (C-focused, less maintained).
 
-1. **Performance** — Met as input: OpenCode re-sends the whole session each request (98% of input is loop re-read, LeanOps 2026-11-18); Anthropic says caching is the first lever (SWE-bench Pro: 3.1–3.3× cost with caching, platform.claude.com 2026-10-21). Subagents on cheap models, one new session per task, few MCP servers = the documented OpenCode waste list.
-2. **Token efficiency** — Met as input: Anthropic's caching/trimming/batching levers (prompt-caching page + optimizing-for-cost-and-intelligence, 2026-10-21); Codex reports `cached_input_tokens` on every turn (developers.openai.com/codex/noninteractive; 99.4% hit rate in the OpenAI gist gist.github.com/alexfazio/359c17d84cb6a5af12bac88fa1db9770).
-3. **Skill discovery** — Met for Claude/Codex/OpenCode (`SUPPORTED` in engine/lib/tools.mjs, verified: `node engine/bh.mjs tools claude` returns the user's skills from `~/.claude/skills`); paths/formats for Gemini CLI, Qwen Code, Antigravity added from docs (see table above). **Not met: tools.mjs has no readers for gemini/qwen/antigravity** — they are supported harnesses (engine/roster.js HEADLESS, engine/models.mjs) but `SUPPORTED = ["claude", "codex", "opencode"]` and the repo's own comment points there.
-4. **User experience / 5. Agent experience / 6. Turnaround time** — No research findings; see Notes for questions.
-5. **7. Metrics dashboard** — Data sources exist: `bh usage` (per agent+model: turns, input/output/cache, cost, minutes — engine/lib/bh.mjs usageByModel), per-step usage (engine/lib/tasks.mjs usageTotals), agents.json. What does not exist: a tab that aggregates them, and OpenCode/Gemini/Qwen/Antigravity per-turn usage records (bot-herdr records none — engine/lib/agent.mjs recordUsage is called only with parsed usage).
+## Classifier answer
+
+The mod's classifier (`mods/bot-herdr/engine/classifier/index.mjs`) does not select or triage tools by type: `triageByRules` (line 196) and `triage` (line 248) classify task size/kind ("trivial/small/medium/...", lines 175-177, 231-246); `triageQuestions` (line 215) asks whether one engineer could do it alone and about areas touched — used for track selection, not tool choice. Tool selection is by the human/plan (see Key Questions).
+
+## Key Questions (for the plan)
+
+1. Adopt ripgrep as the mod's core reader (rg --json for retrieval, --files/--type/--glob/-A/-B/-C/--replace) or a stack of fd + ast-grep + ctags/tree-sitter?
+2. Node bundling: `@vscode/ripgrep` npm (MIT, per-platform optional deps) vs vendoring microsoft/ripgrep-prebuilt release binaries vs manual GitHub releases?
+3. Symbol lookup: ctags (GPL-2.0 — restrictive; no official Windows binaries) vs tree-sitter tags, or both?
+4. AST search: `@ast-grep/cli` npm (MIT; Node 20+; postinstall binary packaging) vs `tree-sitter-cli` npm, or both (ast-grep = rule-based, tree-sitter = grammar-based)?
+5. ugrep (BSD-3, ships Windows binaries, adds PCRE2 dependency) — include or not?
+6. Windows-native fallbacks to standardize: findstr / PowerShell Select-String / fd on Windows; git grep, MSYS2, WSL on Unix.
 
 ## Verification
 
-- `node mods/bot-herdr/engine/bh.mjs tools claude` — supported: true, returns the user's skills from `~/.claude/skills` (built-in-browser, chrome-browser, computer-use, deep-research, docs, docx, …).
-- `node mods/bot-herdr/engine/bh.mjs tools codex` / `tools opencode` — supported: true, 0 skills on this machine.
-- `bh team` — Orchestrator (opencode), Design (opencode-go/deepseek-v4.1-flash), Dev, QA, Research, Scout.
-- Fetches: OpenCode ACP docs (opencode.ai/docs/acp), harness notes page (harnessnotes.com/acp?harness=opencode).
-
-## Notes / Pushback (design unknowns I could not settle)
-
-- The OpenCode issue anomalyco/opencode#60434 (2026-10-30): OpenCode v2 no longer exposes skills in ACP `available_commands_update` — auto-discovery through ACP is gone; per OpenCode's own maintainer, "you load a skill yourself by mentioning it as @skill-id in the prompt."
-- **OpenCode v2 context caching**: `opencode.ai/docs/skills` loads the body via the `skill` tool each time; the LeanOps blog says OpenCode "places cache markers for you on providers such as Anthropic" and recommends a stable model per session — model switching re-reads everything (Anthropic's own 5-minute cache TTL applies).
-- **Gemini CLI & Qwen Code ACP usage**: unverified against their implementations; bot-herdr's Acp.message reads only message chunks/tool calls and would ignore any `usage_update`.
-- **Antigravity** (agy) — the medium article's "Antigravity global skills" path `~/.gemini/config/skills/` is second-hand; Antigravity replaced Gemini CLI for unpaid tiers on 18 June 2026 (qai.io, checked 26 Oct 2026).
-- Frontmatter: the open standard (agentskills.io) has `name` and `description` as the minimum; each tool adds its own (Claude: allowed-tools/context/user-invocable/etc.; Codex: `allow_implicit_invocation`; OpenCode: `metadata.opencode/autoinvoke`; Qwen: auto-discovery of project/personal dirs; Gemini: name+description, activation via tool call with permission prompt).
-- Bot-herdr's own parse of Claude Code usage: engine/lib/runner.mjs:317-318 (`result` event: `usage.input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`, `total_cost_usd`, `duration_ms`); Codex: runner.mjs:355-361 (`turn.completed`: `usage.input_tokens`, `output_tokens`, `cached_input_tokens`; "Codex counts cached input inside input_tokens").
-
-## Knowledge Proposals (Orchestrator: to `bh knowledge` on the agents that read them)
-
-1. Research agent: "Skill storage paths per harness (Claude Code ~/.claude/skills, .claude/skills, plugins, ~/.claude/skills/synced; Codex .agents/skills, $HOME/.agents/skills, /etc/codex/skills, $CODEX_HOME/skills, symlinked folders; OpenCode ~/.config/opencode/skills, .claude/.agents compat dirs; Gemini CLI ~/.gemini/skills, .gemini/skills; Qwen Code ~/.qwen/skills, .qwen/skills, skills.directories; Antigravity ~/.gemini/config/skills). All SKILL.md, name/description frontmatter, progressive disclosure. Auto-invoke differences: Claude/Gemini/Qwen/Codex implicit+explicit; OpenCode v2 explicit @skill-id or the `skill` tool; Antigravity consent prompt."
-2. Research agent: "Token usage reporting: Claude Code stream-json result.usage (input/output/cache_read/cache_creation) + total_cost_usd; Codex turn.completed.usage (input_tokens, output_tokens, cached_input_tokens, cache_write_input_tokens, reasoning_output_tokens) — cached input is part of input_tokens; OpenCode ACP usage_update (used/size/cost), surfaced via `opencode stats` and footer; Gemini CLI, Qwen Code, Antigravity: no usage verified."
-
-## Script Proposals
-
-None (no new shared scripts proposed yet).
-
-## Blockers / Pushback
-
-- None blocking; questions for the user on scope decisions (below).
+- `bh scripts run repo_map` — 903 files; mods/bot-herdr present; no existing rg/fd/ast-grep wiring in the mod found.
+- `bh plan show p-20261121-0b9c` — plan p-20261121-0b9c, "grilling round 0 Improve code reading and retrieval for...", no draft yet.
+- `grep -rli "classifier" --exclude-dir=node_modules --exclude-dir=.git .` — found mods/bot-herdr/engine/classifier/index.mjs and classifier tests.
+- `webfetch https://api.github.com/repos/BurntSushi/ripgrep` — license.key "unlicense"; Rust; release 15.2.0.
+- `webfetch https://api.github.com/repos/BurntSushi/ripgrep/releases/latest` — tag 15.2.0, published_at 2026-07-15; Windows assets x86_64/i686/aarch64-pc-windows-msvc, x86_64-pc-windows-gnu.
+- `webfetch https://registry.npmjs.org/@vscode/ripgrep` — 1.18.0, published 2026-05-07, license MIT, optional deps @vscode/ripgrep-win32-x64 etc.
+- `webfetch https://api.github.com/repos/sharkdp/fd/releases/latest` — v10.5.2, published 2026-11-07; Windows assets fd-v10.5.2-x86_64-pc-windows-msvc.zip, -i686-, -aarch64-, -gnullvm, -gnu.
+- `webfetch https://api.github.com/repos/sharkdp/fd` — license.key apache-2.0.
+- `webfetch https://api.github.com/repos/ast-grep/ast-grep/releases/latest` — 0.51.3, published 2026-11-16; Windows assets app-x86_64-pc-windows-msvc.zip, app-aarch64-, app-i686-.
+- `webfetch https://api.github.com/repos/ast-grep/ast-grep` — license.key mit.
+- `webfetch https://api.github.com/repos/universal-ctags/ctags/releases/latest` — v6.2.1, published 2025-10-25; single asset universal-ctags-6.2.1.tar.gz.
+- `webfetch https://api.github.com/repos/universal-ctags/ctags` — license.key gpl-2.0.
+- `webfetch https://api.github.com/repos/tree-sitter/tree-sitter/releases/latest` — v0.27.2, published 2026-11-07; assets tree-sitter-cli-windows-x64.zip, -arm64, -x86; tree-sitter-cli-windows-x64.zip; web-tree-sitter.tar.gz.
+- `webfetch https://api.github.com/repos/tree-sitter/tree-sitter` — license MIT.
+- `websearch "ugrep GitHub repository license cross-platform Windows"` — Genivia/ugrep; cross-platform Linux/macOS/Windows; Windows binaries in releases; BSD-3.
+- `websearch "fd-find npm package name"` — fd-find (pablopunk) downloads official fd releases.
+- `websearch "@ast-grep/cli npm package"` — npmjs.com/package/@ast-grep/cli; Node 20+; binary packages @ast-grep/cli-win32-x64-msvc.
+- `websearch "tree-sitter-cli npm package web-tree-sitter"` — npmjs.com/package/tree-sitter-cli; web-tree-sitter.

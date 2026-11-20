@@ -1,0 +1,32 @@
+{
+  "id": "p-20261121-0b9c",
+  "title": "Cross-platform code retrieval and classifier triage",
+  "idea": "Improve code reading and retrieval for Windows and Unix-based systems. Explore tools we can use with the mod (e.g. ripgrep for Unix and Windows alternatives) and check whether the classifier triages relevant files or scripts to use.",
+  "status": "task",
+  "round": 3,
+  "task": "t-20261121-ilrm",
+  "created": "2026-11-20T22:15:20.452Z",
+  "skills": {
+    "design": {
+      "picked": null,
+      "added": []
+    },
+    "dev": {
+      "picked": null,
+      "added": []
+    },
+    "qa": {
+      "picked": null,
+      "added": []
+    },
+    "research": {
+      "picked": null,
+      "added": []
+    },
+    "advisor": {
+      "picked": null,
+      "added": []
+    }
+  },
+  "updated": "2026-11-20T22:35:38.797Z"
+}

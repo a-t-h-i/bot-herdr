@@ -3,12 +3,12 @@
 // usage: node {script} [word to filter by]
 import { readFileSync } from "node:fs";
 import { basename, dirname, extname, join } from "node:path";
-import { isCode, isNoise, isTest, parseArgs, projectRoot, sh, tracked } from "./lib/common.mjs";
+import { isCode, isNoise, isTest, listProjectFiles, parseArgs, projectRoot, stripBomAndCr } from "./lib/common.mjs";
 
 const { rest } = parseArgs();
 const word = rest[0]?.toLowerCase();
 const root = projectRoot();
-const all = tracked(root).filter((file) => !isNoise(file));
+const all = listProjectFiles(root).filter((file) => !isNoise(file));
 const DIR = /(^|\/)(fixtures?|__fixtures__|__mocks__|mocks?|factories|stubs?|fakes?|test-?utils?|testing|testdata|test-helpers?|support)\//i;
 const NAME = /(^|[-_.])(fixtures?|mocks?|factor(y|ies)|stubs?|fakes?|test-?utils?|testing|helpers?|conftest|setup-?tests?|test-?setup)([-_.]|$)/i;
 const TEST_AREA = /(^|\/)(test|tests|__tests__|spec|e2e)\//;
@@ -18,7 +18,7 @@ const helpers = all.filter((file) => {
   return DIR.test(file) || NAME.test(basename(file, extname(file))) || (TEST_AREA.test(file) && isCode(file));
 });
 const tests = all.filter((file) => isTest(file));
-const read = (file) => { try { return readFileSync(join(root, file), "utf8"); } catch { return ""; } };
+const read = (file) => { try { return stripBomAndCr(readFileSync(join(root, file), "utf8")); } catch { return ""; } };
 
 function exportsOf(file, text) {
   if (file.endsWith(".py")) {
@@ -69,5 +69,5 @@ for (const [dir, files] of data) {
   console.log(`## data ${dir}/ (${files.length})`);
   console.log(`    ${files.slice(0, 10).map((file) => basename(file)).join(", ")}${files.length > 10 ? ", …" : ""}`);
 }
-const config = sh("git", ["ls-files", "--", "jest.config.*", "vitest.config.*", "playwright.config.*", "pytest.ini", "conftest.py", "**/setupTests.*", "karma.conf.*"], { cwd: root }).out.trim();
-if (config) console.log(`## Test setup: ${config.split("\n").join(", ")}`);
+const config = all.filter((file) => /(^|\/)(jest\.config\.\w+|vitest\.config\.\w+|playwright\.config\.\w+|pytest\.ini|conftest\.py|setupTests\.\w+|karma\.conf\.\w+)$/.test(file));
+if (config.length > 0) console.log(`## Test setup: ${config.join(", ")}`);

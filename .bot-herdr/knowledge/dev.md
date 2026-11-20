@@ -10,12 +10,16 @@
 - Claude Code installed plugin skills are under ~/.claude/plugins/**/skills, but plugins/marketplaces holds catalogues, not installs; claude.ai-synced skills sit at ~/.claude/skills/synced/<id>/<skill>/SKILL.md.
 - Verified live 2026-11-18 (Claude Code 2.1.322): a --settings deny rule Skill(skill:docx) blocks the claude.ai-synced skill anthropic-skills:docx, so the bare synced name works in deny rules.
 - Headless Claude Code compacts a saved session with: claude -p "/compact" --resume <session-id> --output-format stream-json --verbose (verified on 2.1.328); success prints a system event with subtype compact_boundary, and the session id is unchanged.
+- Bundled binaries (rg, fd, ast-grep) cache under appHome/cache/bot-herdr-bin/ and install to engine/bin/ via install.mjs; BH_BIN_DIR overrides it for tests.
+- Retrieval tiers in engine/scripts/lib/common.mjs: files fd -> rg --files -> git ls-files -> Node; search rg -> git grep --untracked -> Node; .bot-herdr/ excluded unless includeMeta.
 
 ## Standards
 - team.hc never runs hc through a shell (a brief is one argument); tests stand in for hc with a script named by BH_HC
 - Store writes: task read-modify-write goes through updateTask(root, id, change) and board posts compute n inside withLock; never loadTask + saveTask in a command.
 - A child's report contract (report path, bh report, hc send to the parent) lives once, in the brief's ## Reporting (team.mjs), not in bh spawn's spawn text: bh brief and agents started straight in a terminal have no spawn text.
 - Windows-only path probes use path.win32.join; path.join gives / off Windows and breaks them (engine/lib/media.mjs windowsBrowser).
+- A PATH sg is accepted as ast-grep only when sg --version matches /^ast-grep/i, avoiding Linux shadow-utils /usr/bin/sg.
+- Node 18.20+/20.12+/22+ refuse .cmd/.bat via execFileSync without a shell (CVE-2024-27980): use resolveLocalBin in common.mjs to run JS bins via process.execPath instead of npx.cmd.
 
 ## Decisions
 - Agent conversation state files under DATA keep their names; a root field in the state resets the session when the project changes (resumeState), so pre-change sessions survive.

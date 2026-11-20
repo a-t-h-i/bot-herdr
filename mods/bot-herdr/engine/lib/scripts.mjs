@@ -12,7 +12,7 @@ import { basename, extname, join } from "node:path";
 import { ENGINE, listDir, now, readText, store, writeText } from "./core.mjs";
 
 const BUILTIN = join(ENGINE, "scripts");
-const RUNNERS = { ".mjs": ["node"], ".js": ["node"], ".cjs": ["node"], ".ts": ["node"], ".py": ["python3"], ".sh": ["bash"], ".ps1": ["powershell", "-NoProfile", "-File"], ".rb": ["ruby"] };
+export const RUNNERS = { ".mjs": ["node"], ".js": ["node"], ".cjs": ["node"], ".ts": ["node"], ".py": ["python3"], ".sh": ["bash"], ".ps1": ["powershell", "-NoProfile", "-File"], ".rb": ["ruby"] };
 
 function header(path) {
   const head = readText(path).split("\n").slice(0, 12).join("\n");
@@ -39,7 +39,7 @@ export function find(root, name) {
 /** Runs a script in the project. Returns the exit code, or `{ code, out, err }` when `capture` is asked. */
 export function run(root, name, args = [], { capture = false } = {}) {
   const s = find(root, name);
-  const runner = RUNNERS[extname(s.file)];
+  const runner = [...RUNNERS[extname(s.file)]];
   if (process.platform === "win32" && runner[0] === "python3") runner[0] = "python";
   if (capture) {
     const r = spawnSync(runner[0], [...runner.slice(1), s.file, ...args], { cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });

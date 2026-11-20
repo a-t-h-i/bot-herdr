@@ -2,15 +2,16 @@
 // purpose: boil a long build, test, typecheck or lint log down to its errors (file:line, message, failing tests) and show our own code at each stack frame; reads a file, stdin, or runs a command
 // usage: node {script} [log file] | <command> | node {script} | node {script} --run "<command>" [--timeout <seconds>]
 import { existsSync, readFileSync } from "node:fs";
-import { isAbsolute, join, relative } from "node:path";
-import { parseArgs, projectRoot, sh } from "./lib/common.mjs";
+import { isAbsolute, join, relative, win32 } from "node:path";
+import { parseArgs, projectRoot, sh, stripBomAndCr, stripFileUrl, toPosix } from "./lib/common.mjs";
 
 const { flags, rest } = parseArgs();
 const root = projectRoot();
 let log = "";
 let exit;
 if (typeof flags.run === "string") {
-  const result = sh("bash", ["-lc", flags.run], { cwd: root, timeout: Number(flags.timeout ?? 300) * 1000, env: { ...process.env, CI: "1", FORCE_COLOR: "0", NO_COLOR: "1" } });
+  const shell = process.platform === "win32" ? { cmd: process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", flags.run] } : { cmd: "bash", args: ["-lc", flags.run] };
+  const result = sh(shell.cmd, shell.args, { cwd: root, timeout: Number(flags.timeout ?? 300) * 1000, env: { ...process.env, CI: "1", FORCE_COLOR: "0", NO_COLOR: "1" } });
   log = `${result.out}\n${result.err}`;
   exit = result.code;
   console.log(`$ ${flags.run}  (exit ${exit})`);
@@ -20,14 +21,20 @@ else {
   console.error("Give a log file, pipe a log in, or --run a command.");
   process.exit(2);
 }
-log = log.replace(/\x1b\[[0-9;]*m/g, "");
+log = stripBomAndCr(log.replace(/\x1b\[[0-9;]*m/g, ""));
 const rows = log.split("\n");
 
 /** A path in the log, as a project file, or undefined when it is not ours. */
 function ours(path) {
-  if (!path || /node_modules|site-packages|dist-packages|\/usr\/lib|internal\/|^node:|<anonymous>/.test(path)) return undefined;
-  const clean = path.replace(/^file:\/\//, "");
-  const rel = isAbsolute(clean) ? relative(root, clean) : clean;
+  const clean = stripFileUrl(path);
+  if (!clean || /node_modules|site-packages|dist-packages|\/usr\/lib|internal\/|^node:|<anonymous>/.test(clean)) return undefined;
+  let rel = clean;
+  if (isAbsolute(clean)) rel = toPosix(relative(root, clean));
+  else if (win32.isAbsolute(clean)) {
+    const inside = win32.relative(win32.resolve(root), win32.resolve(clean));
+    if (win32.isAbsolute(inside) || inside.startsWith("..")) return undefined;
+    rel = toPosix(inside);
+  }
   return !rel.startsWith("..") && existsSync(join(root, rel)) ? rel : undefined;
 }
 
@@ -45,27 +52,27 @@ let eslintFile;
 for (let i = 0; i < rows.length; i++) {
   const row = rows[i];
   let m;
-  if ((m = /^(.+?)\((\d+),\d+\):\s*(error|warning)\s+(TS\d+:.*)$/.exec(row))) add(m[1], m[2], m[4], m[3]);
-  else if ((m = /^(\S+\.\w+):(\d+):(\d+)\s*-\s*(error|warning)\s+(TS\d+:.*)$/.exec(row))) add(m[1], m[2], m[5], m[4]);
-  else if ((m = /^\s*-->\s*(\S+):(\d+):\d+/.exec(row))) add(m[1], m[2], (rows[i - 1] ?? "").replace(/^(error|warning)(\[\w+\])?:\s*/, ""), /warning/.test(rows[i - 1] ?? "") ? "warning" : "error");
-  else if ((m = /^(\/\S+|[\w./-]+\.\w+)$/.exec(row.trim())) && ours(m[1]) && /^\s+\d+:\d+\s+(error|warning)/.test(rows[i + 1] ?? "")) eslintFile = ours(m[1]);
+  if ((m = /^(.+?)\((\d+),\d+\):\s*(error|warning)\s+(TS\d+:.*)$/.exec(row))) add(toPosix(m[1]), m[2], m[4], m[3]);
+  else if ((m = /^(\S+\.\w+):(\d+):(\d+)\s*-\s*(error|warning)\s+(TS\d+:.*)$/.exec(row))) add(toPosix(m[1]), m[2], m[5], m[4]);
+  else if ((m = /^\s*-->\s*(\S+):(\d+):\d+/.exec(row))) add(toPosix(m[1]), m[2], (rows[i - 1] ?? "").replace(/^(error|warning)(\[\w+\])?:\s*/, ""), /warning/.test(rows[i - 1] ?? "") ? "warning" : "error");
+  else if ((m = /^((?:\/|[A-Za-z]:[\\/])?\S*\.\w+)$/.exec(row.trim())) && ours(m[1]) && /^\s+\d+:\d+\s+(error|warning)/.test(rows[i + 1] ?? "")) eslintFile = ours(m[1]);
   else if (eslintFile && (m = /^\s+(\d+):\d+\s+(error|warning)\s+(.+?)\s{2,}([\w@/-]+)?\s*$/.exec(row))) add(eslintFile, m[1], `${m[3]}${m[4] ? ` (${m[4]})` : ""}`, m[2]);
   else if ((m = /^FAILED\s+(\S+?)::(\S+)(?:\s+-\s+(.*))?/.exec(row))) { failing.add(`${m[1]} › ${m[2]}`); if (m[3]) add(m[1], 0, m[3]); }
   else if ((m = /^(?:✖|×|✕|not ok \d+ -)\s+(.+?)(?:\s+\(\d+(?:\.\d+)?m?s\))?$/.exec(row.trim())) && !/^\d+ (passing|failing)/.test(m[1])) failing.add(m[1]);
   else if ((m = /^\s*●\s+(.+)$/.exec(row)) && !/Console/.test(m[1])) failing.add(m[1]);
   else if ((m = /^\s*(?:FAIL)\s+(\S+)/.exec(row))) failing.add(m[1]);
   else if ((m = /^--- FAIL: (\S+)/.exec(row))) failing.add(m[1]);
-  else if ((m = /^(?:\s*)([\w./-]+\.(?:go|py|rs|c|cpp|h|java|kt|swift|rb)):(\d+)(?::\d+)?:\s*(.+)$/.exec(row)) && ours(m[1])) add(ours(m[1]), m[2], m[3]);
-  else if ((m = /^\s*([\w./-]+\.[cm]?[jt]sx?):(\d+):\d+:?\s+(.+)$/.exec(row)) && ours(m[1])) add(ours(m[1]), m[2], m[3]);
+  else if ((m = /^(?:\s*)((?:[A-Za-z]:[\\/])?[\w./\\-]+\.(?:go|py|rs|c|cpp|h|java|kt|swift|rb)):(\d+)(?::\d+)?:\s*(.+)$/.exec(row)) && ours(m[1])) add(ours(m[1]), m[2], m[3]);
+  else if ((m = /^\s*((?:[A-Za-z]:[\\/])?[\w./\\-]+\.[cm]?[jt]sx?):(\d+):\d+:?\s+(.+)$/.exec(row)) && ours(m[1])) add(ours(m[1]), m[2], m[3]);
   // Assertion and error messages, kept with the test they belong to.
   if ((m = /^\s*(AssertionError[^:]*|Error|TypeError|ReferenceError|SyntaxError|RangeError|E\s{2,})\s*:?\s*(.+)$/.exec(row)) && !/^\s+at /.test(row) && errors.length < 200) {
     const text = `${m[1].trim()}: ${m[2]}`.replace(/^E:\s*/, "");
     if (!seen.has(text)) { seen.add(text); errors.push({ file: "", line: 0, message: text.slice(0, 220), kind: "assert" }); }
   }
   // Stack frames: JS `at fn (path:line:col)`, Python `File "path", line N`, Go `path.go:N +0x`.
-  if ((m = /^\s+at (?:(.+?) \()?((?:file:\/\/)?[^():\s]+):(\d+):\d+\)?$/.exec(row)) && ours(m[2])) frames.push({ file: ours(m[2]), line: Number(m[3]), fn: m[1] ?? "" });
+  if ((m = /^\s+at (?:(.+?) \()?(.+?):(\d+):\d+\)?$/.exec(row)) && ours(m[2])) frames.push({ file: ours(m[2]), line: Number(m[3]), fn: m[1] ?? "" });
   else if ((m = /^\s*File "(.+?)", line (\d+), in (\S+)/.exec(row)) && ours(m[1])) frames.push({ file: ours(m[1]), line: Number(m[2]), fn: m[3] });
-  else if ((m = /^\s+(\/\S+\.go):(\d+)/.exec(row)) && ours(m[1])) frames.push({ file: ours(m[1]), line: Number(m[2]), fn: (rows[i - 1] ?? "").trim().replace(/\(.*$/, "") });
+  else if ((m = /^\s+((?:[A-Za-z]:[\\/])?\S+\.go):(\d+)/.exec(row)) && ours(m[1])) frames.push({ file: ours(m[1]), line: Number(m[2]), fn: (rows[i - 1] ?? "").trim().replace(/\(.*$/, "") });
 }
 
 const real = errors.filter((entry) => entry.kind !== "warning");
@@ -98,7 +105,7 @@ const unique = [...new Map(frames.map((frame) => [`${frame.file}:${frame.line}`,
 if (unique.length > 0) {
   console.log("## Where it broke (our frames, innermost first)");
   for (const frame of unique) {
-    const code = readFileSync(join(root, frame.file), "utf8").split("\n");
+    const code = stripBomAndCr(readFileSync(join(root, frame.file), "utf8")).split("\n");
     console.log(`${frame.file}:${frame.line}${frame.fn ? `  in ${frame.fn}` : ""}`);
     for (let n = Math.max(1, frame.line - 2); n <= Math.min(code.length, frame.line + 2); n++) console.log(`  ${n === frame.line ? ">" : " "}${String(n).padStart(5)} ${code[n - 1]}`);
   }

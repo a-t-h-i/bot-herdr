@@ -1,0 +1,77 @@
+{
+  "at": "2026-11-20T23:48:51.765Z",
+  "mtimeMs": 1795218456598.164,
+  "size": 1723,
+  "usage": {
+    "tokens": 37596285,
+    "costUsd": 0.6085,
+    "minutes": 63.27
+  },
+  "timeMs": 3796440,
+  "steps": {
+    "1": {
+      "timeMs": 751172,
+      "usage": {
+        "tokens": 5016178,
+        "costUsd": 0.1266,
+        "minutes": 12.52
+      }
+    },
+    "2": {
+      "timeMs": 1109509,
+      "usage": {
+        "tokens": 13601960,
+        "costUsd": 0.2494,
+        "minutes": 18.49
+      }
+    },
+    "3": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    },
+    "4": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    },
+    "5": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    },
+    "6": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    },
+    "7": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    },
+    "8": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    }
+  }
+}

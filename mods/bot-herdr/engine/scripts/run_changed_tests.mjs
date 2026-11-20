@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 // purpose: run only the tests that cover the files changed on this branch (or given files), with a timeout; prints the command, the tail of its output and the exit code, and with --json how many ran and which files no test names
 // usage: node {script} [files…] [--base <ref>] [--timeout <seconds>] [--dry-run] [--json]
-import { baseRef, changedFiles, detect, isCode, isTest, parseArgs, projectRoot, sh, tail, testCounts, testsFor } from "./lib/common.mjs";
+import { baseRef, changedFiles, detect, isCode, isTest, parseArgs, projectRoot, resolveCmd, resolveLocalBin, sh, tail, testCounts, testsFor, toPosix } from "./lib/common.mjs";
 
 const { flags, rest } = parseArgs();
 const root = projectRoot();
 const tool = detect(root);
-const files = rest.length > 0 ? rest : changedFiles(root, baseRef(root, flags.base));
+const files = rest.length > 0 ? rest.map(toPosix) : changedFiles(root, baseRef(root, flags.base));
+const python = resolveCmd("python3");
+// Local tooling runs as this Node plus its JS entry (or its native binary), never as a `.cmd` shim.
+const local = (tool, args) => ({ ...resolveLocalBin(root, tool, { args }), label: `npx ${tool} ${args.join(" ")}` });
 const report = [];
 const say = (line = "") => report.push(line);
 
@@ -31,15 +34,15 @@ function plan() {
   const goTests = files.filter((file) => file.endsWith(".go"));
   if (tool.go && goTests.length > 0) return { cmd: "go", args: ["test", ...new Set(goTests.map((file) => `./${file.split("/").slice(0, -1).join("/") || "."}`))] };
   const py = tests.filter((file) => file.endsWith(".py"));
-  if (tool.python && py.length > 0) return { cmd: "python3", args: ["-m", "pytest", "-q", ...py] };
+  if (tool.python && py.length > 0) return { cmd: python, args: ["-m", "pytest", "-q", ...py] };
   if (tool.rust && files.some((file) => file.endsWith(".rs"))) return { cmd: "cargo", args: ["test", "--quiet"] };
   const js = tests.filter((file) => /\.[cm]?[jt]sx?$/.test(file));
   if (!tool.pkg || js.length === 0) return undefined;
   const testScript = tool.pkg.scripts?.test ?? "";
-  if (tool.deps.vitest || /vitest/.test(testScript)) return { cmd: "npx", args: ["vitest", "run", ...js] };
-  if (tool.deps.jest || /jest/.test(testScript)) return { cmd: "npx", args: ["jest", ...js] };
-  if (tool.deps.mocha || /mocha/.test(testScript)) return { cmd: "npx", args: ["mocha", ...js] };
-  if (/@playwright\/test/.test(JSON.stringify(tool.deps)) && js.every((file) => /e2e|playwright|\/web\//.test(file))) return { cmd: "npx", args: ["playwright", "test", ...js] };
+  if (tool.deps.vitest || /vitest/.test(testScript)) return local("vitest", ["run", ...js]);
+  if (tool.deps.jest || /jest/.test(testScript)) return local("jest", js);
+  if (tool.deps.mocha || /mocha/.test(testScript)) return local("mocha", js);
+  if (/@playwright\/test/.test(JSON.stringify(tool.deps)) && js.every((file) => /e2e|playwright|\/web\//.test(file))) return local("playwright", ["test", ...js]);
   if (/node\s+--test/.test(testScript) || js.length > 0) return { cmd: "node", args: ["--test", ...js.filter((file) => !/\/(e2e|web)\//.test(file))] };
   return undefined;
 }
@@ -51,7 +54,7 @@ if (!run || run.args.length === 0) {
   say("No targeted test command for these files. Run the project's test command (see project_commands.mjs) if the change needs it.");
   finish({ untested }, 0);
 }
-const command = `${run.cmd} ${run.args.join(" ")}`;
+const command = run.label ?? `${run.cmd} ${run.args.join(" ")}`;
 say(`$ ${command}`);
 if (flags["dry-run"]) finish({ command, untested }, 0);
 const seconds = Number(flags.timeout ?? 300);

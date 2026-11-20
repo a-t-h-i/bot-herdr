@@ -6,11 +6,13 @@
 //   node install.mjs            install (keeps your layout and your own keys)
 //   node install.mjs --force    also replace the layout file
 //   node install.mjs --switch   then switch the open window to the layout
+//   node install.mjs --skip-tools   don't download the bundled rg, fd and ast-grep
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { ensureTools } from "./mods/bot-herdr/engine/lib/install-tools.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const args = new Set(process.argv.slice(2));
@@ -36,6 +38,13 @@ rmSync(mod, { recursive: true, force: true });
 mkdirSync(dirname(mod), { recursive: true });
 cpSync(join(here, "mods", "bot-herdr"), mod, { recursive: true });
 console.log(`mod      ${mod}`);
+
+// The retrieval binaries live in the mod, but are cached under the app home: reinstalling wipes
+// the mod, and the cache makes a repeat install instant and safe offline.
+if (!args.has("--skip-tools")) {
+  const tools = await ensureTools({ modDir: mod, cacheDir: join(appHome, "cache", "bot-herdr-bin") });
+  console.log(`tools    ${tools.map((t) => `${t.tool} ${t.status}`).join(", ")}`);
+}
 
 const themeDir = join(appHome, "themes");
 mkdirSync(themeDir, { recursive: true });

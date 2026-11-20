@@ -183,8 +183,10 @@ Standards`; mention them so the user can overrule them.
 Turn a job that will come back in much the same form into a shared script:
 read the worker's draft, then `bh scripts save <file> --name <snake_case>`.
 `bh scripts` lists the built-in ones (`run_changed_tests`, `check_changed`,
-`failure_digest`, `diff_summary`, `check_contract_breakage`, `find_symbol`,
-`repo_map` and more); point briefs at them instead of whole-suite runs.
+`failure_digest`, `diff_summary`, `check_contract_breakage`, `repo_map`,
+`locate`, `search_code`, `read_slice`, `find_files`, `find_symbol`,
+`outline_file`, `ast_search` and more); point briefs at them instead of
+whole-suite runs.
 
 ## Review
 

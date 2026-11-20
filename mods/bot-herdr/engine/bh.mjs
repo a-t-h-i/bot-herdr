@@ -21,7 +21,7 @@ import { listHarnesses, listTools } from "./lib/tools.mjs";
 import * as W from "./lib/workspace.mjs";
 import * as C from "./classifier/index.mjs";
 import { fileKind } from "./classifier/qa-risk.mjs";
-import { tail, testCommand, testCounts } from "./scripts/lib/common.mjs";
+import { tail, testCommand, testCounts, listProjectFiles } from "./scripts/lib/common.mjs";
 import { fileKey, replyText } from "./lib/agent.mjs";
 
 const HELP = `bh: bot-herdr's tools. Run from the project folder. Add --json for machine-readable output.
@@ -315,6 +315,13 @@ function pickedLine(skills) {
   return `Skills: ${named.length ? named.join("; ") : "none picked (the pins apply)"}`;
 }
 
+/** The effort a scored step runs at, and what was routed when it changed. */
+function routedEffort(scored, agent, thresholds) {
+  const effort = C.routeEffort(scored, agent.effort, effortsOf(agent.harness, agent.model), thresholds);
+  const routed = scored && effort !== agent.effort ? `${scored.level} (${scored.confidence.toFixed(2)}): effort ${agent.effort || "default"} → ${effort}` : null;
+  return { effort, routed };
+}
+
 /** The `## Knowledge Proposals` bullets of a report. */
 function proposals(md) {
   return mdSection(md, "Knowledge Proposals").split("\n").filter((line) => /^-\s+/.test(line)).map((line) => line.replace(/^-\s+/, "").trim()).filter(Boolean);
@@ -359,7 +366,7 @@ async function main(argv) {
         const request = need(bodyText(flags, args), 'bh task new "<request>"');
         const members = team.team().agents.filter((a) => !a.lead);
         const roles = c.enabled("triage") && c.enabled("skills") ? skillRoles(members, root) : [];
-        const { triage, skills } = await C.triageAndSkills(c, request, { roles });
+        const { triage, skills } = await C.triageAndSkills(c, request, { layout: C.repoLayout(root), roles });
         const task = T.newTask(root, { request, title: flags.title, plan: flags.plan ?? null, track: flags.track ?? C.trackFor(triage), by: myAddress() });
         task.triage = triage;
         task.skills = skillRecord(members.map((a) => team.knowledgeName(a)), skills);
@@ -580,7 +587,7 @@ async function main(argv) {
         const question = need(args.join(" ") || bodyText(flags, []), 'bh knowledge ask "<question>"');
         const { agents, known } = team.team();
         const scout = agents.find((a) => a.role === "scout") ?? team.findMember("scout");
-        const files = git(root, ["ls-files"]).out.split("\n").filter(Boolean);
+        const files = listProjectFiles(root);
         const repo = files.slice(0, 500).join("\n") + (files.length > 500 ? `\n… (${files.length - 500} more)` : "");
         const knowledge = K.list(root).map((k) => `## ${k.agent}\n${K.withNotes(root, k.agent)}`).filter(Boolean).join("\n\n") || "(no knowledge files yet)";
         const context = `# Knowledge files (.bot-herdr/knowledge)\n\n${knowledge}\n\n# Repository files\n${repo || "(none)"}`;
@@ -754,11 +761,18 @@ async function main(argv) {
       }
       let effort = a.effort;
       let routed = null;
-      if (flags.effort === "auto") {
-        const scored = await C.scoreEffort(c, text, task ? T.loadTask(root, task).request : "");
-        effort = C.routeEffort(scored, a.effort, effortsOf(a.harness, a.model), c.config.thresholds);
-        if (effort !== a.effort) routed = `${scored.level} (${scored.confidence.toFixed(2)}): effort ${a.effort || "default"} → ${effort}`;
-      } else if (typeof flags.effort === "string") effort = flags.effort;
+      let pickedScripts = [];
+      const context = task ? T.loadTask(root, task).request : "";
+      if (mode === "child") {
+        const allScripts = S.scripts(root);
+        const result = await C.scoreEffortAndScripts(c, text, { context, candidates: allScripts, wantEffort: flags.effort === "auto", wantScripts: true });
+        if (flags.effort === "auto") ({ effort, routed } = routedEffort(result.effort, a, c.config.thresholds));
+        pickedScripts = result.scripts ?? S.keywordPick(allScripts, text, 3);
+      } else if (flags.effort === "auto") {
+        const result = await C.scoreEffortAndScripts(c, text, { context, wantScripts: false });
+        ({ effort, routed } = routedEffort(result.effort, a, c.config.thresholds));
+      }
+      if (typeof flags.effort === "string" && flags.effort !== "auto") effort = flags.effort;
       const current = task ? T.loadTask(root, task) : null;
       const entry = current?.skills?.[id] ?? (!task && plan ? P.loadPlan(root, plan).skills?.[id] : null) ?? null;
       const agent = team.withAllowlist({ ...a, ...(flags.model ? { model: flags.model } : {}) }, entry);
@@ -783,7 +797,15 @@ async function main(argv) {
         flags.panel ? `The plan is ${flags.panel} (bh plan show ${flags.panel}).` : "",
         "When done or stuck, report as your brief's `## Reporting` says.",
       ].filter(Boolean).join(" ");
-      const first = [text, `(${about})`, review].filter(Boolean).join("\n\n");
+      // A shared script is run with `bh scripts run <name>`; its own usage line says the arguments.
+      const scriptLine = (s) => {
+        const usage = String(s.usage ?? "").replace(/\bnode\s+(\{script\}|[\w.-]+)/g, "bh scripts run $1").replaceAll("{script}", s.name);
+        return `- \`bh scripts run ${s.name}\` — ${s.purpose || "no purpose line"}${usage ? ` · usage: \`${usage}\`` : ""}`;
+      };
+      const suggested = pickedScripts.length
+        ? ["## Suggested scripts", ...pickedScripts.slice(0, 3).map(scriptLine)].join("\n")
+        : "";
+      const first = [text, `(${about})`, review, suggested].filter(Boolean).join("\n\n");
       let r;
       if (team.runsHeadless(agent)) {
         // The agent terminal: it runs the harness headless, writes its own brief, and reports

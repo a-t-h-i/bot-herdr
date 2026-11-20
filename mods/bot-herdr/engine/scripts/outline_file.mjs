@@ -2,12 +2,13 @@
 // purpose: outline a source file: its imports count, top-level functions, classes, types and exports with line numbers, so only the needed range is read; each function shows its length and deepest nesting, and long or deep ones are flagged
 // usage: node {script} <file> [more files…] [--complex]  (--complex lists only the flagged functions)
 import { readFileSync } from "node:fs";
-import { extname } from "node:path";
-import { declarations, fail, parseArgs } from "./lib/common.mjs";
+import { extname, relative } from "node:path";
+import { declarations, fail, parseArgs, projectRoot, resolveSafePath, stripBomAndCr, toPosix } from "./lib/common.mjs";
 
 const { flags, rest } = parseArgs();
 // `--complex file.ts` reads the file as the flag's value.
 if (typeof flags.complex === "string") rest.unshift(flags.complex);
+const root = projectRoot();
 const LONG = 60;
 const DEEP = 4;
 if (rest.length === 0) fail("usage: outline_file.mjs <file> [more files…]");
@@ -27,10 +28,17 @@ const PY = [/^\s*(async\s+)?def\s+(\w+)/, /^\s*class\s+(\w+)/];
 const GO = [/^func\s+(\([^)]*\)\s*)?(\w+)/, /^type\s+(\w+)/];
 const RS = [/^\s*(pub(\([^)]*\))?\s+)?(async\s+)?fn\s+(\w+)/, /^\s*(pub\s+)?(struct|enum|trait|impl|mod)\b/];
 const PATTERNS = { ".py": PY, ".go": GO, ".rs": RS };
-for (const file of rest) {
+for (const asked of rest) {
+  let abs;
+  try {
+    abs = resolveSafePath(root, asked);
+  } catch (error) {
+    fail(error.message);
+  }
+  const file = toPosix(relative(root, abs)) || toPosix(asked);
   let text;
   try {
-    text = readFileSync(file, "utf8");
+    text = stripBomAndCr(readFileSync(abs, "utf8"));
   } catch {
     console.log(`## ${file}: cannot read`);
     continue;

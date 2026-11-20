@@ -1,0 +1,173 @@
+{
+  "rg": {
+    "repo": "BurntSushi/ripgrep",
+    "version": "15.2.0",
+    "license": "MIT",
+    "releaseUrl": "https://github.com/BurntSushi/ripgrep/releases/tag/15.2.0",
+    "checkedAt": "2026-11-20T22:41:13Z",
+    "targets": {
+      "win32-x64": {
+        "url": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-pc-windows-msvc.zip",
+        "asset": "ripgrep-15.2.0-x86_64-pc-windows-msvc.zip",
+        "archive": "zip",
+        "binaryInArchive": "ripgrep-15.2.0-x86_64-pc-windows-msvc/rg.exe",
+        "sha256": "71b2fef860abe467217a538ff31de02f5258807c0129f771846f87bd029aafc5",
+        "sha256Source": "GitHub Releases API asset digest: https://api.github.com/repos/BurntSushi/ripgrep/releases/assets/478119643 (companion asset ripgrep-15.2.0-x86_64-pc-windows-msvc.zip.sha256 also published)"
+      },
+      "win32-arm64": {
+        "url": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-aarch64-pc-windows-msvc.zip",
+        "asset": "ripgrep-15.2.0-aarch64-pc-windows-msvc.zip",
+        "archive": "zip",
+        "binaryInArchive": "ripgrep-15.2.0-aarch64-pc-windows-msvc/rg.exe",
+        "sha256": "e4abca10c3a64ebea742667dd7009449d49403db5460dd6873e389fa2945360f",
+        "sha256Source": "GitHub Releases API asset digest: https://api.github.com/repos/BurntSushi/ripgrep/releases/assets/478119680 (companion asset ripgrep-15.2.0-aarch64-pc-windows-msvc.zip.sha256 also published)"
+      },
+      "linux-x64": {
+        "url": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz",
+        "asset": "ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz",
+        "archive": "tar.gz",
+        "binaryInArchive": "ripgrep-15.2.0-x86_64-unknown-linux-musl/rg",
+        "sha256": "33e15bcf1624b25cdd2a55813a47a2f95dbe126268203e76aa6a585d1e7b149c",
+        "sha256Source": "GitHub Releases API asset digest: https://api.github.com/repos/BurntSushi/ripgrep/releases/assets/478120097 (companion asset ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz.sha256 also published)"
+      },
+      "linux-arm64": {
+        "url": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-aarch64-unknown-linux-musl.tar.gz",
+        "asset": "ripgrep-15.2.0-aarch64-unknown-linux-musl.tar.gz",
+        "archive": "tar.gz",
+        "binaryInArchive": "ripgrep-15.2.0-aarch64-unknown-linux-musl/rg",
+        "sha256": "800b1e7206afe799dfb5a6901f23147cfaabe0e52210538100f61e86e1740915",
+        "sha256Source": "GitHub Releases API asset digest: https://api.github.com/repos/BurntSushi/ripgrep/releases/assets/478120060 (companion asset ripgrep-15.2.0-aarch64-unknown-linux-musl.tar.gz.sha256 also published)"
+      },
+      "darwin-x64": {
+        "url": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-apple-darwin.tar.gz",
+        "asset": "ripgrep-15.2.0-x86_64-apple-darwin.tar.gz",
+        "archive": "tar.gz",
+        "binaryInArchive": "ripgrep-15.2.0-x86_64-apple-darwin/rg",
+        "sha256": "af7825fcc69a2afc7a7aea55fc9af90e26421d8f20fe59df32e233c0b8a231c1",
+        "sha256Source": "GitHub Releases API asset digest: https://api.github.com/repos/BurntSushi/ripgrep/releases/assets/478119585 (companion asset ripgrep-15.2.0-x86_64-apple-darwin.tar.gz.sha256 also published)"
+      },
+      "darwin-arm64": {
+        "url": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-aarch64-apple-darwin.tar.gz",
+        "asset": "ripgrep-15.2.0-aarch64-apple-darwin.tar.gz",
+        "archive": "tar.gz",
+        "binaryInArchive": "ripgrep-15.2.0-aarch64-apple-darwin/rg",
+        "sha256": "3750b2e93f37e0c692657da574d7019a101c0084da05a790c83fd335bad973e4",
+        "sha256Source": "GitHub Releases API asset digest: https://api.github.com/repos/BurntSushi/ripgrep/releases/assets/478118851 (companion asset ripgrep-15.2.0-aarch64-apple-darwin.tar.gz.sha256 also published)"
+      }
+    }
+  },
+  "fd": {
+    "repo": "sharkdp/fd",
+    "version": "10.5.2",
+    "license": "MIT OR Apache-2.0",
+    "releaseUrl": "https://github.com/sharkdp/fd/releases/tag/v10.5.2",
+    "checkedAt": "2026-11-20T22:41:13Z",
+    "targets": {
+      "win32-x64": {
+        "url": "https://github.com/sharkdp/fd/releases/download/v10.5.2/fd-v10.5.2-x86_64-pc-windows-msvc.zip",
+        "asset": "fd-v10.5.2-x86_64-pc-windows-msvc.zip",
+        "archive": "zip",
+        "binaryInArchive": "fd-v10.5.2-x86_64-pc-windows-msvc/fd.exe",
+        "sha256": "7edac75ef96b7e9a01ebb251a21ee86ea365a09adcfb865f1ec3346a906153b6",
+        "sha256Source": "GitHub Releases API asset digest: https://api.github.com/repos/sharkdp/fd/releases/assets/719974267 (companion asset fd-v10.5.2-x86_64-pc-windows-msvc.zip.sha256 also published)"
+      },
+      "win32-arm64": {
+        "url": "https://github.com/sharkdp/fd/releases/download/v10.5.2/fd-v10.5.2-aarch64-pc-windows-msvc.zip",
+        "asset": "fd-v10.5.2-aarch64-pc-windows-msvc.zip",
+        "archive": "zip",
+        "binaryInArchive": "fd-v10.5.2-aarch64-pc-windows-msvc/fd.exe",
+        "sha256": "0ee570ad513e6e1909642dbd79bf7177cf3457652e912c27726582c0f49df86e",
+        "sha256Source": "GitHub Releases API asset digest: https://api.github.com/repos/sharkdp/fd/releases/assets/719975155 (companion asset fd-v10.5.2-aarch64-pc-windows-msvc.zip.sha256 also published)"
+      },
+      "linux-x64": {
+        "url": "https://github.com/sharkdp/fd/releases/download/v10.5.2/fd-v10.5.2-x86_64-unknown-linux-musl.tar.gz",
+        "asset": "fd-v10.5.2-x86_64-unknown-linux-musl.tar.gz",
+        "archive": "tar.gz",
+        "binaryInArchive": "fd-v10.5.2-x86_64-unknown-linux-musl/fd",
+        "sha256": "7e2d07fa2b8807642aaec67b7e2972a9fbe4db26fcb340a7372392db42b26694",
+        "sha256Source": "GitHub Releases API asset digest: https://api.github.com/repos/sharkdp/fd/releases/assets/719976098 (companion asset fd-v10.5.2-x86_64-unknown-linux-musl.tar.gz.sha256 also published)"
+      },
+      "linux-arm64": {
+        "url": "https://github.com/sharkdp/fd/releases/download/v10.5.2/fd-v10.5.2-aarch64-unknown-linux-musl.tar.gz",
+        "asset": "fd-v10.5.2-aarch64-unknown-linux-musl.tar.gz",
+        "archive": "tar.gz",
+        "binaryInArchive": "fd-v10.5.2-aarch64-unknown-linux-musl/fd",
+        "sha256": "63ea52cb31586e6d98efa2f06d73d542f16c7d0c4af0f07b579aaf9714cf907a",
+        "sha256Source": "GitHub Releases API asset digest: https://api.github.com/repos/sharkdp/fd/releases/assets/719977268 (companion asset fd-v10.5.2-aarch64-unknown-linux-musl.tar.gz.sha256 also published)"
+      },
+      "darwin-x64": {
+        "url": "https://github.com/sharkdp/fd/releases/download/v10.5.2/fd-v10.5.2-x86_64-apple-darwin.tar.gz",
+        "asset": "fd-v10.5.2-x86_64-apple-darwin.tar.gz",
+        "archive": "tar.gz",
+        "binaryInArchive": "fd-v10.5.2-x86_64-apple-darwin/fd",
+        "sha256": "0f02e6000a8c896cd254cf4dccc7da1e604e77a32c6783609eed5e4cb07785e3",
+        "sha256Source": "GitHub Releases API asset digest: https://api.github.com/repos/sharkdp/fd/releases/assets/719975101 (companion asset fd-v10.5.2-x86_64-apple-darwin.tar.gz.sha256 also published)"
+      },
+      "darwin-arm64": {
+        "url": "https://github.com/sharkdp/fd/releases/download/v10.5.2/fd-v10.5.2-aarch64-apple-darwin.tar.gz",
+        "asset": "fd-v10.5.2-aarch64-apple-darwin.tar.gz",
+        "archive": "tar.gz",
+        "binaryInArchive": "fd-v10.5.2-aarch64-apple-darwin/fd",
+        "sha256": "81bf98a16d3d7230e4a9123fcede243d71ea31a577113476ed43f1cdf4773162",
+        "sha256Source": "GitHub Releases API asset digest: https://api.github.com/repos/sharkdp/fd/releases/assets/719971048 (companion asset fd-v10.5.2-aarch64-apple-darwin.tar.gz.sha256 also published)"
+      }
+    }
+  },
+  "ast-grep": {
+    "repo": "ast-grep/ast-grep",
+    "version": "0.51.3",
+    "license": "MIT",
+    "releaseUrl": "https://github.com/ast-grep/ast-grep/releases/tag/0.51.3",
+    "checkedAt": "2026-11-20T22:41:13Z",
+    "targets": {
+      "win32-x64": {
+        "url": "https://github.com/ast-grep/ast-grep/releases/download/0.51.3/app-x86_64-pc-windows-msvc.zip",
+        "asset": "app-x86_64-pc-windows-msvc.zip",
+        "archive": "zip",
+        "binaryInArchive": "ast-grep.exe",
+        "sha256": "1f27ff60ee033bdfe5d7ea781a869e410b2d882d6c84a6afea8280fc4bbf0716",
+        "sha256Source": "GitHub Releases API asset digest: https://api.github.com/repos/ast-grep/ast-grep/releases/assets/753401129 (companion asset app-x86_64-pc-windows-msvc.zip.sha256 not published by this repo; sha256 on asset digest)"
+      },
+      "win32-arm64": {
+        "url": "https://github.com/ast-grep/ast-grep/releases/download/0.51.3/app-aarch64-pc-windows-msvc.zip",
+        "asset": "app-aarch64-pc-windows-msvc.zip",
+        "archive": "zip",
+        "binaryInArchive": "ast-grep.exe",
+        "sha256": "6a0f389cd8bbf15ff29231fedf728c08e1be414ffc88389d03732415c4110c5e",
+        "sha256Source": "GitHub Releases API asset digest: https://api.github.com/repos/ast-grep/ast-grep/releases/assets/753395869"
+      },
+      "linux-x64": {
+        "url": "https://github.com/ast-grep/ast-grep/releases/download/0.51.3/app-x86_64-unknown-linux-gnu.zip",
+        "asset": "app-x86_64-unknown-linux-gnu.zip",
+        "archive": "zip",
+        "binaryInArchive": "ast-grep",
+        "sha256": "22803eb0c5bf83164fb7fd76d4721d355ecf0c8466ef47342c1ec7d80897ca47",
+        "sha256Source": "GitHub Releases API asset digest: https://api.github.com/repos/ast-grep/ast-grep/releases/assets/753396224"
+      },
+      "linux-arm64": {
+        "url": "https://github.com/ast-grep/ast-grep/releases/download/0.51.3/app-aarch64-unknown-linux-gnu.zip",
+        "asset": "app-aarch64-unknown-linux-gnu.zip",
+        "archive": "zip",
+        "binaryInArchive": "ast-grep",
+        "sha256": "5b44fd68e78744934b359b07badce347d4197ed50b341d50f1f99d056ecedb08",
+        "sha256Source": "GitHub Releases API asset digest: https://api.github.com/repos/ast-grep/ast-grep/releases/assets/753397190"
+      },
+      "darwin-x64": {
+        "url": "https://github.com/ast-grep/ast-grep/releases/download/0.51.3/app-x86_64-apple-darwin.zip",
+        "asset": "app-x86_64-apple-darwin.zip",
+        "archive": "zip",
+        "binaryInArchive": "ast-grep",
+        "sha256": "af04ed50179e51316a0139b8bb39502a3841d6c8e9fd9a4bac40987a8c7c3acd",
+        "sha256Source": "GitHub Releases API asset digest: https://api.github.com/repos/ast-grep/ast-grep/releases/assets/753390489"
+      },
+      "darwin-arm64": {
+        "url": "https://github.com/ast-grep/ast-grep/releases/download/0.51.3/app-aarch64-apple-darwin.zip",
+        "asset": "app-aarch64-apple-darwin.zip",
+        "archive": "zip",
+        "binaryInArchive": "ast-grep",
+        "sha256": "7954eab1e2803d1485f263377be7f359db6d3915312b5d773cd575eb009330b1",
+        "sha256Source": "GitHub Releases API asset digest: https://api.github.com/repos/ast-grep/ast-grep/releases/assets/753396910"
+      }
+    }
+  }
+}
