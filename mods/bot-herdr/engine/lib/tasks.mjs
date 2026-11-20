@@ -4,7 +4,7 @@
 //
 // .bot-herdr/tasks/<id>/task.json, board.jsonl, reports/
 
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { appendJsonl, listDir, newId, now, readJson, readJsonl, store, titleFrom, withLock, writeJson } from "./core.mjs";
 import { runGit } from "./workspace.mjs";
@@ -43,9 +43,37 @@ export function updateTask(root, id, change) {
 
 /** A task with usage and time worked on it and on each of its steps, as `bh task show` gives it (the task page reads the list). */
 function withUsage(root, task) {
-  const usage = usageOf(root, task.id);
-  const steps = (task.steps ?? []).map((s) => ({ ...s, timeMs: usage.length ? stepTime(usage, s.n) : (s.workedMs ?? 0), usage: usageTotals(usage.filter((r) => r.step === s.n)) }));
-  return { ...task, steps, usage: usageTotals(usage), timeMs: worked(root, task) };
+  const saved = savedTotals(root, task);
+  const use = saved && (task.steps ?? []).every((s) => saved.steps[s.n]);
+  const usage = use ? null : usageOf(root, task.id);
+  const steps = (task.steps ?? []).map((s) => (use
+    ? { ...s, ...saved.steps[s.n] }
+    : { ...s, timeMs: usage.length ? stepTime(usage, s.n) : (s.workedMs ?? 0), usage: usageTotals(usage.filter((r) => r.step === s.n)) }));
+  return { ...task, steps, usage: use ? saved.usage : usageTotals(usage), timeMs: use ? saved.timeMs : worked(root, task) };
+}
+
+/**
+ * A finished task's totals, kept beside it with the usage file's mtime and size: an unchanged log
+ * is never read again in this process, and a later `bh` call reads only the small totals file.
+ */
+function savedTotals(root, task) {
+  if (task.status !== "done" && task.status !== "abandoned") return null;
+  let st;
+  try {
+    st = statSync(join(dir(root, task.id), "usage.jsonl"));
+  } catch {
+    return null;
+  }
+  const file = join(dir(root, task.id), "usage-totals.json");
+  const saved = readJson(file, null);
+  if (saved && saved.mtimeMs === st.mtimeMs && saved.size === st.size && saved.steps) return saved;
+  const records = usageOf(root, task.id);
+  const steps = Object.fromEntries((task.steps ?? []).map((s) => [s.n, { timeMs: stepTime(records, s.n), usage: usageTotals(records.filter((r) => r.step === s.n)) }]));
+  const totals = { at: now(), mtimeMs: st.mtimeMs, size: st.size, usage: usageTotals(records), timeMs: worked(root, task), steps };
+  try {
+    writeJson(file, totals);
+  } catch {}
+  return totals;
 }
 
 export function listTasks(root, { all = false } = {}) {
@@ -240,6 +268,12 @@ export function comment(task, { step = null, text }) {
 
 export const openComments = (task) => (task.comments ?? []).filter((c) => c.open);
 
+/** A task's or a plan's skills record with `names` added to one agent's `added` list. */
+export function addSkills(record, id, names) {
+  const entry = record?.[id] ?? { picked: null, added: [] };
+  return { ...(record ?? {}), [id]: { ...entry, added: [...new Set([...(entry.added ?? []), ...names])] } };
+}
+
 /** The next comment id: one past the highest `c<number>`, so ids stay unique after a delete. */
 export const nextCommentId = (comments = []) => `c${Math.max(0, ...comments.map((c) => Number(/^c(\d+)$/.exec(c.id ?? "")?.[1] ?? 0))) + 1}`;
 
@@ -297,8 +331,26 @@ export function recordUsage(root, id, record) {
   });
 }
 
-/** The turns recorded for a task, oldest first. */
-export const usageOf = (root, id) => readJsonl(join(dir(root, id), "usage.jsonl"));
+/**
+ * The turns recorded for a task, oldest first. Read once per process while the file's mtime and
+ * size stay the same: `bh task list` and `bh task show` ask for them again and again.
+ */
+const usageCache = new Map(); // path -> { mtimeMs, size, records }
+
+export function usageOf(root, id) {
+  const path = join(dir(root, id), "usage.jsonl");
+  let st;
+  try {
+    st = statSync(path);
+  } catch {
+    return [];
+  }
+  const hit = usageCache.get(path);
+  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.records;
+  const records = readJsonl(path);
+  usageCache.set(path, { mtimeMs: st.mtimeMs, size: st.size, records });
+  return records;
+}
 
 /** Tokens, cost and minutes over some usage records. */
 export function usageTotals(list) {

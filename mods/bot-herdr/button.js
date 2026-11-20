@@ -15,8 +15,9 @@ function face(c, t, label, icon, hint) {
 }
 
 /** The sized, toned element with its contents and tooltip, before any pointer or key handling. */
-function body(c, t, label, { icon, hint, tooltip }) {
+function body(c, t, label, { icon, hint, tooltip, a11y }) {
   const iconOnly = label === null;
+  const name = tooltip ?? label ?? a11y;
   return h_flex()
     .h(CONTROL)
     .when(iconOnly, (el) => el.w(CONTROL))
@@ -32,6 +33,7 @@ function body(c, t, label, { icon, hint, tooltip }) {
     .when(Boolean(t.fill), (el) => el.bg(t.fill))
     .when(Boolean(t.edge), (el) => el.border_1().border_color(t.edge))
     .when(Boolean(tooltip), (el) => el.tooltip(tooltip))
+    .when(Boolean(name), (el) => el.accessibility_label(name))
     .children(face(c, t, label, icon, hint));
 }
 
@@ -40,11 +42,11 @@ function body(c, t, label, { icon, hint, tooltip }) {
  * glyph, SPACE[4] padding, SPACE[2] between glyph and label). tone: "primary" (accent fill),
  * "secondary" (surface, 1px edge), "danger" (surface, 1px edge, danger ink), "quiet" (no fill or
  * edge until hover). `label` null: a square icon button. `hint`: a small key hint after the label.
- * `disabled`: faint, no click, no hover.
+ * `disabled`: faint, no click, no hover. `a11y`: the accessible name of an icon button with no label or tooltip.
  */
-export function actionButton(c, id, label, onClick, { icon = null, tone = "secondary", disabled = false, hint = null, tooltip = null } = {}) {
+export function actionButton(c, id, label, onClick, { icon = null, tone = "secondary", disabled = false, hint = null, tooltip = null, a11y = null } = {}) {
   const t = buttonTone(c, tone);
-  const el = body(c, t, label, { icon, hint, tooltip });
+  const el = body(c, t, label, { icon, hint, tooltip, a11y });
   if (disabled) return el.opacity(0.5).cursor_not_allowed();
   return clickable(el.on_click(onClick), c, id, { fill: t.hover });
 }

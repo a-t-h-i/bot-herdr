@@ -11,6 +11,7 @@ export const PAGES = [
   { id: "tasks", icon: "page-tasks", label: "Tasks" },
   { id: "plans", icon: "page-plans", label: "Plans" },
   { id: "knowledge", icon: "page-knowledge", label: "Knowledge" },
+  { id: "metrics", icon: "page-metrics", label: "Metrics" },
   { id: "settings", icon: "page-settings", label: "Settings" },
 ];
 /** Set (to the time) when a view wants the composer to take the keyboard. */
@@ -54,6 +55,9 @@ export function sendFromChat(text) {
   setShared(OUTGOING, { text, at: Date.now() });
   showPage("chat");
 }
+
+/** Asks the Orchestrator to make an agreed plan a task and start it (Plans page and plan sheet). */
+export const startPlanTask = (p) => sendFromChat(`The plan ${p.id} ("${p.title}") is agreed: make it a task (bh plan task ${p.id}) and start it.`);
 
 /** We are about to move herdr's focus (a new tab, another space): keep the Chat page up. */
 export function hold() {

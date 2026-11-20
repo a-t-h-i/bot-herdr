@@ -16,6 +16,8 @@ import * as K from "./lib/knowledge.mjs";
 import * as S from "./lib/scripts.mjs";
 import * as Q from "./lib/ask.mjs";
 import * as team from "./lib/team.mjs";
+import * as MX from "./lib/metrics.mjs";
+import { listHarnesses, listTools } from "./lib/tools.mjs";
 import * as W from "./lib/workspace.mjs";
 import * as C from "./classifier/index.mjs";
 import { fileKind } from "./classifier/qa-risk.mjs";
@@ -39,6 +41,7 @@ Tasks
   bh gate <task> --verdict PASS|CHANGES_REQUIRED [--round N] --file <report> "<summary>"   record the QA gate's verdict
   bh inbox [--task T] [--peek]    reports addressed to me that I have not seen yet
   bh usage [--task T] [--since ISO date]   tokens, cost and minutes per agent and model
+  bh metrics [--window today|7d|30d|all]   how much each agent worked: time, turns, tokens, cost, tasks, steps (JSON)
 
 Plans
   bh plan new "<idea>"            bh plan list            bh plan show <id>
@@ -66,7 +69,7 @@ The user
 
 The team
   bh team                         who is set up, with harness, model and effort
-  bh spawn <agent> --name <short> [--task T --step N] [--effort auto|<level>] [--panel P] [--review] [--shared] "<brief>"
+  bh spawn <agent> --name <short> [--task T --step N] [--skill <name>]… [--effort auto|<level>] [--panel P] [--review] [--shared] "<brief>"
   bh merge <name> --task <id> [--drop]    bring a child's worktree work into the task's tree (staged, uncommitted); --drop discards it
   bh agent <agent> [--mode lead|child] [--name N] [-- "<first message>"]   run an agent headless in this terminal
   bh classify route|triage|effort|qa-risk "<text>" [--task T]
@@ -79,7 +82,8 @@ Used by the bot-herdr chat and Settings (--data takes URI-encoded JSON; agents c
   bh mockup <file.html> | --data <html>     bh clip     bh preview <image>…     pictures for the chat
   bh files [<path>] [--all]                 a folder's entries for the composer's file browser
   bh models <harness> [--command <exe>] [--refresh]   the models that harness really offers
-  bh tools <harness> [--refresh]            the skills and MCP servers that harness has installed (JSON)`;
+  bh tools <harness> [--refresh]            the skills and MCP servers that harness has installed (JSON)
+  bh tools --list                           every harness, and whether its skills can be read (JSON)`;
 
 /**
  * Settings that decide what agents may do are the user's: refused when a headless agent runs
@@ -120,6 +124,15 @@ function changeOne(M, owner, flags, words) {
 
 /** Who a command speaks for: BH_AGENT (a child says its name), else the terminal it runs in. */
 const actor = () => process.env.BH_AGENT || myAddress() || null;
+
+/**
+ * Between tasks the Orchestrator's session is compacted: its agent terminal consumes this file
+ * before the next message (agent.mjs). It names the project, so only that project's Orchestrator
+ * takes it, and what happened, so the handoff can say it right.
+ */
+function compactPending(root, marker) {
+  writeJson(join(DATA, "sessions", "compact-pending.json"), { at: now(), project: root, ...marker });
+}
 
 /** One inbox line: the task and entry, whose step, who reported, and where the report is. */
 const inboxLine = (e) => `${e.task} #${e.n}${e.step ? ` step ${e.step}` : ""} ${e.from ?? "someone"}: ${e.text} — ${e.file}`;
@@ -259,6 +272,49 @@ function usageLine(g) {
   return g.input + g.output + g.cache + g.costUsd === 0 ? `${who}, ${g.minutes} min` : `${who}, ${g.input} input, ${g.output} output, ${g.cache} cache, $${g.costUsd}, ${g.minutes} min`;
 }
 
+/** One line per agent for `bh metrics`: who, how long, and what it used and finished (≈ marks an estimate, — a number nobody reported). */
+function metricLine(a) {
+  const est = (text, on) => (on ? `≈${text}` : text);
+  const sum = a.tokens ? a.tokens.input + a.tokens.output + a.tokens.cacheRead + a.tokens.cacheWrite : null;
+  const tokens = sum === null ? "—" : est(sum, a.estimated.tokens);
+  const cost = a.costUsd === null ? "—" : est(`$${a.costUsd.toFixed(2)}`, a.estimated.cost);
+  return `${a.name} (${a.role}): ${Math.round(a.timeMs / 60000)} min, ${a.turns} turns, ${tokens} tokens, ${cost}, ${a.tasks} tasks, ${a.steps} steps`;
+}
+
+/** The panel seats: the four domains and every custom agent (not the Orchestrator and not Scout). */
+const SEATS = new Set(["dev", "design", "qa", "research"]);
+const isSeat = (a) => a.role === "custom" || SEATS.has(a.role);
+
+/** The agents a task's or plan's picks cover, with what each one's harness has installed. */
+function skillRoles(agents, root) {
+  return agents.map((a) => {
+    const tools = listTools(a.harness, { root });
+    const candidates = [
+      ...tools.skills.map((s) => ({ name: s.name, description: s.description ?? "" })),
+      ...tools.mcp.map((m) => ({ name: m.name, description: "MCP server" })),
+    ];
+    return { id: team.knowledgeName(a), does: roleOf(a.role)?.does ?? String(a.does ?? ""), harness: a.harness, candidates };
+  });
+}
+
+/** The skills record a task or plan keeps: each agent's picks, or null when the classifier had none. */
+function skillRecord(ids, picks) {
+  return Object.fromEntries(ids.map((id) => [id, { picked: picks?.[id] ?? null, added: [] }]));
+}
+
+/** A planned task's skills: the plan's picks, and null picks for every agent the plan did not cover. */
+function plannedSkills(plan, agents) {
+  const skills = Object.fromEntries(agents.filter((a) => !a.lead).map((a) => [team.knowledgeName(a), { picked: null, added: [] }]));
+  for (const [id, entry] of Object.entries(plan.skills ?? {})) skills[id] = { picked: entry?.picked ?? null, added: [...(entry?.added ?? [])] };
+  return skills;
+}
+
+/** One line for a new task or plan: what the classifier picked, or that only the pins apply. */
+function pickedLine(skills) {
+  const named = Object.entries(skills ?? {}).filter(([, e]) => e.picked?.length).map(([id, e]) => `${id}: ${e.picked.join(", ")}`);
+  return `Skills: ${named.length ? named.join("; ") : "none picked (the pins apply)"}`;
+}
+
 /** The `## Knowledge Proposals` bullets of a report. */
 function proposals(md) {
   return mdSection(md, "Knowledge Proposals").split("\n").filter((line) => /^-\s+/.test(line)).map((line) => line.replace(/^-\s+/, "").trim()).filter(Boolean);
@@ -289,7 +345,7 @@ async function main(argv) {
   const [cmd = "help", sub, ...more] = argv;
   const root = projectRoot();
   const c = C.makeClassifier();
-  const { flags, rest } = parseArgs(argv.slice(1), ["option", "kinds"], [...BOOLEANS, "refresh", "peek", "board", "shared", "drop"]);
+  const { flags, rest } = parseArgs(argv.slice(1), ["option", "kinds", "skill"], [...BOOLEANS, "refresh", "peek", "board", "shared", "drop", "list"]);
   const args = rest.slice(1);
 
   switch (cmd) {
@@ -301,9 +357,12 @@ async function main(argv) {
     case "task": {
       if (sub === "new") {
         const request = need(bodyText(flags, args), 'bh task new "<request>"');
-        const triage = await C.triage(c, request);
+        const members = team.team().agents.filter((a) => !a.lead);
+        const roles = c.enabled("triage") && c.enabled("skills") ? skillRoles(members, root) : [];
+        const { triage, skills } = await C.triageAndSkills(c, request, { roles });
         const task = T.newTask(root, { request, title: flags.title, plan: flags.plan ?? null, track: flags.track ?? C.trackFor(triage), by: myAddress() });
         task.triage = triage;
+        task.skills = skillRecord(members.map((a) => team.knowledgeName(a)), skills);
         task.base = git(root, ["rev-parse", "HEAD"]).out.trim() || null;
         const isolation = isolate(root, task, flags);
         T.saveTask(root, task);
@@ -311,6 +370,7 @@ async function main(argv) {
           `${t.id}: ${t.title}`,
           `Track: ${t.track} (suggested from the triage)`,
           `Triage (${triage.by}): size ${triage.size}, ${triage.kind ?? "kind unknown"}; domains ${Object.entries(triage.domains).map(([d, p]) => `${d} ${p}`).join(", ")}; research ${triage.research}; ambiguous ${triage.ambiguous}`,
+          pickedLine(t.skills),
           W.gitLine(t.git) || isolation,
         ].filter(Boolean).join("\n"));
       }
@@ -342,6 +402,7 @@ async function main(argv) {
       if (sub === "status") {
         const status = need(rest2[0], "bh task status <id> <status>");
         const task = T.updateTask(root, id, (t) => T.setStatus(t, status));
+        if (task.status === "done") compactPending(root, { kind: "done", reason: `task ${task.id} done`, task: task.id });
         return out(flags, task, (t) => `${t.id} is ${t.status}.`);
       }
       if (sub === "comment") {
@@ -430,10 +491,23 @@ async function main(argv) {
       return out(flags, { rows: usageByModel(list) }, (x) => x.rows.map(usageLine).join("\n") || "No usage recorded.");
     }
 
+    case "metrics": {
+      const at = new Date();
+      const tasks = T.listTasks(root, { all: true });
+      const records = MX.dedupe([...usageFiles(), ...tasks.flatMap((t) => T.usageOf(root, t.id))]);
+      const answer = MX.metrics({ records, tasks, agents: team.team().agents, prices: MX.readPrices(), window: flags.window, now: at });
+      return out(flags, answer, (a) => a.agents.map(metricLine).join("\n") || `No agent worked in ${a.window}.`);
+    }
+
     case "plan": {
       if (sub === "new") {
         const idea = need(bodyText(flags, args), 'bh plan new "<idea>"');
-        return out(flags, P.newPlan(root, { idea, title: flags.title }), (p) => `${p.id}: ${p.title}`);
+        const seats = team.team().agents.filter(isSeat);
+        // Planning seats are read-only: the picks should leave out skills that write or deploy.
+        const roles = c.enabled("skills") ? skillRoles(seats, root).map((r) => ({ ...r, does: `${r.does} — a read-only planning seat: no write or deploy skills` })) : [];
+        const picks = roles.length ? await C.pickSkills(c, idea, roles) : null;
+        const plan = P.newPlan(root, { idea, title: flags.title, skills: skillRecord(seats.map((a) => team.knowledgeName(a)), picks) });
+        return out(flags, plan, (p) => `${p.id}: ${p.title}\n${pickedLine(p.skills)}`);
       }
       if (sub === "list") return out(flags, P.listPlans(root, { all: Boolean(flags.all) }), (l) => l.map(P.planLine).join("\n") || "No plans yet.");
       const id = need(args[0], `bh plan ${sub} <id>`);
@@ -478,12 +552,15 @@ async function main(argv) {
       if (sub === "task") {
         const steps = T.stepsFromMarkdown(plan.markdown);
         const task = T.newTask(root, { request: `${plan.idea}\n\nThe agreed plan: bh plan show ${plan.id}`, title: plan.title, plan: plan.id, track: "planned", by: myAddress(), steps });
+        // The plan's picks come with it; an agent the plan did not cover starts from its pins.
+        task.skills = plannedSkills(plan, team.team().agents);
         task.base = git(root, ["rev-parse", "HEAD"]).out.trim() || null;
         const isolation = isolate(root, task, flags);
         T.saveTask(root, task);
         plan.status = "task";
         plan.task = task.id;
         P.savePlan(root, plan);
+        compactPending(root, { kind: "planned", plan: plan.id, reason: `plan ${plan.id} became task ${task.id}`, task: task.id });
         return out(flags, { ...task, isolation }, (t) => [`${t.id}: ${t.title} (${t.steps.length} steps from the plan)`, W.gitLine(t.git) || isolation].filter(Boolean).join("\n"));
       }
       if (sub === "archive" || sub === "unarchive") {
@@ -664,6 +741,17 @@ async function main(argv) {
       const task = flags.task ?? null;
       const text = need(bodyText(flags, args), 'bh spawn <agent> --name <short> "<brief>"');
       const mode = flags.panel ? "panel" : flags.review ? "review" : "child";
+      const plan = flags.panel ?? flags.plan ?? null;
+      const id = team.knowledgeName(a);
+      // `--skill` is for a skill the agent reported missing (a blocker): it joins the picks.
+      const added = Array.isArray(flags.skill) ? flags.skill : typeof flags.skill === "string" ? [flags.skill] : [];
+      if (added.length && !task && !plan) throw new Error("bh spawn --skill needs --task <id> or --panel <plan>, so the skill is recorded on it.");
+      if (added.length && task) T.updateTask(root, task, (t) => { t.skills = T.addSkills(t.skills, id, added); });
+      if (added.length && plan && !task) {
+        const p = P.loadPlan(root, plan);
+        p.skills = T.addSkills(p.skills, id, added);
+        P.savePlan(root, p);
+      }
       let effort = a.effort;
       let routed = null;
       if (flags.effort === "auto") {
@@ -671,9 +759,10 @@ async function main(argv) {
         effort = C.routeEffort(scored, a.effort, effortsOf(a.harness, a.model), c.config.thresholds);
         if (effort !== a.effort) routed = `${scored.level} (${scored.confidence.toFixed(2)}): effort ${a.effort || "default"} → ${effort}`;
       } else if (typeof flags.effort === "string") effort = flags.effort;
-      const agent = { ...a, ...(flags.model ? { model: flags.model } : {}) };
-      const parent = myAddress();
       const current = task ? T.loadTask(root, task) : null;
+      const entry = current?.skills?.[id] ?? (!task && plan ? P.loadPlan(root, plan).skills?.[id] : null) ?? null;
+      const agent = team.withAllowlist({ ...a, ...(flags.model ? { model: flags.model } : {}) }, entry);
+      const parent = myAddress();
       const editing = mode === "child" && (Boolean(roleOf(a.role)?.edits) || a.role === "custom") && !flags.shared;
       const open = editing ? (current?.children ?? []).find((c) => c.state === "open" && c.agent === a.name) : null;
       if (open) throw new Error(`${a.name} already has an open worktree ${open.name}: merge or drop it first`);
@@ -686,13 +775,13 @@ async function main(argv) {
       const cwd = worktree ? worktree.path : flags.cwd ?? (current ? W.taskCwd(current, root) : root);
       const isolation = worktree ? `${name} works in its own worktree ${worktree.path} (branch ${worktree.branch}); merge it with bh merge ${name} --task ${task}` : typeof made === "string" ? made : "";
       const review = mode === "review" && current ? await reviewContext(root, current, cwd) : "";
-      const report = task ? `.bot-herdr/tasks/${task}/reports/${name}.md` : `.bot-herdr/reports/${name}.md`;
-      const plan = flags.panel ?? flags.plan ?? null;
+      // The brief (agent.mjs writes it) carries the report's path and commands; this only says who
+      // the child is, what it works on, and where the report's contract is.
       const about = [
         `You are ${name}.`,
         task ? `Your task is ${task} (bh task show ${task}); post on its board with --from ${name}.` : "",
         flags.panel ? `The plan is ${flags.panel} (bh plan show ${flags.panel}).` : "",
-        `When done or stuck, write your report to ${report}${task ? `, record it with bh report ${task}${flags.step ? ` --step ${flags.step}` : ""}${parent ? ` --to ${parent}` : ""} --file ${report} "<one-line summary>"` : ""}, and send its path with a one-line summary: hc send ${parent ?? "<the agent that started you>"} "<summary> — ${report}".`,
+        "When done or stuck, report as your brief's `## Reporting` says.",
       ].filter(Boolean).join(" ");
       const first = [text, `(${about})`, review].filter(Boolean).join("\n\n");
       let r;
@@ -713,7 +802,10 @@ async function main(argv) {
           ? team.hc(["run", "--bg", "--name", name, "--cwd", cwd, template.name, first])
           : team.hc(["run", "--bg", "--name", name, "--cwd", cwd, "--", ...withPrompt(argvOf(agent, known, { effort }), first), `${body}\n\n${first}`]);
       }
-      if (task && flags.step) T.updateTask(root, task, (t) => T.moveStep(t, flags.step, "start", { agent: name }));
+      if (task && flags.step) T.updateTask(root, task, (t) => {
+        const step = T.moveStep(t, flags.step, "start", { agent: name });
+        step.skills = { pinned: [...(a.skills ?? [])], picked: entry?.picked ?? [], added: entry?.added ?? [], fallback: !Array.isArray(entry?.picked) };
+      });
       if (r.code !== 0) throw new Error(`hc run failed: ${(r.err || r.out).trim()}`);
       return out(flags, { name, agent: a.name, effort, routed, isolation, hc: r.out.trim() }, (x) => `Started ${x.name} (${x.agent}${x.effort ? `, effort ${x.effort}` : ""}${x.routed ? `; routed: ${x.routed}` : ""}). Wait with hc wait --children any.${x.isolation ? `\n${x.isolation}` : ""}`);
     }
@@ -840,8 +932,9 @@ async function main(argv) {
     }
 
     case "tools": {
-      // Settings' skills and MCP picker: what the harness has installed, always as JSON.
-      const { listTools } = await import("./lib/tools.mjs");
+      // Settings' skills picker: every harness and whether it can be read (--list), or one harness's
+      // installed skills and MCP servers. Always JSON.
+      if (flags.list) return console.log(JSON.stringify(listHarnesses(team.team().known), null, 2));
       const harness = need(sub, "bh tools <harness> [--refresh]");
       return console.log(JSON.stringify(listTools(harness, { root, refresh: Boolean(flags.refresh) }), null, 2));
     }

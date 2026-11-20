@@ -1,0 +1,274 @@
+{
+  "id": "t-20261120-n1rc",
+  "title": "Faster, leaner agents with skill picks and a Metrics tab",
+  "request": "Find ways to improve the bot-herdr mod: (1) performance, (2) token efficiency, (3) skill discovery: the classifier should assign skills to each agent based on its role and the task at hand, also during the planning phase; skills are auto-discovered for all selected harnesses, and the user can also assign specific skills manually; (4) user experience, (5) agent experience, (6) turnaround time; (7) a metrics dashboard as a new tab giving insights into which agents work the most and by how much. Research first, then plan the improvements.\n\nThe agreed plan: bh plan show p-20261120-7rw6",
+  "status": "done",
+  "track": "planned",
+  "plan": "p-20261120-7rw6",
+  "by": "t7t",
+  "created": "2026-11-20T19:37:32.111Z",
+  "updated": "2026-11-20T21:04:47.884Z",
+  "archived": false,
+  "steps": [
+    {
+      "n": 1,
+      "title": "Record baselines: brief size per role and mode, `bh` command latency on a seeded fixture, spawn-to-first-prompt time, and fix the Linux failure in `test/mockup-browser.test.mjs:42`.",
+      "agent": "dev-baseline",
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-20T19:47:31.750Z",
+      "workedMs": 518254,
+      "note": "",
+      "report": {
+        "file": ".bot-herdr/tasks/t-20261120-n1rc/reports/dev-baseline.md",
+        "summary": "Baselines recorded (briefs 9.4-21.9 KB, bh 286-350 ms, spawn-to-prompt 670 ms); findBrowser Linux fix; npm test 257 pass, 1 skip, 0 fail.",
+        "from": "dev-baseline",
+        "at": "2026-11-20T19:46:56.251Z"
+      }
+    },
+    {
+      "n": 2,
+      "title": "Trim briefs: drop the `## Child agents` block from children that cannot spawn, the `bh ask` and mockup rules from children that never ask (`team.mjs:119-127`), and the duplicate text in `bh.mjs:691-697` (already in `team.mjs:140`); read task, plan and board once per turn instead of two or three times (`agent.mjs:272-309`).",
+      "agent": "dev-lean",
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-20T20:05:34.927Z",
+      "workedMs": 1521198,
+      "note": "",
+      "report": {
+        "file": ".bot-herdr/tasks/t-20261120-n1rc/reports/dev-lean.md",
+        "summary": "Steps 2, 3, 4 and engine half of 12 done: dev child brief -17.6%, bh no longer starts git, lead session compacts between tasks (claude 2.1.328 verified); npm test 286 pass/1 skip, bh check PASS; 2 outside-list test assertions changed",
+        "from": "dev-lean",
+        "at": "2026-11-20T20:05:18.652Z"
+      }
+    },
+    {
+      "n": 3,
+      "title": "Cut turnaround: find the project root with a `.git` walk instead of a `git rev-parse` subprocess on every `bh` call (`core.mjs:40-46`, handling worktree `.git` files), cache `listTasks` usage totals, and stop forcing skill rescans (`team.mjs:36`, `composer.js:533`).",
+      "agent": null,
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-20T20:05:35.127Z",
+      "workedMs": 0,
+      "note": ""
+    },
+    {
+      "n": 4,
+      "title": "Compact the Orchestrator's session between tasks: `bh task status done` and `bh plan task` write a `compactPending` marker that `agent.mjs` consumes between turns (never racing the turn-end save at `agent.mjs:380-382`); it compacts natively where verified headless (Claude Code first), and elsewhere starts a new session seeded with a short handoff summary of the finished task.",
+      "agent": null,
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-20T20:05:35.314Z",
+      "workedMs": 0,
+      "note": ""
+    },
+    {
+      "n": 5,
+      "title": "Add `role`, `project` and `plan` to every usage record, keep cached and uncached tokens apart, mark per row whether tokens and cost were reported, and capture the usage harnesses already send: OpenCode's ACP `usage_update` (dropped today in `runner.mjs:533-578`) and pi's turn usage where it emits one (`runner.mjs:367-387`).",
+      "agent": null,
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-20T20:17:49.750Z",
+      "workedMs": 632107,
+      "note": "",
+      "report": {
+        "file": ".bot-herdr/tasks/t-20261120-n1rc/reports/dev-lean-step5.md",
+        "summary": "Prices in: engine/prices.json is Research's checked table (10 models, claude/pi/codex default aliases, cacheWrite null = input rate); bh metrics now prices unpriced turns (marked ≈); npm test 302 tests 301 pass/1 skip, bh check PASS",
+        "from": "dev-lean",
+        "at": "2026-11-20T20:19:59.562Z"
+      }
+    },
+    {
+      "n": 6,
+      "title": "Estimate what is still missing: a user-editable price table `engine/prices.json` (USD per million input, output, cache-read and cache-write tokens per model, each price with its source URL and date, gathered by Research); Codex cost comes from its tokens and that table; for time-only turns, uncached tokens come from the uncached tokens per minute of reported turns on the same model (else all reported turns), then cost from the table. Every estimated number carries `estimated: true`.",
+      "agent": "research-prices",
+      "status": "done",
+      "started": "2026-11-20T19:40:05.958Z",
+      "finished": "2026-11-20T20:17:49.935Z",
+      "workedMs": 2263977,
+      "note": ""
+    },
+    {
+      "n": 7,
+      "title": "Add `bh metrics --json`: per agent and role, time worked, turns, tokens (cached and uncached), cost, tasks and steps, over Today, 7 days, 30 days and All.",
+      "agent": null,
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-20T20:17:50.131Z",
+      "workedMs": 0,
+      "note": ""
+    },
+    {
+      "n": 8,
+      "title": "Add the Metrics tab between Knowledge and Settings as agent cards, busiest first: one card per agent with time, turns, tokens, cost, tasks and steps and a small daily-activity bar chart, estimated numbers marked as such, reading only `bh metrics --json`, and make the page switch fit seven tabs: the slot stays 600px (`layouts/bot-herdr.json:106`); tabs that do not fit go behind a \"More ▾\" tab at the end, labels kept, the open page always visible, and its open-question counts carried onto More.",
+      "agent": "design-fix",
+      "status": "todo",
+      "started": null,
+      "finished": "2026-11-20T20:19:52.434Z",
+      "workedMs": 653161,
+      "note": "",
+      "report": {
+        "file": ".bot-herdr/tasks/t-20261120-n1rc/reports/design-fix.md",
+        "summary": "QA findings 1 (view), 5, 6 fixed; npm test/tsc pass; herdr-app check not runnable (binary missing)",
+        "from": "design-fix",
+        "at": "2026-11-20T20:48:33.503Z"
+      }
+    },
+    {
+      "n": 9,
+      "title": "Discover skills for every harness the team uses: add readers for Gemini CLI, Qwen Code, Antigravity, and pi and omp where they have a skills folder (otherwise mark them unsupported) to `engine/lib/tools.mjs:16`, keeping the 24 h cache.",
+      "agent": null,
+      "status": "done",
+      "started": "2026-11-20T20:17:50.314Z",
+      "finished": "2026-11-20T20:32:13.894Z",
+      "workedMs": 863580,
+      "note": ""
+    },
+    {
+      "n": 10,
+      "title": "Add a `skills` classifier feature as an allowlist: picks per role are made once when the task or plan is created (in the same classifier call as triage), saved on the task or plan, and reused at spawn so they add no time there; panel seats get picks too. At spawn, `agent.mjs` unions your pins, the picks and any skills added after a blocker, then enforces them where the harness can (Claude Code skills and MCP, Codex MCP; `roster.js:195-213`), and names them in the brief elsewhere. `null` (classifier off or failed) means only your pins apply as today; `[]` means no extra skills. An agent that needs a skill outside its list reports a `blocker` naming it, and the Orchestrator re-spawns it with that skill added. Record which skills each spawn got (pinned, picked, added, fallback).",
+      "agent": null,
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-20T20:32:14.138Z",
+      "workedMs": 0,
+      "note": "",
+      "report": {
+        "file": ".bot-herdr/tasks/t-20261120-n1rc/reports/dev-lean-step10.md",
+        "summary": "QA round 2 fixes: bh metrics prints — for null tokens (QA repro exits 0), allowedFor keeps skills/MCP apart and only restricts a pinned category for --skill with picked null, stale comment fixed; npm test 336 pass/1 skip, bh check PASS",
+        "from": "dev-lean",
+        "at": "2026-11-20T20:59:40.663Z"
+      }
+    },
+    {
+      "n": 11,
+      "title": "Show skills: in the agent's Settings dialog, a \"Pinned by you\" section (ticked chips, always allowed) and a read-only \"Picked for the current task\" list, a searchable skill list, and the skills each step used on the task page; take the harness list from the engine instead of the hard-coded text at `settings.js:1151`.",
+      "agent": null,
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-20T20:00:47.556Z",
+      "workedMs": 227444,
+      "note": "",
+      "report": {
+        "file": ".bot-herdr/tasks/t-20261120-n1rc/reports/design-skills.md",
+        "summary": "Skills UI done (pins, picked list, search, supported list, step line); needs steps[].skills in task list",
+        "from": "design-polish",
+        "at": "2026-11-20T20:00:35.560Z"
+      }
+    },
+    {
+      "n": 12,
+      "title": "Seat every custom agent on the planning panel, Advisor included: the Plans page takes its seats from the team (Dev, Design, QA, Research and each custom agent) instead of the fixed list (`work.js:67,320,483,1793`), the user can leave any seat off, and the panel and Orchestrator instructions (`engine/roles/panel.md:4`, `orchestrator.md`) name them like the built-in seats.",
+      "agent": null,
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-20T20:05:35.515Z",
+      "workedMs": 0,
+      "note": ""
+    },
+    {
+      "n": 13,
+      "title": "Polish the UI: a Start task button on Ready plans on the Plans page (`work.js:1503`); typing an option's number answers a question (`composer.js:1139`); task ids in chat replies link to the task (`feed.js:268`, writing the unused `OPEN_TASK`); accessibility labels on icon-only buttons (`button.js:18`) and position and selected state on segmented items (`switch.js:46`); a two-step confirm on Remove agent (`settings.js:1179`); Page Up, Page Down and Ctrl+End in the chat feed (`composer.js:227`); a brief \"Saved\" after Settings autosaves (`settings.js:296`).",
+      "agent": "design-polish",
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-20T19:47:16.140Z",
+      "workedMs": 398857,
+      "note": "",
+      "report": {
+        "file": ".bot-herdr/tasks/t-20261120-n1rc/reports/design-polish.md",
+        "summary": "UI polish 1-10 done; checks pass; Start-task handler duplicated (plandoc.js not mine)",
+        "from": "design-polish",
+        "at": "2026-11-20T19:46:36.485Z"
+      }
+    },
+    {
+      "n": 14,
+      "title": "Re-run the step 1 baselines and record the before and after numbers.",
+      "agent": null,
+      "status": "done",
+      "started": "2026-11-20T20:32:14.402Z",
+      "finished": "2026-11-20T20:32:35.643Z",
+      "workedMs": 21241,
+      "note": ""
+    }
+  ],
+  "triage": null,
+  "qa": {
+    "risk": "high",
+    "qaRequired": true,
+    "testBudget": {
+      "min": 0,
+      "max": 6
+    },
+    "focusAreas": [
+      "security boundaries: the wrong user, no user and an expired session are refused, and no secret leaks",
+      "data integrity: what is saved reads back the same, a migration runs on real data, and a failure halfway loses or corrupts nothing",
+      "destructive operations: they touch only what they should, and a failure halfway leaves things recoverable",
+      "isolation: work stays inside its branch, worktree and permission boundaries",
+      "public contracts: existing callers and saved data keep working (backwards compatibility)"
+    ],
+    "riskFactors": [
+      "security: mods/bot-herdr/engine/lib/runner.mjs (\"permission\")",
+      "persistent data: mods/bot-herdr/engine/lib/team.mjs (\"migrate\")",
+      "destructive operations: mods/bot-herdr/engine/lib/agent.mjs (\"rmSync(\")",
+      "isolation: .bot-herdr/tasks/t-20261120-n1rc/task.json (\"worktree\")",
+      "a wide change: 34 files, 2184 changed lines across 5 modules (.bot-herdr/tasks/t-20261118-ftrv, (top), mods/bot-herdr and 2 more)",
+      "tests changed with it: test/bench/baseline.mjs, test/engine.test.mjs, test/headless.test.mjs and 14 more",
+      "a public contract: Jev reads it in the diff (0.84)"
+    ],
+    "existingTestsLikelySufficient": true,
+    "reasoning": "HIGH: security: mods/bot-herdr/engine/lib/runner.mjs (\"permission\"); persistent data: mods/bot-herdr/engine/lib/team.mjs (\"migrate\"); destructive operations: mods/bot-herdr/engine/lib/agent.mjs (\"rmSync(\"). Jev read the diff as high (0.93).",
+    "source": "classifier",
+    "at": "2026-11-20T20:32:41.925Z"
+  },
+  "summary": "",
+  "base": "544fdc1aa15b9f046f3b85d649c9d167f810a6f5",
+  "children": [
+    {
+      "name": "dev-baseline",
+      "agent": "Dev",
+      "step": 1,
+      "branch": "bh/t-20261120-n1rc-dev-baseline",
+      "path": "/home/athi/bot-herdr/.bot-herdr/worktrees/t-20261120-n1rc-dev-baseline",
+      "base": "544fdc1aa15b9f046f3b85d649c9d167f810a6f5",
+      "state": "merged",
+      "at": "2026-11-20T19:38:17.983Z",
+      "mergedAt": "2026-11-20T19:47:30.358Z",
+      "stat": {
+        "files": 4,
+        "added": 277,
+        "removed": 3
+      }
+    }
+  ],
+  "gates": [
+    {
+      "round": 1,
+      "verdict": "CHANGES_REQUIRED",
+      "file": ".bot-herdr/tasks/t-20261120-n1rc/reports/qa-gate.md",
+      "summary": "CHANGES_REQUIRED: 3 major defects (metrics unreported zeros, compaction marker ownership/handoff, planned task skills & pinned+--skill)",
+      "from": "qa-gate",
+      "at": "2026-11-20T20:41:32.769Z",
+      "head": "544fdc1aa15b9f046f3b85d649c9d167f810a6f5"
+    },
+    {
+      "round": 2,
+      "verdict": "CHANGES_REQUIRED",
+      "file": ".bot-herdr/tasks/t-20261120-n1rc/reports/qa-gate2.md",
+      "summary": "CHANGES_REQUIRED: Round 1 fixes verified, but bh metrics CLI crashes on tokens: null (bh.mjs:277)",
+      "from": "qa-gate2",
+      "at": "2026-11-20T20:55:16.264Z",
+      "head": "544fdc1aa15b9f046f3b85d649c9d167f810a6f5"
+    },
+    {
+      "round": 3,
+      "verdict": "PASS",
+      "file": ".bot-herdr/tasks/t-20261120-n1rc/reports/qa-gate3.md",
+      "summary": "PASS: Round 2 bh metrics null-token crash and allowedFor/comment fixes verified; npm test 336 pass/1 skip, bh check PASS",
+      "from": "qa-gate3",
+      "at": "2026-11-20T21:04:13.425Z",
+      "head": "544fdc1aa15b9f046f3b85d649c9d167f810a6f5"
+    }
+  ]
+}

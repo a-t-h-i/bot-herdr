@@ -120,7 +120,7 @@ test("classifier rules: triage, track and effort routing (the configured level i
   assert.deepEqual(await C.route(off, "make the button blue"), { route: "orchestrator", probability: null, by: "rules" });
 });
 
-test("briefs: every agent learns how to start child agents; the panel and reviewers don't", async () => {
+test("briefs: the lead learns how to start child agents; children, the panel and reviewers don't", async () => {
   const team = await lib("lib/team.mjs");
   const lead = team.brief({ id: "orchestrator", role: "orchestrator", name: "Orchestrator", harness: "claude", lead: true }, { mode: "lead", root: PROJECT });
   assert.match(lead, /## Child agents/);
@@ -130,8 +130,12 @@ test("briefs: every agent learns how to start child agents; the panel and review
   assert.match(dev, /You can start child agents/);
   assert.doesNotMatch(dev, /bh spawn dev\b/); // not itself
   const child = team.brief({ id: "qa", role: "qa", name: "QA", harness: "claude" }, { mode: "child", root: PROJECT, parent: "t1", task: "t-20261110-abcd" });
-  assert.match(child, /only when your brief says you may/);
+  // A child does the work it was given: it is not told how to start one; the report's path and
+  // commands are in its brief, and the message that starts it only points there.
+  assert.doesNotMatch(child, /## Child agents/);
+  assert.match(child, /## Reporting/);
   assert.match(child, /reports\/qa\.md/);
+  assert.match(child, /hc send t1/);
   const panel = team.brief({ id: "dev", role: "dev", name: "Dev", harness: "claude" }, { mode: "panel", root: PROJECT });
   assert.doesNotMatch(panel, /## Child agents/);
   for (const text of [lead, dev, child, panel]) assert.doesNotMatch(text, /bot[- ]lobby/i);
@@ -163,7 +167,7 @@ test("bh end to end: team, config, harnesses, tasks, questions", () => {
   assert.match(template(), /managed: bot-herdr/);
   bh("access", "--data", enc({ headless: false })); // rewrites the templates
   assert.match(template(), /command: claude --model claude-sonnet-5-5 --effort high/);
-  assert.match(template(), /## Child agents/);
+  assert.match(template(), /## Reporting/); // the template's body is the agent's brief
   bh("access", "--data", enc({ headless: true }));
 
   const config = json("config", "--data", enc({ enabled: true, key: "secret", features: { qa: false } }));

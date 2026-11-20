@@ -9,8 +9,8 @@ import { createHash } from "node:crypto";
 import { readdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { QUIET, ROLES, argvOf, effortsOf, findAgent, looksLikeInstructions, migrateArgs, roleOf, roster, slug } from "../../roster.js";
-import { BH, DATA, ENGINE, accessOf, bhCommand, ensureDir, exists, readJson, readText, writeJson, writeText } from "./core.mjs";
+import { QUIET, ROLES, allowedFor, argvOf, effortsOf, findAgent, looksLikeInstructions, migrateArgs, roleOf, roster, slug } from "../../roster.js";
+import { BH, DATA, ENGINE, accessOf, bhCommand, ensureDir, exists, projectRoot, readJson, readText, writeJson, writeText } from "./core.mjs";
 import { headless } from "./runner.mjs";
 import * as knowledge from "./knowledge.mjs";
 import { SUPPORTED, installedNames } from "./tools.mjs";
@@ -28,12 +28,13 @@ export function team() {
 }
 
 /**
- * An agent kept to some skills or MCP servers carries what its harness has installed (read fresh,
- * so a skill installed today is denied too), so its launch (argvOf) can deny the rest.
+ * An agent kept to some skills or MCP servers carries what its harness has installed, so its
+ * launch (argvOf) can deny the rest. `listTools` reads the folders again when one changed, so a
+ * skill installed today is denied too, and an unchanged answer still comes from the cache.
  */
 function withInstalled(a) {
   if (!(a.skills.length || a.mcp.length) || !SUPPORTED.includes(a.harness)) return a;
-  return { ...a, installed: installedNames(a.harness, { root: process.cwd(), refresh: true }) };
+  return { ...a, installed: installedNames(a.harness, { root: projectRoot() }) };
 }
 
 export function findMember(word) {
@@ -80,11 +81,23 @@ function reportSection({ parent, task, name, step = null }) {
   return lines.join("\n");
 }
 
-/** The skills and MCP servers the user ticked for this agent; null when it may use all installed. */
+/**
+ * An agent as one spawn runs it: its task's or plan's skills entry, and what its harness has
+ * installed when the picks restrict it, so the launch can deny everything outside the allowlist.
+ */
+export function withAllowlist(agent, entry = null) {
+  if (!entry) return agent;
+  const restricted = Array.isArray(entry.picked);
+  const add = restricted && !agent.installed && SUPPORTED.includes(agent.harness);
+  return { ...agent, allowed: entry, ...(add ? { installed: installedNames(agent.harness, { root: projectRoot() }) } : {}) };
+}
+
+/** The skills and MCP servers this spawn may use: its pins, the picks and whatever was added. */
 export function toolsSection(agent) {
+  const allowed = allowedFor(agent, agent.allowed ?? null);
   const lines = [];
-  if (agent.skills?.length) lines.push(`Use only these skills: ${agent.skills.join(", ")}.`);
-  if (agent.mcp?.length) lines.push(`Use only these MCP servers: ${agent.mcp.join(", ")}.`);
+  if (allowed.skills !== null) lines.push(`Use only these skills: ${allowed.skills.join(", ") || "none"}. If you need another, post a blocker naming it.`);
+  if (allowed.mcp !== null) lines.push(`Use only these MCP servers: ${allowed.mcp.join(", ") || "none"}.`);
   return lines.length ? ["## Your skills and MCP servers", ...lines].join("\n") : null;
 }
 
@@ -116,14 +129,16 @@ export function brief(agent, { mode = "child", parent = null, task = null, plan 
   tools.push(task ? `- Your task is \`${task}\`: \`bh task show ${task}\` has its request and steps, \`bh board read ${task}\` its board (\`--since <n>\` reads what is new since entry n; a brief update gives you n). Post with \`bh board post ${task} <kind> "<text>" --from ${name ?? slug(agent.name)}\`.` : "- When you work on a task, `bh task show <task>` has its request and steps and `bh board read <task>` its board (`--since <n>` reads what is new since entry n); post with `bh board post <task> <kind> \"<text>\" --from <your name>`.");
   if (plan) tools.push(`- The plan is \`${plan}\`: \`bh plan show ${plan}\`.`);
   tools.push("- `bh scripts` lists shared scripts; run one with `bh scripts run <name>`. `bh check` runs the project's lint, typecheck and tests for what changed.");
-  tools.push("- Ask the user with `bh ask --file <questions.md>` (numbered questions, `- Label — meaning` options, optional fenced `mockup` blocks) and end your turn: the answers reach you as a message. Ask whenever a choice is theirs (scope, look, behaviour, trade-offs) instead of guessing, never in your reply text; your harness's own question tool becomes the same card.");
-  tools.push("- A mockup goes in a ```mockup fence directly under the option it shows, indented like the option's text: an HTML fragment (one <style> block and markup, no scripts, links, web fonts or remote images), drawn by a headless browser at 1200x825. Only `bh ask --file` carries mockups; `--option` doesn't. bh ask refuses a file with a misplaced block and says what to fix, and tells you which mockups it couldn't draw.");
+  if (mode === "lead" || mode === "panel") {
+    tools.push("- Ask the user with `bh ask --file <questions.md>` (numbered questions, `- Label — meaning` options, optional fenced `mockup` blocks) and end your turn: the answers reach you as a message. Ask whenever a choice is theirs (scope, look, behaviour, trade-offs) instead of guessing, never in your reply text; your harness's own question tool becomes the same card.");
+    tools.push("- A mockup goes in a ```mockup fence directly under the option it shows, indented like the option's text: an HTML fragment (one <style> block and markup, no scripts, links, web fonts or remote images), drawn by a headless browser at 1200x825. Only `bh ask --file` carries mockups; `--option` doesn't. bh ask refuses a file with a misplaced block and says what to fix, and tells you which mockups it couldn't draw.");
+  }
   if (headless) tools.push("- You run headless: nobody can approve a prompt mid-turn, so a refused command means saying what you need and why, for the user to allow in Settings → Agent access (`bh check` is always allowed). Use literal addresses in commands (no `$HC_TERMINAL_ID`, `;`, `&`, `|`, `<`, `>`), and write files with tools.");
   parts.push(tools.join("\n"));
 
-  if (mode !== "panel" && mode !== "review") {
+  if (mode === "lead") {
     const members = agents.filter((a) => a.id !== agent.id && !a.lead).map((a) => `- ${a.name} (\`bh spawn ${slug(a.name)}\`): ${doesOf(a) || "an agent the user added."}`);
-    parts.push(childAgents({ lead, mode, members }));
+    parts.push(childAgents({ lead, members }));
   }
 
   if (mode === "lead" && headless) {
@@ -155,15 +170,13 @@ export function brief(agent, { mode = "child", parent = null, task = null, plan 
 }
 
 /**
- * How to start child agents. Every agent may (the Orchestrator and anyone the user talks to
- * directly); an agent another agent started only when its brief says so.
+ * How to start child agents: only the lead gets it. A child another agent started does the work it
+ * was given; its brief never says it may start its own.
  */
-function childAgents({ lead, mode, members }) {
-  const when = mode === "child"
-    ? "Start child agents only when your brief says you may. When it does:"
-    : lead
-      ? "You hand work to the team as child agents. Each runs in its own herdr terminal, where the user can watch, steer and take it over."
-      : "You can start child agents when work splits into independent parts, needs a second opinion, or would take you long alone. Each runs in its own herdr terminal, where the user can watch, steer and take it over.";
+function childAgents({ lead, members }) {
+  const when = lead
+    ? "You hand work to the team as child agents. Each runs in its own herdr terminal, where the user can watch, steer and take it over."
+    : "You can start child agents when work splits into independent parts, needs a second opinion, or would take you long alone. Each runs in its own herdr terminal, where the user can watch, steer and take it over.";
   return [
     "## Child agents",
     when,

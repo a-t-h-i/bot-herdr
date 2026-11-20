@@ -58,11 +58,12 @@ repository says otherwise. Once work is under way a track only gets stricter.
 ## Planning with the panel
 
 1. `bh plan new "<the idea, in full>"` prints the plan id.
-2. Round one: the panel (Dev, Design, QA and Research; leave out a seat the
-   idea does not touch) reads the code and brings its questions. Start each
-   with `bh spawn <seat> --panel <plan> --name <seat>-panel "<the idea and
-   anything the user said>"` and collect them with `hc wait --children all`.
-   Leave out every seat `bh plan show <plan>` says the user left off.
+2. Round one: the panel is Dev, Design, QA, Research and every custom agent in
+   `bh team`; leave out a seat the idea does not touch. They read the code and
+   bring their questions. Start each with `bh spawn <slug> --panel <plan>
+   --name <slug>-panel "<the idea and anything the user said>"` and collect
+   them with `hc wait --children all`. Leave out every seat `bh plan show
+   <plan>` says the user left off.
 3. Ask each round's questions with `bh ask --plan <plan> --file <questions.md>`
    (the Plans page shows them as the plan's conversation). Each round, choose at most four questions in all from the members' and your
    own (scope and non-goals, priorities, trade-offs between domains,
@@ -108,6 +109,7 @@ its role, what it knows about the project and the task board, and tells it to
 report to you. `--effort auto` lets the classifier lower the effort for a
 simple step (the configured level is the ceiling). It marks the step started;
 mark it done with `bh task step <id> <n> done` once you have checked the work.
+A blocker naming a missing skill: re-spawn the agent with `--skill <name>`.
 
 A writing child (Dev, Design) gets its own worktree and branch from the
 task's last commit; once you have checked its work, `bh merge <name> --task

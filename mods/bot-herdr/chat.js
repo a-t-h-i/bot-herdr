@@ -16,8 +16,8 @@ import { stateView } from "./switch.js";
 import { colors } from "./theme.js";
 import { Composer, outboxDir, liveAgents } from "./composer.js";
 import { isQuiet, quietStatus } from "./live.js";
-import { FOCUS, OUTGOING, activePage, openTerminal } from "./pages.js";
-import { replyFile, replyBody, push, shown, scrollBy, clampScroll, isNew, isHandled, outcome, clock, segments, fold, linkFiles, addComment, editComment, resolveComment, deleteComment, fileKey, logNew, groupChildren, entryName } from "./feed.js";
+import { FOCUS, OUTGOING, OPEN_TASK, activePage, openTerminal, showPage } from "./pages.js";
+import { replyFile, replyBody, push, shown, scrollBy, clampScroll, isNew, isHandled, outcome, clock, segments, fold, linkFiles, linkTasks, taskTarget, addComment, editComment, resolveComment, deleteComment, fileKey, logNew, groupChildren, entryName } from "./feed.js";
 import { openFile, openLink } from "./viewer.js";
 import { projectDir } from "./bh.js";
 import { roleWord, roleTone, mentionTone, alpha } from "./indicators.js";
@@ -68,6 +68,14 @@ const save = (key, value) => {
 };
 
 /** The id of the newest entry, or null: the feed's cache changes with it. */
+/** A feed link: a task id opens that task on the Tasks page; any other link opens as before. */
+function openFeedLink(url) {
+  const id = taskTarget(url);
+  if (!id) return openLink(url, projectDir());
+  setShared(OPEN_TASK, { id, at: Date.now() });
+  showPage("tasks");
+}
+
 const lastId = (entries) => (entries?.length ? entries[entries.length - 1].id : null);
 
 /** Whether two address→entry maps hold the same addresses, with the same lead. */
@@ -552,6 +560,10 @@ export class Chat {
         cx.notify();
       })
       .track_focus(this.handle)
+      // Page Up / Page Down / Ctrl+End from the composer (composer.js binds them).
+      .on_action("bot_herdr_page_up", (_e, cx) => this.page(1, view.total, cx))
+      .on_action("bot_herdr_page_down", (_e, cx) => this.page(-1, view.total, cx))
+      .on_action("bot_herdr_latest", (_e, cx) => this.latest(cx))
       .on_key_down((e, cx) => {
         const chord = e.modifiers.control || e.modifiers.platform || e.modifiers.alt;
         if (this.commenting || !this.composer.isFolded() || !e.key_char || chord) return; // a comment box open takes the typing
@@ -638,6 +650,22 @@ export class Chat {
       this.composer.expanded = false;
       this.handle.focus();
     }
+    cx.notify();
+  }
+
+  /** Page Up / Page Down: the feed moves one feed height (positive: older); the composer stays open. */
+  page(sign, total, cx) {
+    const room = this.room ?? 0;
+    const next = scrollBy({ back: this.back, px: this.px }, sign * room, this.feedHeights(this.space()), total, undefined, room);
+    this.back = next.back;
+    this.px = next.px;
+    cx.notify();
+  }
+
+  /** Back to the newest entry, as "Jump to latest" does. */
+  latest(cx) {
+    this.back = 0;
+    this.px = 0;
     cx.notify();
   }
 
@@ -809,7 +837,7 @@ export class Chat {
           .text_size(TYPE.md)
           .line_height(`${LINE.md}px`)
           .children(parts.map((p, i) => (p.kind === "md"
-            ? TextView.markdown(`bh-md-${e.id}-${i}`, linkFiles(p.text)).selectable(true).on_link_click((url) => openLink(url, projectDir()))
+            ? TextView.markdown(`bh-md-${e.id}-${i}`, linkTasks(linkFiles(p.text))).selectable(true).on_link_click(openFeedLink)
             : this.picture(c, e, p, pics.indexOf(p), pics, width)))),
       )
       .child(this.replyComments(c, e, show));
@@ -979,7 +1007,7 @@ export class Chat {
         .child(div().text_size(TYPE.sm).font_semibold().text_color(agentInk(c, k.from?.name ?? "Agent")).child(k.from?.name ?? "Agent"))
         .child(div().text_size(TYPE.xs).text_color(c.faint).child(clock(k.at))))
       .child(div().text_size(TYPE.sm).line_height(`${LINE.sm}px`)
-        .child(TextView.markdown(`bh-kid-md-${k.id}-${open ? "o" : "c"}`, linkFiles(text)).selectable(true).on_link_click((url) => openLink(url, projectDir()))))
+        .child(TextView.markdown(`bh-kid-md-${k.id}-${open ? "o" : "c"}`, linkTasks(linkFiles(text))).selectable(true).on_link_click(openFeedLink)))
       .when(lines.length > KID_LINES, (el) => el.child(
         actionButton(c, `bh-kid-more-${k.id}`, open ? "Show less" : "Show all", (_ev, cx) => this.showKidFull(k.id, cx), { tone: "quiet" }).self_start(),
       ));
@@ -1053,11 +1081,7 @@ export class Chat {
       .bottom(SPACE[3])
       .justify_center()
       .child(
-        actionButton(c, "bh-newest", back > 0 ? `${back} newer · jump to latest` : "Jump to latest", (_e, cx) => {
-          this.back = 0;
-          this.px = 0;
-          cx.notify();
-        }, { tone: "secondary" }),
+        actionButton(c, "bh-newest", back > 0 ? `${back} newer · jump to latest` : "Jump to latest", (_e, cx) => this.latest(cx), { tone: "secondary" }),
       );
   }
 }

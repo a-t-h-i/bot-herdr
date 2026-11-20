@@ -191,19 +191,50 @@ export function argvOf(agent, known = [], over = {}) {
   ];
 }
 
-/** Installed names the agent may not use: none when it ticked nothing (no restriction). */
-const unticked = (picked, installed) => (picked?.length ? (installed ?? []).filter((n) => !picked.includes(n)) : []);
+/** The installed names an agent may not use: none when `allowed` is null (no restriction at all). */
+const denied = (allowed, installed) => (allowed === null ? [] : (installed ?? []).filter((n) => !allowed.includes(n)));
 
 /**
- * The flags that keep an agent to the skills and MCP servers it ticked, by denying the rest of
- * what its harness has installed (`agent.installed`, which the engine adds from `bh tools`).
+ * The skills and MCP servers an agent may use on one spawn. `entry` is its task's or plan's record
+ * for it (`{ picked: string[] | null, added: string[] }`): the pins, plus the classifier's picks and
+ * whatever was added after a blocker. `picked: null` (classifier off or failed) means only the pins
+ * apply, and no pins means no restriction; a `picked` array restricts even when it is empty.
+ * `null` in the answer means "no restriction".
+ */
+export function allowedFor(agent, entry = null) {
+  const list = (names) => (Array.isArray(names) ? names.filter(Boolean) : []);
+  const picked = Array.isArray(entry?.picked) ? entry.picked : null;
+  const added = list(entry?.added);
+  const installed = agent.installed ?? {};
+  const named = [...new Set([...(picked ?? []), ...added])];
+  const asMcp = named.filter((n) => (installed.mcp ?? []).includes(n) && !(installed.skills ?? []).includes(n));
+  const extra = { skills: named.filter((n) => !asMcp.includes(n)), mcp: asMcp };
+  const merged = (pins, more) => {
+    const all = [...new Set([...list(pins), ...more])];
+    return all.length ? all : null;
+  };
+  if (picked === null) {
+    // Classifier off or failed: a `--skill` addition joins the category it belongs to, and only a
+    // category with pins is restricted; a category with no pins stays unrestricted, as before.
+    return {
+      skills: list(agent.skills).length ? merged(agent.skills, extra.skills) : null,
+      mcp: list(agent.mcp).length ? merged(agent.mcp, extra.mcp) : null,
+    };
+  }
+  return { skills: merged(agent.skills, extra.skills) ?? [], mcp: merged(agent.mcp, extra.mcp) ?? [] };
+}
+
+/**
+ * The flags that keep an agent to its allowed skills and MCP servers, by denying the rest of what
+ * its harness has installed (`agent.installed`, which the engine adds from `bh tools`).
  * Claude Code: a session-only `--settings` deny list (code.claude.com/docs/en/permissions).
  * Codex: `-c mcp_servers.<id>.enabled=false`; it has no per-launch switch for skills. Every
  * other harness, and Codex's skills, are held to the picks by the brief alone.
  */
 export function limitArgs(agent) {
-  const skills = unticked(agent.skills, agent.installed?.skills);
-  const mcp = unticked(agent.mcp, agent.installed?.mcp);
+  const allowed = allowedFor(agent, agent.allowed ?? null);
+  const skills = denied(allowed.skills, agent.installed?.skills);
+  const mcp = denied(allowed.mcp, agent.installed?.mcp);
   if (agent.harness === "claude" && (skills.length || mcp.length)) {
     // Other characters in a server's name become _ in its tool names.
     const deny = [...skills.map((s) => `Skill(skill:${s})`), ...mcp.map((m) => `mcp__${m.replace(/[^\w-]/g, "_")}`)];

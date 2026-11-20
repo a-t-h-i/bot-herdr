@@ -1,0 +1,10 @@
+{
+  "id": "p-20261120-7rw6",
+  "title": "Faster, leaner agents with skill picks and a Metrics tab",
+  "idea": "Find ways to improve the bot-herdr mod: (1) performance, (2) token efficiency, (3) skill discovery: the classifier should assign skills to each agent based on its role and the task at hand, also during the planning phase; skills are auto-discovered for all selected harnesses, and the user can also assign specific skills manually; (4) user experience, (5) agent experience, (6) turnaround time; (7) a metrics dashboard as a new tab giving insights into which agents work the most and by how much. Research first, then plan the improvements.",
+  "status": "task",
+  "round": 7,
+  "task": "t-20261120-n1rc",
+  "created": "2026-11-20T19:16:09.655Z",
+  "updated": "2026-11-20T19:37:32.124Z"
+}

@@ -43,7 +43,7 @@ export const DEFAULTS = {
   kind: "",
   accountId: "",
   baseUrl: "",
-  features: { lobby: true, triage: true, effort: true, qa: true, scripts: true },
+  features: { lobby: true, triage: true, effort: true, qa: true, scripts: true, skills: true },
   thresholds: { lobbyAgentAt: 0.5, simpleAt: 0.7, trivialAt: 0.8 },
 };
 
@@ -211,8 +211,8 @@ export function triageByRules(request) {
   };
 }
 
-export async function triage(c, request, layout = []) {
-  if (!c.enabled("triage")) return triageByRules(request);
+/** The triage's questions, shared by the triage-only and the triage-and-skills requests. */
+function triageQuestions() {
   const questions = {
     size: score("How big is the change `request` asks for, judged by what it would take to build and verify in this repository?", SIZE_LEVELS),
     needs_research: noul("Does building `request` depend on facts from outside the repository — library or API versions, third-party services, standards, current documentation?", "Yes: a decision needs outside evidence that cannot be read from the code.", "No: the repository and the request are enough."),
@@ -221,7 +221,14 @@ export async function triage(c, request, layout = []) {
     solo: noul("Could one engineer do `request` alone, right away — in one file or one area of the code — with no contract to agree between frontend and backend, no unfamiliar codebase to survey first, no risky change (security, data, payments, migrations) and no decision the user must make first?", "Yes: one person can just do it now.", "No: it needs a team — several areas, a survey of the codebase, a plan to agree, or review before it lands."),
   };
   for (const [d, owns] of Object.entries(DOMAINS)) questions[`domain_${d}`] = noul(`Does building \`request\` require changes in this area: ${owns}?`);
-  const r = await c.ask("triage", { state: { request: clip(request, 6000), ...(layout.length ? { repository_layout: layout.join(", ") } : {}) }, questions });
+  return questions;
+}
+
+/** The triage's state: the request, and the repository layout when the caller has one. */
+const triageState = (request, layout = []) => ({ request: clip(request, 6000), ...(layout.length ? { repository_layout: layout.join(", ") } : {}) });
+
+/** The triage from the classifier's answers, or the rules when it did not answer the size. */
+function triageFrom(r, request) {
   const size = scoreOf(r?.answers, "size");
   if (!size) return triageByRules(request);
   const kind = choiceOf(r.answers, "kind");
@@ -236,6 +243,85 @@ export async function triage(c, request, layout = []) {
     solo: round(yesOf(r.answers, "solo")),
     by: "classifier",
   };
+}
+
+export async function triage(c, request, layout = []) {
+  if (!c.enabled("triage")) return triageByRules(request);
+  const r = await c.ask("triage", { state: triageState(request, layout), questions: triageQuestions() });
+  return triageFrom(r, request);
+}
+
+/** Triage and the skills and MCP servers each role needs, asked in one classifier request. */
+export async function triageAndSkills(c, request, { layout = [], roles = [] } = {}) {
+  if (!c.enabled("triage")) return { triage: triageByRules(request), skills: null };
+  const withSkills = c.enabled("skills") && skillAsks(roles).length > 0;
+  const questions = { ...triageQuestions(), ...(withSkills ? skillQuestions(roles) : {}) };
+  const r = await c.ask("triage", { state: triageState(request, layout), questions });
+  return { triage: triageFrom(r, request), skills: withSkills ? skillsFrom(r, roles) : null };
+}
+
+// ── Skills and MCP servers for a task or plan ───────────────────────────────────────────────
+
+export const SKILLS_MAX = 5;
+const SKILLS_PER_ROLE = 40;
+
+/** A skill's description as one clipped line; MCP servers arrive with their own. */
+const skillText = (s) => clip(String(s ?? "").replace(/\s+/g, " ").trim() || "no description", 120);
+
+/** Each role's candidates (capped) with the question that asks which of them it needs. */
+function skillAsks(roles) {
+  return (roles ?? []).filter((r) => r?.id && r.candidates?.length).slice(0, 12).map((r) => {
+    const candidates = r.candidates.slice(0, SKILLS_PER_ROLE);
+    const criteria = Object.fromEntries(candidates.map((s, i) => [`${r.id}.${i}`, `${s.name}: ${skillText(s.description)}`]));
+    criteria.none = "No skill or MCP server beyond the agent's defaults.";
+    const question = choice(`Which skills or MCP servers does agent \`${r.id}\` (${r.does || "its role"}, on ${r.harness ?? "its harness"}) need for \`request\`? Pick the one it needs most, or \`none\`.`, criteria);
+    return { id: r.id, candidates, question };
+  });
+}
+
+/** The skill questions, keyed `skills.<id>` so a custom agent named like a triage key cannot collide. */
+const skillQuestions = (roles) => Object.fromEntries(skillAsks(roles).map((a) => [`skills.${a.id}`, a.question]));
+
+const skillsState = (request, roles) => ({
+  request: clip(request, 6000),
+  agents: (roles ?? []).slice(0, 12).map((r) => ({ id: r.id, does: String(r.does ?? ""), harness: String(r.harness ?? "") })),
+});
+
+/** The picked names per role: only its own candidates, at most five, best fit first. */
+function skillsFrom(r, roles) {
+  if (!r?.answers) return null;
+  const out = {};
+  for (const ask of skillAsks(roles)) {
+    const a = r.answers[`skills.${ask.id}`];
+    if (!a) continue;
+    if (a.type !== "choice" || a.choice === "none") {
+      out[ask.id] = [];
+      continue;
+    }
+    if (!String(a.choice).startsWith(`${ask.id}.`)) {
+      out[ask.id] = []; // a choice from another question: not this role's
+      continue;
+    }
+    const chosen = Object.entries(a.probabilities ?? {})
+      .filter(([key, p]) => key === a.choice || (key.startsWith(`${ask.id}.`) && Number(p) >= 0.6))
+      .sort((x, y) => (y[0] === a.choice) - (x[0] === a.choice) || Number(y[1]) - Number(x[1]))
+      .map(([key]) => ask.candidates[Number(key.slice(ask.id.length + 1))]?.name)
+      .filter(Boolean);
+    const one = [ask.candidates[Number(a.choice.slice(ask.id.length + 1))]?.name].filter(Boolean);
+    out[ask.id] = (chosen.length ? chosen : one).slice(0, SKILLS_MAX);
+  }
+  return out;
+}
+
+/**
+ * The skills and MCP servers each role needs for `request`, from its own candidates only.
+ * `roles` = `[{ id, does, harness, candidates: [{ name, description }] }]`; null when the
+ * feature is off or the classifier did not answer.
+ */
+export async function pickSkills(c, request, roles = []) {
+  if (!c.enabled("skills") || !skillAsks(roles).length) return null;
+  const r = await c.ask("skills", { state: skillsState(request, roles), questions: skillQuestions(roles) });
+  return skillsFrom(r, roles);
 }
 
 /** The track a triage suggests: fast for a small, clear, solo change; full otherwise. */

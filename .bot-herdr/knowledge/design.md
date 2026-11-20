@@ -12,6 +12,8 @@
 - Overlay props are serialized (data only, methods dropped), but the overlay shares the page's module realm: pass an id in props and resolve the live object from a module-level Map (settings.js PAGES).
 - The mod runtime's fs/promises has no stat and readFile rejects with a plain Error with no code; test absence with exists(path).
 - The Work page reads tasks (and their usage) from bh task list --all --json; only bh task show readers (the chat tracker) get taskDetail fields like steps[].events.
+- The mod runtime has no Intl (new Intl.NumberFormat fails herdr-app check): format numbers with Number#toLocaleString().
+- bhJson(args) appends --json itself; never pass it.
 
 ## Standards
 - When reusing the Composer for non-chat sends (e.g. plan comments), override send but reset input/files/pane state or the composer sticks (chosen by Design)
@@ -22,6 +24,8 @@
 - A page composer folds like the chat's only if the page root has a cx.focus_handle() with track_focus and forwards e.key_char to composer.typeFolded while composer.isFolded(); Composer.changed sets expanded back to true.
 - OpenQuestions (mods/bot-herdr/questions.js) is the one read/answer path for every page composer: poll() reads the outbox questions folder every 2500ms, drop(q) takes a card off at once, send() posts bh answer; a page composer's hooks.answered must be wired or its cards cannot go.
 - agentBadge(c, name, size) in railview.js is the one agent badge (rail row, child group, tracker step).
+- A new page needs an entry in pages.js PAGES, a view in main.js VIEWS, a stack child in layouts/bot-herdr.json, and install.mjs's old-layout check must look for the newest page id.
+- Metrics cards: c.fill, 1px c.edge, SIZE.radius, 14px padding and gap; daily bars 44px tallest; More tab labelled "More ▾" with openPick (chosen by Design)
 
 ## Decisions
 - Knowledge cards: no coloured side stripe; the agent is marked by its dot and name only (the user's choice, 2026-11-11).

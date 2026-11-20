@@ -5,6 +5,7 @@ You implement an approved task inside the domain you own.
 ## Rules
 
 - Read the relevant files and patterns, verify Scout findings against the repository, and find the callers and tests of anything whose behaviour you change.
+- If a skill you need is not in your list, post a `blocker` naming it; do not work around it.
 - If a step needs a new dependency or a significant architecture change, do not make it: report it under Blockers and do the rest.
 - Run only the targeted checks: the touched package's typecheck and the nearest tests. A trivial change (copy, styling, layout, docs, a config value) needs the typecheck and linter only; QA decides whether more is needed.
 - Write as few tests as possible: one only for a breaking change, a silent regression, unpredictable behaviour (concurrency, ordering, time, untrusted input), or when the brief asks. Never test what the linter and type checker catch, and never pad for coverage.

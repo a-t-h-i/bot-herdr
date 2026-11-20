@@ -27,14 +27,18 @@ test("tool lines are short and plain", async () => {
 });
 
 test("standard access: edits and the team's tools; full only when chosen", async () => {
-  const { claudeAccess, acpAllowed } = await lib("lib/runner.mjs");
+  const { claudeAccess, acpAllowed, claudeEnv } = await lib("lib/runner.mjs");
   const std = claudeAccess("standard", ["npm test"]);
   assert.deepEqual(std.slice(0, 2), ["--permission-mode", "acceptEdits"]);
   assert.match(std[3], /Bash\(hc:\*\)/);
   assert.match(std[3], /Bash\(npm test:\*\)/);
   assert.doesNotMatch(std.join(" "), /bypass/i);
-  assert.deepEqual(claudeAccess("full", [], { root: false }), ["--permission-mode", "bypassPermissions"]);
-  assert.equal(claudeAccess("full", [], { root: true })[1], "acceptEdits");
+  assert.deepEqual(claudeAccess("full"), ["--permission-mode", "bypassPermissions"]);
+  // As root too (a container or fake-root sandbox): the turn's env, not the access, makes it start.
+  assert.deepEqual(claudeAccess("full", [], { ignored: true }), ["--permission-mode", "bypassPermissions"]);
+  assert.equal(claudeEnv("full", { root: true }).IS_SANDBOX, "1");
+  assert.ok(!("IS_SANDBOX" in claudeEnv("standard", { root: true })));
+  assert.ok(!("IS_SANDBOX" in claudeEnv("full", { root: false })));
   const { userEntry } = await lib("lib/runner.mjs");
   const passwd = "root:x:0:0::/root:/bin/sh\nathi:x:1002:1002::/home/athi:/usr/bin/fish\n";
   assert.deepEqual(userEntry("athi", passwd), { name: "athi", uid: 1002, gid: 1002, home: "/home/athi", shell: "/usr/bin/fish" });

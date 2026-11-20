@@ -14,7 +14,9 @@
 //                           commands are refused and the agent says so. Codex runs in its
 //                           workspace-write sandbox.
 //   full                    anything, with no prompts: only for a machine or folder the user
-//                           is happy to let agents run free in
+//                           is happy to let agents run free in. Claude Code refuses to start
+//                           that way as root (a container or sandbox reports root too), so
+//                           the turn tells it IS_SANDBOX: the user's choice still holds.
 // pi and Oh My Pi have no permission system of their own: they run as they would in a terminal.
 
 import { spawn, spawnSync } from "node:child_process";
@@ -116,7 +118,7 @@ function switcher(u, groups) {
   return null;
 }
 
-/** Whether a harness started in `cwd` runs as root, where Claude Code refuses to bypass its permissions. */
+/** Whether a harness started in `cwd` runs as root, where Claude Code only bypasses its permissions with IS_SANDBOX. */
 export const asRoot = (cwd = process.cwd()) => isRoot() && !agentUser(cwd);
 
 /** Starts a program, with Windows' .cmd shims working. Long text goes over stdin or in files. */
@@ -254,25 +256,32 @@ export function standardCommands() {
 
 /**
  * Claude Code's permissions: edits, the team's tools and what the user allowed; everything when
- * chosen. When it would run as root (herdr is root and no user to hand it to, or BH_AGENT_USER=root),
- * Claude Code won't start with bypassPermissions at all, so full access falls back to standard
- * there rather than failing every turn.
+ * chosen. Full access always means bypassPermissions: as root (herdr in a container or a
+ * fake-root sandbox like proot) Claude Code only starts that way when IS_SANDBOX=1, which
+ * claudeEnv sets, so a chosen full access is never silently downgraded to standard.
  */
-export function claudeAccess(access, allow = [], { root = asRoot() } = {}) {
-  if (access === "full" && !root) return ["--permission-mode", "bypassPermissions"];
+export function claudeAccess(access, allow = []) {
+  if (access === "full") return ["--permission-mode", "bypassPermissions"];
   const commands = [...standardCommands(), ...allow].map((c) => `Bash(${c}:*)`);
   const tools = ["Read", "Edit", "Write", "MultiEdit", "NotebookEdit", "Glob", "Grep", "LS", "TodoWrite", "WebSearch", "WebFetch", ...commands];
   return ["--permission-mode", "acceptEdits", "--allowedTools", tools.join(",")];
+}
+
+/** The environment a Claude Code turn runs in: as root, IS_SANDBOX=1 lets the chosen full access start. */
+export function claudeEnv(access, { root = asRoot() } = {}) {
+  const { IS_SANDBOX, ...env } = process.env;
+  return access === "full" && root ? { ...env, IS_SANDBOX: "1" } : env;
 }
 
 /** Claude Code: `claude -p --output-format stream-json`, the brief as an appended system prompt. */
 function claudeTurn({ agent, known, state, briefFile, prompt, cwd, on, access, allow, idleMs }) {
   const first = !state.session;
   const id = state.session ?? randomUUID();
+  const root = asRoot(cwd);
   const argv = [
     ...argvOf(agent, known),
     "-p", "--output-format", "stream-json", "--verbose",
-    ...claudeAccess(access, allow, { root: asRoot(cwd) }),
+    ...claudeAccess(access, allow),
     ...(first ? ["--session-id", id, "--append-system-prompt-file", briefFile] : ["--resume", id]),
   ];
   return oneShot(argv, prompt, cwd, (event, turn) => {
@@ -308,11 +317,43 @@ function claudeTurn({ agent, known, state, briefFile, prompt, cwd, on, access, a
       const u = event.usage ?? {};
       on({ kind: "usage", ...numbers({ input: u.input_tokens, output: u.output_tokens, cacheRead: u.cache_read_input_tokens, cacheWrite: u.cache_creation_input_tokens, costUsd: event.total_cost_usd, ms: event.duration_ms }) });
     }
-  }, { session: id, idleMs });
+  }, { session: id, idleMs, env: claudeEnv(access, { root }) });
 }
 
-/** The numbers of a usage report that are really there: missing ones are left out, never zero-filled. */
-const numbers = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => typeof v === "number" && Number.isFinite(v)));
+/**
+ * Claude Code's own compaction of a saved conversation, headless: `/compact` as the turn's prompt.
+ * `bh agent` runs it between tasks (agent.mjs). Returns { ok, session, error }; another harness,
+ * or no saved session, has no way to compact and gets `ok: false`.
+ */
+export async function compactSession({ agent, known = [], state, cwd, access = "standard", allow = [], idleMs } = {}) {
+  if (agent.harness !== "claude" || !state?.session) return { ok: false, session: state?.session ?? null, error: "no saved claude session" };
+  const root = asRoot(cwd);
+  const argv = [
+    ...argvOf(agent, known),
+    "-p", "--output-format", "stream-json", "--verbose",
+    ...claudeAccess(access, allow),
+    "--resume", state.session,
+  ];
+  let compacted = false;
+  let error = "";
+  const r = oneShot(argv, "/compact", cwd, (event, turn) => {
+    if (event.type === "system" && event.subtype === "compact_boundary") compacted = true;
+    if (event.type === "result" && (event.is_error || (event.subtype && event.subtype !== "success"))) error = String(event.result ?? event.subtype);
+    if (event.session_id) turn.session = event.session_id;
+  }, { session: state.session, idleMs, env: claudeEnv(access, { root }) });
+  const done = await r.done;
+  return { ok: compacted && !done.error && !error, session: done.session ?? state.session, error: error || done.error || (compacted ? "" : "no compaction") };
+}
+
+/** The numbers of a usage report that are really there: missing ones are left out, never zero-filled. */const numbers = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => typeof v === "number" && Number.isFinite(v)));
+
+/** Adds pi's per-message usage onto a turn's running numbers: it reports each assistant message. */
+function addUsage(total, u) {
+  if (!u) return total;
+  for (const k of ["input", "output", "cacheRead", "cacheWrite"]) if (typeof u[k] === "number") total[k] = (total[k] ?? 0) + u[k];
+  if (typeof u.cost?.total === "number") total.costUsd = (total.costUsd ?? 0) + u.cost.total;
+  return total;
+}
 
 /** Codex: `codex exec --json`, resumed by thread id; the brief leads the first prompt. */
 function codexTurn({ agent, known, state, brief, prompt, cwd, on, access, idleMs }) {
@@ -358,6 +399,7 @@ function codexTurn({ agent, known, state, brief, prompt, cwd, on, access, idleMs
 function piTurn({ agent, known, state, key, briefFile, prompt, cwd, on, idleMs }) {
   const dir = ensureDir(join(DATA, "sessions", key));
   const argv = [...argvOf(agent, known), "-p", "--mode", "json", "--session-dir", dir, "--append-system-prompt", briefFile, ...(state.session ? ["--continue"] : [])];
+  const usage = {}; // the turn's tokens and cost, summed over its assistant messages
   return oneShot(argv, prompt, cwd, (event, turn) => {
     if (event.type === "session" && event.id) turn.session = event.id;
     if (event.type === "tool_execution_start") {
@@ -372,6 +414,7 @@ function piTurn({ agent, known, state, key, briefFile, prompt, cwd, on, idleMs }
         turn.text = text;
         on({ kind: "text", text });
       }
+      if (event.message.usage) on({ kind: "usage", ...numbers(addUsage(usage, event.message.usage)) });
       if (event.message.stopReason === "error") turn.error = event.message.errorMessage || "the model returned an error";
     }
   }, { session: state.session ?? "pi", idleMs });
@@ -387,7 +430,7 @@ function asksPerson(name, input = {}) {
 
 /** Runs one process for one turn: the prompt on stdin, JSON lines out. */
 function oneShot(argv, prompt, cwd, handle, init = {}) {
-  const child = launch(argv, { cwd });
+  const child = launch(argv, { cwd, env: init.env });
   const ms = init.idleMs ?? TURN_IDLE_MS;
   const turn = { text: "", error: null, session: init.session ?? null, cancelled: false, asked: false };
   const err = collectErr(child);
@@ -440,6 +483,18 @@ export function acpAllowed(kind, access, { command = "", allow = [] } = {}) {
   return [...standardCommands(), ...allow].some((p) => cmd === p || cmd.startsWith(`${p} `));
 }
 
+/** A turn's numbers: a usage_update's fields, with the prompt response's token split over them. */
+function turnUsage(update, response) {
+  const split = numbers({
+    input: response?.inputTokens,
+    output: response?.outputTokens,
+    cacheRead: response?.cachedReadTokens,
+    cacheWrite: response?.cachedWriteTokens,
+  });
+  const usage = { ...(update ?? {}), ...split };
+  return Object.keys(usage).length ? usage : null;
+}
+
 /** A JSON-RPC session with an Agent Client Protocol agent (Gemini CLI, opencode, Qwen Code). */
 export class Acp {
   constructor({ agent, known, cwd, access, allow = [] }) {
@@ -460,6 +515,9 @@ export class Acp {
     this.block = "";
     this.asked = false;
     this.askCall = null; // a bh ask tool call in flight: the turn ends when it completes
+    this.usage = null; // the turn's numbers from a usage_update, merged with the prompt response's usage
+    this.cost = null; // the session's running cost: usage_update is cumulative, so the turn takes the rise
+    this.costAtStart = null; // the session's cost when this turn began
     this.on = () => {};
   }
 
@@ -491,6 +549,7 @@ export class Acp {
     this.session = made.result.sessionId;
     this.newResult = made.result;
     this.modelSet = null; // a fresh session: the chosen model goes on before the first prompt
+    this.cost = null; // a new session starts its running cost again
   }
 
   /**
@@ -521,10 +580,27 @@ export class Acp {
     if (this.block.trim()) this.text = this.block;
   }
 
+  /**
+   * OpenCode's `usage_update`: `used` is the last step's token count (no input/output split) and
+   * `cost` is the session's running total, so a turn records the rise since the turn began. The
+   * prompt response's own `usage` carries the split, and replaces `used` when it arrives.
+   */
+  usageUpdate(u) {
+    const amount = typeof u.cost?.amount === "number" ? u.cost.amount : null;
+    const delta = amount === null ? null : Math.max(0, amount - (this.costAtStart ?? 0));
+    if (amount !== null) this.cost = amount;
+    this.usage = {
+      ...(this.usage ?? {}),
+      ...(typeof u.used === "number" ? { input: u.used } : {}),
+      ...(delta !== null ? { costUsd: delta } : {}),
+    };
+  }
+
   message(m) {
     this.idle?.pet(); // anything from the agent means the turn is alive
     if (m.method === "session/update") {
       const u = m.params?.update ?? {};
+      if (u.sessionUpdate === "usage_update") this.usageUpdate(u);
       if (u.sessionUpdate === "agent_message_chunk" && u.content?.type === "text") this.said(u.content.text);
       if (u.sessionUpdate === "tool_call") {
         this.block = ""; // what it says after a tool call is a new block; the last non-empty block stays the reply
@@ -572,6 +648,8 @@ export class Acp {
     this.on = on;
     this.text = "";
     this.block = "";
+    this.usage = null;
+    this.costAtStart = this.cost;
     this.asked = false;
     this.askCall = null;
     this.idleLost = null;
@@ -591,6 +669,8 @@ export class Acp {
           this.idleStop = () => resolve({ stopped: true });
         });
         const r = await Promise.race([this.request("session/prompt", { sessionId: this.session, prompt: [{ type: "text", text: first ? `${brief}\n\n${prompt}` : prompt }] }), stopped]);
+        const seen = turnUsage(this.usage, r?.result?.usage);
+        if (seen) on({ kind: "usage", ...seen });
         if (this.idleLost) return { text: this.text, error: this.idleLost, session: this.session };
         if (this.asked) return { text: this.text, asked: true, error: null, session: this.session };
         if (r.error) return { text: this.text, error: r.error.message ?? "the agent refused the prompt", session: this.session };

@@ -24,6 +24,8 @@ import { ROSTER_KEY, HEADLESS_KEY, HEADLESS, ROLES, blank, roster, roleOf, argvO
 import { bh, bhJson, enc, currentSpace, ROUTING_KEY } from "./bh.js";
 import { PICKED, REFRESH, openPick, harnessMark } from "./pick.js";
 import { withQuiet } from "./live.js";
+import { arm, armed } from "./plandoc.js";
+import { SEARCH_OVER, filterTools, newestActive, pickedFor, supportedNames } from "./skillsview.js";
 
 const GAP = 14; // between cards
 const MAX = 1140; // the page's widest
@@ -63,6 +65,9 @@ const NO_MODELS = "This harness could not be asked for its models; type a model 
 /** What `bh tools` said, per harness, for this session; TOOLS_ASKING holds the ones still running. */
 const TOOLS_CACHE = new Map();
 const TOOLS_ASKING = new Set();
+/** The harnesses that support picking skills, from `bh tools --list` (null until known or when it fails). */
+const SUPPORTED = { names: null, asked: false };
+const SUPPORTED_FALLBACK = "Claude Code, Codex and OpenCode";
 const NO_TOOLS = "Couldn't ask which skills and MCP servers are installed.";
 
 /** The skills and MCP servers a harness has installed, or the shape of a failure. */
@@ -71,10 +76,9 @@ async function fetchTools(harness, refresh) {
   return got ?? { harness, supported: false, skills: [], mcp: [], error: NO_TOOLS };
 }
 
-const FIELDS = [
+const AGENT_FIELDS = [
   { key: "name", placeholder: "Name" },
   { key: "does", placeholder: "One line: what this agent is for (the Orchestrator reads it)" },
-  { key: "model", placeholder: "The harness's default" },
   { key: "args", placeholder: "Flags only, e.g. --verbose" },
   { key: "instructions", placeholder: "What this agent should always do, in plain words", rows: 3 },
 ];
@@ -85,6 +89,7 @@ const FEATURES = [
   { key: "effort", label: "Effort routing", about: "lower effort for simple steps" },
   { key: "qa", label: "QA depth", about: "how deep the QA gate looks" },
   { key: "scripts", label: "Script picks", about: "which shared scripts suit a step" },
+  { key: "skills", label: "Skill picks", about: "Picks skills for each agent when a task or plan starts." },
 ];
 
 const THRESHOLDS = [
@@ -96,39 +101,61 @@ const THRESHOLDS = [
 /** OpenRouter's classifier models (System One): the only provider the classifier uses. */
 const OPENROUTER_MODELS = [{ id: "~typesafe/jev-latest", label: "Jev" }];
 
-/**
- * The live Settings page, by id. A dialog's props are serialized, so it cannot carry the page:
- * it carries the id and looks the page up here, in the same module the page registered in.
- */
-const PAGES = new Map();
-let pageSeq = 0;
+/** How long the roster's "Saved" cue stays. */
+const SAVED_MS = 2000;
 
-/** Opens a card's extra content as a dialog over the page; MoreSheet draws it. */
-function openMore({ kind, key, pageId }) {
+/** Shared signals so MoreSheet tells Settings to refresh harnesses or classifier config. */
+const HARNESS_ADDED = "bot-herdr.harness-added";
+const CONFIG_CHANGED = "bot-herdr.config-changed";
+
+const labelRow = (c, text, right = null) =>
+  h_flex().h(CHIP).items_center().justify_between().text_size(TYPE.xs).font_medium().text_color(c.muted)
+    .child(div().child(text))
+    .when(right !== null, (el) => el.child(div().text_color(c.ink).child(right)));
+
+const textField = (c, state) =>
+  div().flex_1().min_w(0).h(CONTROL).px(SPACE[3]).flex().items_center().rounded(SIZE.control).bg(c.ground).border_1().border_color(c.edge)
+    .child(Input.new(state).w_full().h_full().text_size(TYPE.md).text_color(c.ink));
+
+const textArea = (c, state) =>
+  div().px(SPACE[3]).py(SPACE[3]).rounded(SIZE.control).bg(c.ground).border_1().border_color(c.edge)
+    .child(Textarea.new(state).w_full().text_size(TYPE.md).text_color(c.ink));
+
+const chipButton = (c, id, label, on, onClick) =>
+  clickable(
+    div().flex_none().h(CONTROL).px(SPACE[3]).flex().items_center().rounded(SIZE.nested).border_1().text_size(TYPE.sm)
+      .when(on, (el) => el.bg(c.well).border_color(c.accent).text_color(c.ink).font_medium())
+      .when(!on, (el) => el.border_color(c.edge).text_color(c.muted).hover((s) => s.bg(c.hover).text_color(c.ink)))
+      .on_click(onClick)
+      .child(label),
+    c,
+    id,
+  );
+
+/** Opens a card's extra content as a dialog over the page; MoreSheet draws it from plain props + shared state. */
+function openMore({ kind, key, known = [], classifier = null }) {
   return openOverlay({
     mod: "bot-herdr",
     kind: "dialog",
     frame: "none",
     width: 0.6,
     height: 0.7,
-    props: { view: "settings-more", kind, key, pageId },
+    props: { view: "settings-more", kind, key, known, classifier },
   });
 }
 
 export class Settings {
   init(_props, cx) {
-    // A dialog finds its page by id: overwriting keeps the map at one page, the latest.
-    this.pageId = `settings-${++pageSeq}`;
-    PAGES.clear();
-    PAGES.set(this.pageId, this);
     this.known = [];
     this.knownSaved = "";
-    this.inputs = {}; // agent id → { name, model, args, instructions }
+    this.inputs = {}; // agent id → { model }
     this.open = null; // "<id>:harness" or "<id>:model": the field whose list is open
     const was = remembered();
     this.section = was === "access" || was === "classifier" ? "general" : was; // the tab open
     this.pickedAt = shared(PICKED)?.at ?? 0;
     this.refreshedAt = shared(REFRESH)?.at ?? 0;
+    this.harnessAddedAt = Number(shared(HARNESS_ADDED) ?? 0);
+    this.configChangedAt = Number(shared(CONFIG_CHANGED) ?? 0);
     this.asking = {}; // harness → true while `bh models` runs for it
     this.waiting = {}; // harness → what to do with the answer (reopen its list)
     this.pickBounds = null; // where the open list's field sits, to reopen it after a refresh
@@ -146,11 +173,6 @@ export class Settings {
     this.allowInput.on("submit", saveAllow);
     this.allowInput.on("blur", saveAllow);
 
-    this.harnessForm = {
-      key: InputState.new({ placeholder: "omp" }),
-      name: InputState.new({ placeholder: "Oh My Pi" }),
-      run: InputState.new({ placeholder: "omp --some-flag" }),
-    };
     this.keyInput = InputState.new({ placeholder: "sk-or-…" });
     this.keyInput.on("submit", (_e, cx) => this.saveKey(cx));
     this.keyInput.on("blur", (_e, cx) => this.saveKey(cx));
@@ -172,24 +194,9 @@ export class Settings {
       state.on("submit", save);
       state.on("blur", save);
     }
-    this.thresholdInputs = {};
-    for (const t of THRESHOLDS) {
-      const state = InputState.new({ placeholder: "0.5" });
-      const save = (_e, cx) => {
-        const n = Number(state.value().trim());
-        const was = this.classifier?.thresholds?.[t.key];
-        if (!Number.isFinite(n) || n < 0 || n > 1) {
-          if (was !== undefined) state.set_value(String(was));
-          return;
-        }
-        if (n !== was) this.config({ thresholds: { [t.key]: n } }, cx);
-      };
-      state.on("submit", save);
-      state.on("blur", save);
-      this.thresholdInputs[t.key] = state;
-    }
 
     this.sync();
+    this.rosterSeen = JSON.stringify(shared(ROSTER_KEY) ?? null);
     this.loadKnown(cx);
     this.loadConfig(cx);
     this.loadAccess(cx);
@@ -235,7 +242,6 @@ export class Settings {
     this.modelInput.set_value(got.model ?? "");
     this.accountIdInput.set_value(got.accountId ?? "");
     this.baseUrlInput.set_value(got.baseUrl ?? "");
-    for (const t of THRESHOLDS) this.thresholdInputs[t.key].set_value(String(got.thresholds?.[t.key] ?? ""));
   }
 
   config(patch, cx) {
@@ -291,6 +297,7 @@ export class Settings {
 
   save(list, cx) {
     setShared(ROSTER_KEY, list);
+    this.rosterSeen = JSON.stringify(shared(ROSTER_KEY) ?? null);
     this.persist(cx);
   }
 
@@ -302,8 +309,18 @@ export class Settings {
       cx.spawn(async (cx) => {
         const r = await bh(["team", "save", "--data", enc({ agents: this.list(), known: this.knownForBh() })]);
         this.problem = r.code === 0 ? null : `Couldn't save the team for the agents: ${(r.stderr || r.stdout || "node didn't run").trim().split("\n")[0]}`;
+        if (r.code === 0) this.markSaved(cx);
         cx.notify();
       });
+    });
+  }
+
+  /** The "Saved" cue under the tabs: shown for SAVED_MS after a roster save succeeds. */
+  markSaved(cx) {
+    const at = Date.now();
+    this.saved = at;
+    cx.timer.after(SAVED_MS, (cx) => {
+      if (this.saved === at) cx.notify();
     });
   }
 
@@ -312,7 +329,7 @@ export class Settings {
     cx.notify();
   }
 
-  /** Text boxes are made here (never while drawing), one set per agent. */
+  /** Model text boxes are made here (never while drawing), one per agent. */
   sync() {
     const list = this.list();
     // A model changed elsewhere (the composer sets the Orchestrator's): its field follows.
@@ -322,20 +339,14 @@ export class Settings {
     }
     for (const a of list) {
       if (this.inputs[a.id]) continue;
-      const set = {};
-      for (const f of FIELDS) {
-        const options = { value: a[f.key] ?? "", placeholder: f.placeholder };
-        const state = f.rows ? TextareaState.new({ ...options, rows: f.rows }) : InputState.new(options);
-        state.on("change", (_e, cx) => {
-          const value = state.value();
-          const now = this.list().find((x) => x.id === a.id);
-          if (!now || now[f.key] === value) return;
-          if (f.key === "name" && (!value.trim() || now.role !== "custom")) return;
-          this.change(a.id, { [f.key]: f.key === "name" ? value : value.trim() }, cx);
-        });
-        set[f.key] = state;
-      }
-      this.inputs[a.id] = set;
+      const state = InputState.new({ value: a.model ?? "", placeholder: "The harness's default" });
+      state.on("change", (_e, cx) => {
+        const value = state.value().trim();
+        const now = this.list().find((x) => x.id === a.id);
+        if (!now || now.model === value) return;
+        this.change(a.id, { model: value }, cx);
+      });
+      this.inputs[a.id] = { model: state };
     }
     for (const id of Object.keys(this.inputs)) if (!list.some((a) => a.id === id)) delete this.inputs[id];
   }
@@ -479,27 +490,6 @@ export class Settings {
     if (!currentSpace()?.machine) this.ask(key, cx);
   }
 
-  addHarness(cx) {
-    const f = this.harnessForm;
-    const key = slug(f.key.value());
-    const run = f.run.value().trim();
-    if (!f.key.value().trim() || !run) {
-      this.problem = "A harness needs a short key and the command that starts it.";
-      cx.notify();
-      return;
-    }
-    cx.spawn(async (cx) => {
-      const r = await bh(["harness", "add", key, "--name", f.name.value().trim() || key, "--run", run]);
-      if (r.code === 0) {
-        for (const s of Object.values(f)) s.set_value("");
-        this.problem = null;
-        notify({ title: "Harness added", body: `${key} shows up in the harness lists within a minute.`, level: "success", timeout: 4000 });
-        cx.timer.after(1500, (cx) => this.loadKnown(cx));
-      } else this.problem = `Couldn't add it: ${(r.stderr || r.stdout).trim().split("\n")[0]}`;
-      cx.notify();
-    });
-  }
-
   /** The stop under the pointer: measured inside the track, in the same (zoomed) pixels as its bounds. */
   slide(a, stops, e, cx) {
     const b = e.bounds;
@@ -517,12 +507,24 @@ export class Settings {
   render(cx) {
     if ((shared(PICKED)?.at ?? 0) > this.pickedAt) cx.timer.after(1, (cx) => this.applyPick(cx));
     if ((shared(REFRESH)?.at ?? 0) > this.refreshedAt) cx.timer.after(1, (cx) => this.applyRefresh(cx));
-    // The roster changed from outside (the composer's model chip): bring the fields in line.
-    const rosterNow = shared(ROSTER_KEY);
+    const harnessAdded = Number(shared(HARNESS_ADDED) ?? 0);
+    if (harnessAdded > this.harnessAddedAt) {
+      this.harnessAddedAt = harnessAdded;
+      cx.timer.after(1500, (cx) => this.loadKnown(cx));
+    }
+    const configChanged = Number(shared(CONFIG_CHANGED) ?? 0);
+    if (configChanged > this.configChangedAt) {
+      this.configChangedAt = configChanged;
+      cx.timer.after(1, (cx) => this.loadConfig(cx));
+    }
+    // The roster changed from outside (the composer's model chip or MoreSheet): sync and persist.
+    // shared() deserializes a fresh copy each call, so compare by content instead of reference.
+    const rosterNow = JSON.stringify(shared(ROSTER_KEY) ?? null);
     if (rosterNow !== this.rosterSeen) {
       this.rosterSeen = rosterNow;
       cx.timer.after(1, (cx) => {
         this.sync();
+        this.persist(cx);
         cx.notify();
       });
     }
@@ -545,8 +547,11 @@ export class Settings {
       .on_size_change((size, cx) => {
         // px with the app's zoom multiplied in; drawn sizes are without it.
         const zoom = Number(settings().zoom) || 1;
-        this.width = size.width / zoom;
-        cx.notify();
+        const w = size.width / zoom;
+        if (Math.abs(w - this.width) >= 1) {
+          this.width = w;
+          cx.notify();
+        }
       })
       .child(
         v_flex()
@@ -573,6 +578,7 @@ export class Settings {
               }))
 )
               .when(Boolean(this.problem), (el) => el.child(div().text_size(TYPE.sm).text_color(c.danger).child(this.problem)))
+              .when(!this.problem && Date.now() - (this.saved ?? 0) < SAVED_MS, (el) => el.child(div().text_size(TYPE.xs).text_color(c.muted).child("Saved")))
               .when(section === "agents", (el) => el
                 .children(rows.map((row, r) =>
                   // Cards in a row share its height; every card is at least the height of a full one.
@@ -580,6 +586,7 @@ export class Settings {
                 .child(h_flex().flex_none().child(this.button(c, "bh-add-agent", "plus", "Add agent", (_e, cx) => {
                   const list = this.list();
                   this.save([...list, blank(list, this.known)], cx);
+                  this.sync();
                   cx.notify();
                 }))))
               // Access and the classifier together: side by side when there's room, else stacked.
@@ -601,7 +608,8 @@ export class Settings {
 
   /** "More" and its siblings ("Add", "Advanced"): opens the card's extra content in a dialog. */
   disclosure(c, kind, key, label = "More") {
-    return actionButton(c, `bh-more-${key}`, label, () => openMore({ kind, key, pageId: this.pageId }), { icon: "chevron-right", tone: "quiet" });
+    const extra = kind === "agent" ? { known: this.knownForBh() } : kind === "classifier" ? { classifier: this.classifier } : {};
+    return actionButton(c, `bh-more-${key}`, label, () => openMore({ kind, key, ...extra }), { icon: "chevron-right", tone: "quiet" });
   }
 
   /** One setting on one line: its name (and a short hint under it) on the left, its control on the right. */
@@ -647,15 +655,7 @@ export class Settings {
   }
 
   label(c, text, right = null) {
-    return h_flex()
-      .h(CHIP)
-      .items_center()
-      .justify_between()
-      .text_size(TYPE.xs)
-      .font_medium()
-      .text_color(c.muted)
-      .child(div().child(text))
-      .when(right !== null, (el) => el.child(div().text_color(c.ink).child(right)));
+    return labelRow(c, text, right);
   }
 
   card(c, a, width, running, space) {
@@ -708,31 +708,8 @@ export class Settings {
       .child(h_flex().child(this.disclosure(c, "agent", a.id))));
   }
 
-  /** A multi-line field, framed like field(). */
-  textarea(c, state) {
-    return div()
-      .px(SPACE[3])
-      .py(SPACE[3])
-      .rounded(SIZE.control)
-      .bg(c.ground)
-      .border_1()
-      .border_color(c.edge)
-      .child(Textarea.new(state).w_full().text_size(TYPE.md).text_color(c.ink));
-  }
-
   field(c, state) {
-    return div()
-      .flex_1()
-      .min_w(0)
-      .h(CONTROL)
-      .px(SPACE[3])
-      .flex()
-      .items_center()
-      .rounded(SIZE.control)
-      .bg(c.ground)
-      .border_1()
-      .border_color(c.edge)
-      .child(Input.new(state).w_full().h_full().text_size(TYPE.md).text_color(c.ink));
+    return textField(c, state);
   }
 
   select(c, a, field, value, width) {
@@ -902,95 +879,6 @@ export class Settings {
           .child(this.disclosure(c, "harness", "harness", "Add"))));
   }
 
-  /** The harness dialog: the add form the panel used to open in place. */
-  harnessMore(c) {
-    const f = this.harnessForm;
-    const col = (label, state, w) => v_flex().gap(SPACE[2]).w(w).child(this.label(c, label)).child(this.field(c, state));
-    return v_flex().gap(SPACE[4])
-      .child(h_flex().flex_wrap().gap(SPACE[3]).items_end()
-        .child(col("Key", f.key, 120))
-        .child(col("Name", f.name, 160))
-        .child(v_flex().flex_1().min_w(0).gap(SPACE[2]).child(this.label(c, "Command")).child(this.field(c, f.run))))
-      .child(h_flex().child(this.button(c, "bh-add-harness", "plus", "Add", (_e, cx) => this.addHarness(cx))))
-      .when(Boolean(this.problem), (el) => el.child(div().text_size(TYPE.sm).text_color(c.danger).child(this.problem)));
-  }
-
-  /** An agent's dialog: the arguments, instructions and command the card kept under More. */
-  agentMore(c, id) {
-    const a = this.list().find((x) => x.id === id);
-    const inputs = this.inputs[id];
-    if (!a || !inputs) return div().text_size(TYPE.sm).text_color(c.muted).child("This agent is no longer on the team.");
-    const custom = a.role === "custom";
-    return v_flex().gap(SPACE[4])
-      .when(custom, (el) => el
-        .child(v_flex().gap(SPACE[2]).child(this.label(c, "Name")).child(this.field(c, inputs.name)))
-        .child(v_flex().gap(SPACE[2]).child(this.label(c, "What it does")).child(this.field(c, inputs.does))))
-      .child(v_flex().gap(SPACE[2]).child(this.label(c, "Arguments")).child(this.field(c, inputs.args)))
-      .child(v_flex().gap(SPACE[2]).child(this.label(c, "Instructions")).child(this.textarea(c, inputs.instructions)))
-      .child(this.toolsMore(c, a))
-      .child(div().text_size(TYPE.xs).text_color(c.faint).child(argvOf(a, this.known).join(" ")))
-      .when(custom, (el) => el.child(h_flex().child(this.removeAgent(c, a))));
-  }
-
-  /** Asks `bh tools` for a harness once per session (again on Refresh); the sheet redraws on the answer. */
-  loadTools(harness, cx, refresh = false) {
-    if (TOOLS_ASKING.has(harness) || (!refresh && TOOLS_CACHE.has(harness))) return;
-    TOOLS_ASKING.add(harness);
-    cx.spawn(async (cx) => {
-      // Always read fresh: the engine's cache could miss a skill installed since.
-      TOOLS_CACHE.set(harness, await fetchTools(harness, true));
-      TOOLS_ASKING.delete(harness);
-      cx.notify();
-    });
-  }
-
-  /** Skills and MCP servers: a chip per installed name, and Refresh beside the Skills label. */
-  toolsMore(c, a) {
-    const got = TOOLS_CACHE.get(a.harness);
-    const note = (text) => div().text_size(TYPE.xs).text_color(c.muted).child(text);
-    const refresh = actionButton(c, "bh-tools-refresh", null, (_e, cx) => this.loadTools(a.harness, cx, true), { icon: "refresh-cw", tone: "quiet" });
-    const head = v_flex().gap(SPACE[2]).child(h_flex().items_center().gap(SPACE[2]).child(div().flex_1().child(this.label(c, "Skills"))).child(refresh));
-    if (!got || TOOLS_ASKING.has(a.harness)) return head.child(note("Looking for installed skills and MCP servers…"));
-    if (got.error) return head.child(note(got.error));
-    if (!got.supported) return head.child(note(`${this.harnessName(a.harness)} isn't supported yet: Claude Code, Codex and OpenCode are.`));
-    return v_flex().gap(SPACE[4])
-      .child(head.child(this.toolChips(c, a, "skills", got.skills)))
-      .child(v_flex().gap(SPACE[2]).child(this.label(c, "MCP servers")).child(this.toolChips(c, a, "mcp", got.mcp)));
-  }
-
-  /** One group's note and chips; none ticked means all of them, and a ticked name no longer installed still shows. */
-  toolChips(c, a, kind, items) {
-    const ticked = a[kind] ?? [];
-    const names = [...new Set([...(items ?? []).map((t) => t.name), ...ticked])];
-    const toggle = (name, cx) => this.change(a.id, { [kind]: ticked.includes(name) ? ticked.filter((n) => n !== name) : [...ticked, name] }, cx);
-    return v_flex().gap(SPACE[2])
-      .child(div().text_size(TYPE.xs).text_color(c.muted).child(ticked.length ? "Only the ticked ones." : "None ticked: it can use all of them."))
-      .when(!names.length, (el) => el.child(div().text_size(TYPE.sm).text_color(c.muted).child("None installed.")))
-      .child(h_flex().flex_wrap().gap(SPACE[2]).children(names.map((name) =>
-        this.chip(c, `bh-${kind}-${name}`, name, ticked.includes(name), (_e, cx) => toggle(name, cx)))));
-  }
-
-  /** A custom agent's Remove: the entry leaves the roster and the card closes with it. */
-  removeAgent(c, a) {
-    return actionButton(c, "bh-remove-agent-" + a.id, "Remove agent", (_e, cx) => {
-      this.save(this.list().filter((x) => x.id !== a.id), cx);
-      cx.notify();
-    }, { icon: "trash", tone: "danger" });
-  }
-
-  /** The classifier's dialog: what it decides, and the thresholds the card kept under Advanced. */
-  classifierMore(c) {
-    const k = this.classifier;
-    if (!k) return stateView(c, { id: "bh-cls-more-loading", title: "Loading…", loading: true });
-    return v_flex().gap(SPACE[4])
-      .child(v_flex().gap(SPACE[2])
-        .child(div().text_size(TYPE.md).font_medium().child("Use it for"))
-        .child(h_flex().flex_wrap().gap(SPACE[2]).children(FEATURES.map((f) =>
-          this.chip(c, `bh-feat-${f.key}`, f.label, k.features?.[f.key] !== false, (_e, cx) => this.config({ features: { [f.key]: k.features?.[f.key] === false } }, cx))))))
-      .child(h_flex().gap(SPACE[3]).items_start().children(THRESHOLDS.map((t) =>
-        v_flex().flex_1().min_w(0).gap(SPACE[2]).child(div().text_size(TYPE.xs).text_color(c.muted).child(t.label)).child(div().w(84).child(this.field(c, this.thresholdInputs[t.key]))))));
-  }
-
   accessCard(c) {
     const k = this.access;
     if (!k) return stateView(c, { id: "bh-access-loading", title: "Loading…", loading: true });
@@ -1092,28 +980,8 @@ export class Settings {
     );
   }
 
-  chip(c, id, label, on, onClick) {
-    return clickable(
-      div()
-        .flex_none()
-        .h(CONTROL)
-        .px(SPACE[3])
-        .flex()
-        .items_center()
-        .rounded(SIZE.nested)
-        .border_1()
-        .text_size(TYPE.sm)
-        .when(on, (el) => el.bg(c.well).border_color(c.accent).text_color(c.ink).font_medium())
-        .when(!on, (el) => el.border_color(c.edge).text_color(c.muted).hover((s) => s.bg(c.hover).text_color(c.ink)))
-        .on_click(onClick)
-        .child(label),
-      c,
-      id,
-    );
-  }
-
-  iconButton(c, id, icon, onClick, danger = false) {
-    return actionButton(c, id, null, onClick, { icon, tone: danger ? "danger" : "quiet" });
+  iconButton(c, id, icon, onClick, danger = false, a11y = null) {
+    return actionButton(c, id, null, onClick, { icon, tone: danger ? "danger" : "quiet", a11y });
   }
 
   button(c, id, icon, label, onClick) {
@@ -1124,24 +992,178 @@ export class Settings {
 export { ROLES };
 
 /**
- * A settings card's More, as a dialog over the page: the fields the card used to open in place
- * (an agent's arguments and instructions, adding a harness, the classifier's advanced settings).
- * It draws the Settings page's own rows, so a change saves exactly as it did there; the card
- * behind it never changes height. Props: { view: "settings-more", kind, key, pageId }.
+ * A settings card's More, as a self-contained dialog over the page: an agent's extra fields
+ * (and Name / What it does / Remove for custom agents), adding a harness, or the classifier's
+ * advanced settings. Reads and writes through shared state and `bh` directly so it never relies
+ * on sharing a module realm with the Settings page. Props: { view: "settings-more", kind, key, known, classifier }.
  */
 export class MoreSheet {
   init(given, cx) {
     this.p = given ?? props() ?? {};
     this.handle = cx.focus_handle();
     this.handle.focus();
-    // An agent's sheet lists its harness's skills and MCP servers: ask for them as it opens.
-    const agent = this.p.kind === "agent" ? this.page()?.list().find((a) => a.id === this.p.key) : null;
-    if (agent) this.page().loadTools(agent.harness, cx);
+    this.known = Array.isArray(this.p.known) ? this.p.known : [];
+    this.problem = null;
+    if (this.p.kind === "agent") this.initAgent(cx);
+    else if (this.p.kind === "harness") this.initHarness();
+    else this.initClassifier(cx);
   }
 
-  /** The live page this dialog belongs to, or undefined once it is gone. */
-  page() {
-    return PAGES.get(this.p.pageId);
+  initAgent(cx) {
+    const a = this.agent();
+    this.inputs = {};
+    for (const f of AGENT_FIELDS) {
+      const options = { value: a?.[f.key] ?? "", placeholder: f.placeholder };
+      const state = f.rows ? TextareaState.new({ ...options, rows: f.rows }) : InputState.new(options);
+      state.on("change", (_e, cx) => {
+        const value = state.value();
+        const now = this.agent();
+        if (!now || now[f.key] === value) return;
+        if (f.key === "name" && (!value.trim() || now.role !== "custom")) return;
+        this.changeAgent({ [f.key]: f.key === "name" ? value : value.trim() }, cx);
+      });
+      this.inputs[f.key] = state;
+    }
+    if (!this.known.length) {
+      cx.spawn(async (cx) => {
+        try {
+          this.known = await knownAgents({ on: currentSpace()?.machine ?? null });
+        } catch {
+          this.known = [];
+        }
+        cx.notify();
+      });
+    }
+    if (a) this.loadTools(a.harness, cx);
+    this.toolSearch = InputState.new({ placeholder: "Search skills and MCP servers" });
+    this.toolSearch.on("change", (_e, cx) => cx.notify());
+    this.taskPick = null; // what the classifier picked for this agent on the running task (pickedFor)
+    if (a) this.loadTaskPick(a, cx);
+    this.loadSupported(cx);
+  }
+
+  /** The newest active task's skills for this agent (id: its role, or its name's slug when custom). */
+  loadTaskPick(a, cx) {
+    cx.spawn(async (cx) => {
+      const task = newestActive(await bhJson(["task", "list"]));
+      const shown = task ? await bhJson(["task", "show", task.id]) : null;
+      this.taskPick = pickedFor(shown, a.role === "custom" ? slug(a.name) : a.role);
+      cx.notify();
+    });
+  }
+
+  /** Which harnesses support picking, asked once per session; the fixed sentence stays until it answers. */
+  loadSupported(cx) {
+    if (SUPPORTED.asked) return;
+    SUPPORTED.asked = true;
+    cx.spawn(async (cx) => {
+      SUPPORTED.names = supportedNames(await bhJson(["tools", "--list"]));
+      cx.notify();
+    });
+  }
+
+  initHarness() {
+    this.harnessForm = {
+      key: InputState.new({ placeholder: "omp" }),
+      name: InputState.new({ placeholder: "Oh My Pi" }),
+      run: InputState.new({ placeholder: "omp --some-flag" }),
+    };
+  }
+
+  initClassifier(cx) {
+    this.classifier = this.p.classifier ?? null;
+    this.thresholdInputs = {};
+    for (const t of THRESHOLDS) {
+      const initial = this.classifier?.thresholds?.[t.key];
+      const state = InputState.new({ value: initial !== undefined ? String(initial) : "", placeholder: "0.5" });
+      const save = (_e, cx) => {
+        const n = Number(state.value().trim());
+        const was = this.classifier?.thresholds?.[t.key];
+        if (!Number.isFinite(n) || n < 0 || n > 1) {
+          if (was !== undefined) state.set_value(String(was));
+          return;
+        }
+        if (n !== was) this.saveConfig({ thresholds: { [t.key]: n } }, cx);
+      };
+      state.on("submit", save);
+      state.on("blur", save);
+      this.thresholdInputs[t.key] = state;
+    }
+    if (!this.classifier) {
+      cx.spawn(async (cx) => {
+        const got = await bhJson(["config"]);
+        if (got) this.showConfig(got);
+        cx.notify();
+      });
+    }
+  }
+
+  list() {
+    return roster(shared(ROSTER_KEY), this.known);
+  }
+
+  agent() {
+    return this.list().find((x) => x.id === this.p.key) ?? null;
+  }
+
+  harnessName(key) {
+    return this.known.find((k) => k.key === key)?.name ?? key;
+  }
+
+  changeAgent(patch, cx) {
+    setShared(ROSTER_KEY, this.list().map((x) => (x.id === this.p.key ? { ...x, ...patch } : x)));
+    cx.notify();
+  }
+
+  loadTools(harness, cx, refresh = false) {
+    if (TOOLS_ASKING.has(harness) || (!refresh && TOOLS_CACHE.has(harness))) return;
+    TOOLS_ASKING.add(harness);
+    cx.spawn(async (cx) => {
+      TOOLS_CACHE.set(harness, await fetchTools(harness, true));
+      TOOLS_ASKING.delete(harness);
+      cx.notify();
+    });
+  }
+
+  addHarness(cx) {
+    const f = this.harnessForm;
+    const key = slug(f.key.value());
+    const run = f.run.value().trim();
+    if (!f.key.value().trim() || !run) {
+      this.problem = "A harness needs a short key and the command that starts it.";
+      cx.notify();
+      return;
+    }
+    cx.spawn(async (cx) => {
+      const r = await bh(["harness", "add", key, "--name", f.name.value().trim() || key, "--run", run]);
+      if (r.code === 0) {
+        for (const s of Object.values(f)) s.set_value("");
+        this.problem = null;
+        setShared(HARNESS_ADDED, Date.now());
+        notify({ title: "Harness added", body: `${key} shows up in the harness lists within a minute.`, level: "success", timeout: 4000 });
+      } else this.problem = `Couldn't add it: ${(r.stderr || r.stdout).trim().split("\n")[0]}`;
+      cx.notify();
+    });
+  }
+
+  showConfig(got) {
+    this.classifier = got;
+    const routing = Boolean(got.enabled && got.keyFound && got.features?.lobby !== false);
+    if (Boolean(shared(ROUTING_KEY)) !== routing) setShared(ROUTING_KEY, routing);
+    for (const t of THRESHOLDS) this.thresholdInputs[t.key].set_value(String(got.thresholds?.[t.key] ?? ""));
+  }
+
+  saveConfig(patch, cx) {
+    if (this.classifier) this.classifier = { ...this.classifier, ...patch, features: { ...this.classifier.features, ...(patch.features ?? {}) }, thresholds: { ...this.classifier.thresholds, ...(patch.thresholds ?? {}) } };
+    cx.notify();
+    cx.spawn(async (cx) => {
+      const got = await bhJson(["config", "--data", enc(patch)]);
+      if (got) {
+        this.showConfig(got);
+        setShared(CONFIG_CHANGED, Date.now());
+      } else this.problem = "Couldn't save the classifier settings. Is node on your PATH?";
+      cx.notify();
+    });
   }
 
   close() {
@@ -1150,26 +1172,126 @@ export class MoreSheet {
 
   /** The card's title: the agent's avatar and name, or the section's icon and title. */
   heading(c) {
-    const page = this.page();
-    const agent = this.p.kind === "agent" ? page?.list().find((a) => a.id === this.p.key) : null;
+    const agent = this.p.kind === "agent" ? this.agent() : null;
     const icon = { agent: "users", harness: "page-terminals", classifier: "zap" }[this.p.kind] ?? "page-settings";
+    const title = this.p.kind === "agent" ? (agent?.name ?? "Agent") : this.p.kind === "harness" ? "Add a harness" : "Classifier";
     return h_flex().flex_none().h(CONTROL + SPACE[4]).px(PAD).gap(SPACE[3]).items_center()
       .border_b(1)
       .border_color(c.edge)
       .when(Boolean(agent), (el) => el.child(avatar(c, agent?.name ?? "", mentionTone(c, agent?.role !== "custom" ? agent?.role : agent?.name), 28)))
       .when(!agent, (el) => el.child(div().flex_none().size(26).rounded(SIZE.nested).flex().items_center().justify_center().bg(c.well).text_color(c.muted)
         .child(svg(ICON(icon)).size(GLYPH.md))))
-      .child(div().flex_1().min_w(0).truncate().text_size(TYPE.lg).font_semibold()
-        .child(agent ? agent.name : this.p.kind === "harness" ? "Add a harness" : "Classifier"))
-      .child(actionButton(c, "bh-more-close", null, () => this.close(), { icon: "x", tone: "quiet" }));
+      .child(div().flex_1().min_w(0).truncate().text_size(TYPE.lg).font_semibold().child(title))
+      .child(actionButton(c, "bh-more-close", null, () => this.close(), { icon: "x", tone: "quiet", a11y: "Close" }));
+  }
+
+  toolsMore(c, a) {
+    const got = TOOLS_CACHE.get(a.harness);
+    const note = (text) => div().text_size(TYPE.xs).text_color(c.muted).child(text);
+    const refresh = actionButton(c, "bh-tools-refresh", null, (_e, cx) => this.loadTools(a.harness, cx, true), { icon: "refresh-cw", tone: "quiet", a11y: "Refresh skills and MCP servers" });
+    const head = v_flex().gap(SPACE[2]).child(h_flex().items_center().gap(SPACE[2]).child(div().flex_1().child(labelRow(c, "Pinned by you"))).child(refresh));
+    if (!got || TOOLS_ASKING.has(a.harness)) return head.child(note("Looking for installed skills and MCP servers…"));
+    if (got.error) return head.child(note(got.error));
+    if (!got.supported) return head.child(note(this.unsupportedText(a.harness)));
+    const searching = (got.skills?.length ?? 0) + (got.mcp?.length ?? 0) > SEARCH_OVER;
+    const query = searching ? this.toolSearch.value() : "";
+    const pinnedHint = "Always allowed. The classifier adds skills for each task on top.";
+    return v_flex().gap(SPACE[4])
+      .child(head
+        .when(searching, (el) => el.child(textField(c, this.toolSearch)))
+        .child(this.toolChips(c, a, "skills", got.skills, query, pinnedHint)))
+      .child(this.taskPicks(c))
+      .child(v_flex().gap(SPACE[2]).child(labelRow(c, "MCP servers")).child(this.toolChips(c, a, "mcp", got.mcp, query)));
+  }
+
+  /** "<harness> isn't supported yet: <the supported ones> are." from bh tools --list, or the fixed list until it answers. */
+  unsupportedText(harness) {
+    const names = SUPPORTED.names ?? SUPPORTED_FALLBACK;
+    return `${this.harnessName(harness)} isn't supported yet: ${names} ${names.includes(" and ") ? "are" : "is"}.`;
+  }
+
+  /** Read-only: the skills the classifier picked for this agent on the running task, added ones marked. */
+  taskPicks(c) {
+    const p = this.taskPick;
+    const note = (text) => div().text_size(TYPE.xs).text_color(c.muted).child(text);
+    const body = !p ? note("Looking at the running task…")
+      : p.kind === "none" ? note("No task running.")
+      : p.kind === "off" ? note("Classifier off: only your pins apply.")
+      : !p.names.length ? note("Nothing extra for this task.")
+      : h_flex().flex_wrap().gap(SPACE[2]).children(p.names.map((x) => div().flex_none().h(CHIP).px(SPACE[3]).flex().items_center()
+        .rounded(SIZE.nested).bg(c.well).text_size(TYPE.xs).text_color(c.muted).child(x.added ? `${x.name} (added)` : x.name)));
+    return v_flex().gap(SPACE[2]).child(labelRow(c, "Picked for the current task")).child(body);
+  }
+
+  toolChips(c, a, kind, items, query = "", fixedHint = null) {
+    const ticked = a[kind] ?? [];
+    const shown = filterTools([...(items ?? []), ...ticked.map((name) => ({ name }))], query);
+    const names = [...new Set(shown.map((t) => t.name))];
+    const toggle = (name, cx) => this.changeAgent({ [kind]: ticked.includes(name) ? ticked.filter((n) => n !== name) : [...ticked, name] }, cx);
+    const hint = fixedHint ?? (ticked.length ? "Only the ticked ones." : "None ticked: it can use all of them.");
+    return v_flex().gap(SPACE[2])
+      .child(div().text_size(TYPE.xs).text_color(c.muted).child(hint))
+      .when(!names.length, (el) => el.child(div().text_size(TYPE.sm).text_color(c.muted).child(query ? "None match." : "None installed.")))
+      .child(h_flex().flex_wrap().gap(SPACE[2]).children(names.map((name) =>
+        chipButton(c, `bh-${kind}-${name}`, name, ticked.includes(name), (_e, cx) => toggle(name, cx)))));
+  }
+
+  agentMore(c) {
+    const a = this.agent();
+    if (!a) return div().text_size(TYPE.sm).text_color(c.muted).child("This agent is no longer on the team.");
+    const custom = a.role === "custom";
+    return v_flex().gap(SPACE[4])
+      .when(custom, (el) => el
+        .child(v_flex().gap(SPACE[2]).child(labelRow(c, "Name")).child(textField(c, this.inputs.name)))
+        .child(v_flex().gap(SPACE[2]).child(labelRow(c, "What it does")).child(textField(c, this.inputs.does))))
+      .child(v_flex().gap(SPACE[2]).child(labelRow(c, "Arguments")).child(textField(c, this.inputs.args)))
+      .child(v_flex().gap(SPACE[2]).child(labelRow(c, "Instructions")).child(textArea(c, this.inputs.instructions)))
+      .child(this.toolsMore(c, a))
+      .child(div().text_size(TYPE.xs).text_color(c.faint).child(argvOf(a, this.known).join(" ")))
+      .when(custom, (el) => el.child(h_flex().child(this.removeButton(c, a))));
+  }
+
+  /** Remove in two steps, as a task's Delete: the first click asks "Remove <name>?", the second removes. */
+  removeButton(c, a) {
+    const id = "bh-remove-agent-" + a.id;
+    const sure = armed(this, "armed", id);
+    return actionButton(c, id, sure ? `Remove ${a.name}?` : "Remove agent", (_e, cx) => {
+      if (!sure) return arm(this, "armed", id, cx);
+      this.armed = null;
+      setShared(ROSTER_KEY, this.list().filter((x) => x.id !== a.id));
+      this.close();
+    }, { icon: "trash", tone: "danger" });
+  }
+
+  harnessMore(c) {
+    const f = this.harnessForm;
+    const col = (label, state, w) => v_flex().gap(SPACE[2]).w(w).child(labelRow(c, label)).child(textField(c, state));
+    return v_flex().gap(SPACE[4])
+      .child(h_flex().flex_wrap().gap(SPACE[3]).items_end()
+        .child(col("Key", f.key, 120))
+        .child(col("Name", f.name, 160))
+        .child(v_flex().flex_1().min_w(0).gap(SPACE[2]).child(labelRow(c, "Command")).child(textField(c, f.run))))
+      .child(h_flex().child(actionButton(c, "bh-add-harness", "Add", (_e, cx) => this.addHarness(cx), { icon: "plus", tone: "primary" })))
+      .when(Boolean(this.problem), (el) => el.child(div().text_size(TYPE.sm).text_color(c.danger).child(this.problem)));
+  }
+
+  classifierMore(c) {
+    const k = this.classifier;
+    if (!k) return stateView(c, { id: "bh-cls-more-loading", title: "Loading…", loading: true });
+    return v_flex().gap(SPACE[4])
+      .child(v_flex().gap(SPACE[2])
+        .child(div().text_size(TYPE.md).font_medium().child("Use it for"))
+        .child(h_flex().flex_wrap().gap(SPACE[2]).children(FEATURES.map((f) =>
+          chipButton(c, `bh-feat-${f.key}`, f.label, k.features?.[f.key] !== false, (_e, cx) => this.saveConfig({ features: { [f.key]: k.features?.[f.key] === false } }, cx))))))
+      .child(h_flex().gap(SPACE[3]).items_start().children(THRESHOLDS.map((t) =>
+        v_flex().flex_1().min_w(0).gap(SPACE[2]).child(div().text_size(TYPE.xs).text_color(c.muted).child(t.label)).child(div().w(84).child(textField(c, this.thresholdInputs[t.key]))))))
+      .when(Boolean(this.problem), (el) => el.child(div().text_size(TYPE.sm).text_color(c.danger).child(this.problem)));
   }
 
   body(c) {
-    const page = this.page();
-    if (!page || typeof page.agentMore !== "function") return div().text_size(TYPE.sm).text_color(c.muted).child("The settings page is no longer open.");
-    if (this.p.kind === "agent") return page.agentMore(c, this.p.key);
-    if (this.p.kind === "harness") return page.harnessMore(c);
-    return page.classifierMore(c);
+    if (this.p.kind === "agent") return this.agentMore(c);
+    if (this.p.kind === "harness") return this.harnessMore(c);
+    return this.classifierMore(c);
   }
 
   render() {
@@ -1191,7 +1313,7 @@ export class MoreSheet {
       .overflow_hidden()
       .text_color(c.ink)
       .child(this.heading(c))
-      .child(div().flex_1().min_h(0).overflow_y_scroll().p(PAD)
+      .child(div().id("bh-settings-more-scroll").flex_1().min_h(0).overflow_y_scroll().p(PAD)
         .child(this.body(c)));
   }
 }

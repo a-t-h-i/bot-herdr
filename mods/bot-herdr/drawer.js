@@ -61,3 +61,9 @@ export function summary(q, answers) {
 
 /** How many questions are left from the one on screen. */
 export const left = (q, state) => Math.max(0, (q?.questions?.length ?? 0) - (state?.step ?? 0));
+
+/** A typed digit 1-9 that names one of the question's options: that option; any other text: null. */
+export function numberPick(typed, question) {
+  if (!/^[1-9]$/.test(String(typed ?? ""))) return null;
+  return question?.options?.[Number(typed) - 1] ?? null;
+}

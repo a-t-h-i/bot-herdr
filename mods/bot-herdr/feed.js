@@ -281,3 +281,20 @@ export function linkFiles(markdown) {
     }).join("");
   }).join("");
 }
+
+export const TASK_LINK = "bh-task:";
+const TASK_ID = /\bt-\d{8}-[a-z0-9]{4}\b/g;
+
+/** Markdown with every task id (t-20261120-n1rc) made a TASK_LINK; code and existing links are left alone. */
+export function linkTasks(markdown) {
+  const parts = String(markdown ?? "").split(/(```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$))/);
+  return parts.map((part, i) => {
+    if (i % 2 === 1) return part;
+    return part.split(/(\[[^\]]*\]\([^)]*\)|`[^`\n]+`)/)
+      .map((bit, j) => (j % 2 === 1 ? bit : bit.replace(TASK_ID, (id) => `[${id}](${TASK_LINK}${id})`)))
+      .join("");
+  }).join("");
+}
+
+/** The task id a TASK_LINK points at, or null for any other link. */
+export const taskTarget = (url) => (String(url ?? "").startsWith(TASK_LINK) ? String(url).slice(TASK_LINK.length) : null);

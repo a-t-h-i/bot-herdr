@@ -13,23 +13,42 @@ import { actionButton } from "./button.js";
 import { colors } from "./theme.js";
 import { PAGES, HOLD, activePage, showPage } from "./pages.js";
 import { OPEN_COUNTS } from "./signals.js";
+import { fitTabs } from "./tabfit.js";
+import { PICKED, openPick } from "./pick.js";
 import { alpha } from "./working.js";
 
 const HOLD_MS = 3000;
 /** herdr's own tabs (mods/tabs) are 29px tall; the page switch's tabs match them. */
 const HERDR_TAB = 29;
+/** The final tab holding the pages that do not fit the slot, and its list's pick key. */
+const MORE = { id: "more", label: "More ▾" };
+const MORE_KEY = "bh-pages-more";
 
 /** The width a tab needs at a padding: its icon, its label and, when it has one, its count. */
 const tabWidth = (p, pad, count) => pad * 2 + (p.icon ? GLYPH.sm + SPACE[2] : 0) + Math.ceil(textWidth(p.label, TYPE.sm) * 1.15) + (count ? SPACE[2] + Math.ceil(textWidth(String(count), TYPE.xs)) : 0);
 
 /**
  * The horizontal padding every tab takes in `room`: the full one when the whole strip fits, else
- * the narrow one. Narrower still, the strip clips — a label is never dropped for room.
+ * the narrow one. Narrower still, tabs go behind More (pageTabs) — a label is never dropped.
  */
 function tabPad(room, countOf) {
   const frame = SPACE[1] * 2 + SPACE[1] * (PAGES.length - 1);
   const need = (pad) => frame + PAGES.reduce((n, p) => n + tabWidth(p, pad, countOf(p.id)), 0);
   return need(SPACE[4]) <= room ? SPACE[4] : SPACE[2];
+}
+
+/**
+ * The page tabs drawn in `room` and the ones behind More: at the full padding all of them; at
+ * the narrow one, the tabs from the end that do not fit, never the open page.
+ */
+function pageTabs(room, countOf, active) {
+  const pad = tabPad(room, countOf);
+  if (pad === SPACE[4]) return { pad, shown: PAGES, more: [] };
+  const widths = PAGES.map((p) => tabWidth(p, pad, countOf(p.id)));
+  const counted = PAGES.reduce((n, p) => n + (countOf(p.id) ?? 0), 0);
+  const more = tabWidth(MORE, pad, counted || null);
+  const fit = fitTabs(widths, room - SPACE[1] * 2, PAGES.findIndex((p) => p.id === active), { gap: SPACE[1], more });
+  return { pad, shown: fit.shown.map((i) => PAGES[i]), more: fit.more.map((i) => PAGES[i]) };
 }
 
 /**
@@ -45,6 +64,7 @@ export function segmented(c, { id, items, onPick, grow, height, mark = "fill", p
   const itemH = height ?? CONTROL - SPACE[1] * 2;
   return h_flex()
     .id(id)
+    .role("tab_list")
     .p(SPACE[1])
     .gap(SPACE[1])
     .items_center()
@@ -52,9 +72,12 @@ export function segmented(c, { id, items, onPick, grow, height, mark = "fill", p
     .bg(c.well)
     .when(grow, (el) => el.flex_1())
     .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
-    .children(items.map((item) =>
+    .children(items.map((item, i) =>
       clickable(
         div()
+          .role("tab")
+          .set_position(i + 1, items.length)
+          .aria_selected(Boolean(item.on))
           .h(itemH)
           .px(padX)
           .flex()
@@ -71,6 +94,8 @@ export function segmented(c, { id, items, onPick, grow, height, mark = "fill", p
           .when(item.on && mark !== "line", (el) => el.bg(c.fill).text_color(c.ink))
           .when(!item.on && mark !== "line", (el) => el.text_color(c.muted).hover((s) => s.text_color(c.ink)))
           .on_click((_e, cx) => onPick(item.id, cx))
+          // An item that opens something under itself learns where it is on the press.
+          .when(Boolean(item.onDown), (el) => el.on_mouse_down("left", (e, cx) => item.onDown(e, cx)))
           // An icon before the label, in the label's colour; the label is always there.
           .when(Boolean(item.icon), (el) => el.child(svg(ICON(item.icon)).flex_none().size(GLYPH.sm)))
           .child(item.label)
@@ -186,6 +211,8 @@ export function stateView(c, { id, title, line, action, loading }) {
 export class Switch {
   init(_props, cx) {
     this.where = null;
+    this.pickedAt = shared(PICKED)?.at ?? 0;
+    this.moreBounds = null; // where the More tab was pressed, so its list opens under it
     // ctrl+shift+m (keys.json: "bot-herdr.focus") opens the chat and puts the keyboard in it.
     cx.spawn(async (cx) => {
       for (;;) {
@@ -209,18 +236,44 @@ export class Switch {
     cx.timer.after(1, () => showPage("terminals"));
   }
 
+  /** A page picked from the More list: show it. */
+  followPick(cx) {
+    const picked = shared(PICKED);
+    if (picked?.key !== MORE_KEY || !(picked.at > this.pickedAt)) return;
+    this.pickedAt = picked.at;
+    cx.timer.after(1, () => showPage(picked.value));
+  }
+
+  /** The More list: the pages that did not fit, each with its open-question count. */
+  openMore(pages, countOf) {
+    const options = pages.map((p) => ({ value: p.id, label: p.label, note: countOf(p.id) ? `${countOf(p.id)} open` : "" }));
+    openPick({ key: MORE_KEY, options, selected: null, bounds: this.moreBounds, minWidth: 180 });
+  }
+
+  /** The switch's items: the tabs that fit, then More with the sum of its pages' counts. */
+  items(tabs, active, countOf) {
+    const items = tabs.shown.map((p) => ({ id: p.id, icon: p.icon, label: p.label, on: p.id === active, count: countOf(p.id) }));
+    if (!tabs.more.length) return items;
+    const count = tabs.more.reduce((n, p) => n + (countOf(p.id) ?? 0), 0);
+    const onDown = (e) => {
+      this.moreBounds = e.bounds;
+    };
+    return [...items, { ...MORE, on: false, count: count || null, onDown }];
+  }
+
   render(cx) {
     this.follow(cx);
+    this.followPick(cx);
     const c = colors();
     const t = theme();
     const active = activePage();
-    // Every tab always shows its icon, label and count. Where the strip is too narrow for that,
-    // each tab's padding narrows; a label is never dropped.
+    // Every tab shows its icon, label and count. Where the strip is too narrow for that, each
+    // tab's padding narrows; narrower still, the tabs from the end go behind More.
     const room = (this.width ?? 9999) - SPACE[4] * 2;
     // A tab's open-question count, so a question is never missed from another page.
     const counts = shared(OPEN_COUNTS) ?? {};
     const countOf = (id) => (Number(counts[id]) > 0 ? Number(counts[id]) : null);
-    const padX = tabPad(room, countOf);
+    const tabs = pageTabs(room, countOf, active);
     // Drawn as one bar with herdr's tabs beside it: the same ground and bottom line on the strip,
     // the control itself in our own palette.
     return h_flex()
@@ -245,15 +298,9 @@ export class Switch {
         id: "bh-pages",
         height: HERDR_TAB,
         mark: "line",
-        padX,
-        items: PAGES.map((p) => ({
-          id: p.id,
-          icon: p.icon,
-          label: p.label,
-          on: p.id === active,
-          count: countOf(p.id),
-        })),
-        onPick: (id) => showPage(id),
+        padX: tabs.pad,
+        items: this.items(tabs, active, countOf),
+        onPick: (id) => (id === MORE.id ? this.openMore(tabs.more, countOf) : showPage(id)),
       }));
   }
 }

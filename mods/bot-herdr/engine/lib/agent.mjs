@@ -11,6 +11,7 @@
 // sends the brief again.
 
 import { createHash } from "node:crypto";
+import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { slug } from "../../roster.js";
 import { DATA, accessOf, appendJsonl, ensureDir, exists, now, projectRoot, readJson, readText, store, writeJson, writeText } from "./core.mjs";
@@ -18,7 +19,7 @@ import * as team from "./team.mjs";
 import * as T from "./tasks.mjs";
 import * as P from "./plans.mjs";
 import * as knowledge from "./knowledge.mjs";
-import { HEADLESS, agentUser, asRoot, headless, interactive, launch, turn } from "./runner.mjs";
+import { HEADLESS, agentUser, asRoot, compactSession, headless, interactive, launch, turn } from "./runner.mjs";
 import * as Q from "./ask.mjs";
 
 export { accessOf };
@@ -254,9 +255,17 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
   function header() {
     const k = known.find((x) => x.key === agent.harness);
     const { access } = accessOf();
-    say(`${BOLD}${who}${OFF} ${DIM}· ${[k?.name ?? agent.harness, agent.model || "default model", agent.effort ? `effort ${agent.effort}` : ""].filter(Boolean).join(" · ")} · ${access !== "full" ? "standard access" : agent.harness === "claude" && asRoot(cwd) ? "standard access (full access isn't allowed as root)" : "full access"}${agentUser(cwd) ? ` · as ${agentUser(cwd).name}` : ""}${OFF}`);
+    say(`${BOLD}${who}${OFF} ${DIM}· ${[k?.name ?? agent.harness, agent.model || "default model", agent.effort ? `effort ${agent.effort}` : ""].filter(Boolean).join(" · ")} · ${access !== "full" ? "standard access" : agent.harness === "claude" && asRoot(cwd) ? "full access (as root: sandboxed)" : "full access"}${agentUser(cwd) ? ` · as ${agentUser(cwd).name}` : ""}${OFF}`);
     say(`${DIM}Headless: each message runs ${k?.name ?? agent.harness} and its answer comes back here${mode === "lead" ? " and in the chat" : ""}. Enter sends, Esc stops, /cli opens the full CLI, /new starts over, /exit quits.${OFF}`);
     say();
+  }
+
+  /** The task's or plan's skills entry for this agent: what this spawn may use beyond its pins. */
+  function skillEntry() {
+    const id = team.knowledgeName(agent);
+    const t = task ? load(T.loadTask, task) : null;
+    const p = plan ? load(P.loadPlan, plan) : null;
+    return (t?.skills ?? {})[id] ?? (p?.skills ?? {})[id] ?? null;
   }
 
   /** The task and plan as they are now, or null when one is gone. */
@@ -268,36 +277,37 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
     }
   }
 
-  /** What the brief told the agent that can change: its knowledge, board, open comments and steps. */
-  function seenNow() {
+  /** What the brief told the agent that can change, read from one snapshot of the task, plan and board. */
+  function snapshot() {
     const t = task ? load(T.loadTask, task) : null;
     const p = plan ? load(P.loadPlan, plan) : null;
+    return { t, p, board: task ? T.board(root, task) : [] };
+  }
+
+  function seenNow(snap = snapshot()) {
     const known = knowledge.forBrief(root, team.knowledgeName(agent));
     return {
       knowledge: createHash("sha1").update(known).digest("hex"),
-      boardN: t ? (T.board(root, task).at(-1)?.n ?? 0) : 0,
-      comments: [...T.openComments(t ?? {}), ...P.openComments(p ?? {})].map((c) => c.id),
-      steps: Object.fromEntries((t?.steps ?? []).map((s) => [s.n, s.status])),
+      boardN: snap.board.at(-1)?.n ?? 0,
+      comments: [...T.openComments(snap.t ?? {}), ...P.openComments(snap.p ?? {})].map((c) => c.id),
+      steps: Object.fromEntries((snap.t?.steps ?? []).map((s) => [s.n, s.status])),
     };
   }
 
   /** The open comments this agent has not seen yet: its task's and its plan's. */
-  function newComments(seen) {
+  function newComments(seen, snap) {
     const ids = new Set(seen.comments ?? []);
-    const t = task ? load(T.loadTask, task) : null;
-    const p = plan ? load(P.loadPlan, plan) : null;
-    return [...T.openComments(t ?? {}), ...P.openComments(p ?? {})].filter((c) => !ids.has(c.id));
+    return [...T.openComments(snap.t ?? {}), ...P.openComments(snap.p ?? {})].filter((c) => !ids.has(c.id));
   }
 
   /** `## Brief update`: only what changed since `seen`, and "" when nothing did. */
-  function briefUpdate(seen) {
-    const now2 = seenNow();
+  function briefUpdate(seen, snap = snapshot()) {
+    const now2 = seenNow(snap);
     const lines = [];
     if (seen.knowledge !== now2.knowledge) lines.push(`Your project knowledge changed: run \`bh knowledge ${team.knowledgeName(agent)}\` to read it.`);
-    if (task) for (const e of T.board(root, task, { since: seen.boardN })) lines.push(T.boardLine(e));
-    for (const c of newComments(seen)) lines.push(`Comment ${c.id}${c.step ? ` (step ${c.step})` : ""}: ${c.text}`);
-    const t = task ? load(T.loadTask, task) : null;
-    const title = (n) => t?.steps.find((s) => String(s.n) === n)?.title ?? "";
+    for (const e of snap.board.filter((x) => x.n > seen.boardN)) lines.push(T.boardLine(e));
+    for (const c of newComments(seen, snap)) lines.push(`Comment ${c.id}${c.step ? ` (step ${c.step})` : ""}: ${c.text}`);
+    const title = (n) => snap.t?.steps.find((s) => String(s.n) === n)?.title ?? "";
     for (const [n, status] of Object.entries(now2.steps)) {
       const was = seen.steps?.[n];
       if (!was) lines.push(`${n}. ${title(n)}: new`);
@@ -307,17 +317,74 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
     return lines.length ? `## Brief update\n\n${lines.join("\n")}` : "";
   }
 
-  /** One line per turn for `bh usage`: what it cost, on which task and step (and in the task's file). */
+  /** The file a finished task leaves for the Orchestrator's next turn (`bh task status done`, `bh plan task`). */
+  const pendingCompact = join(DATA, "sessions", "compact-pending.json");
+
+  /**
+   * What a fresh conversation starts from: a task that finished ("done"), or a plan that just
+   * became a task ("planned", which starts now), followed by its steps, one line each.
+   */
+  function handoff(marker) {
+    const t = marker.task ? load(T.loadTask, marker.task) : null;
+    const p = marker.kind === "planned" && marker.plan ? load(P.loadPlan, marker.plan) : null;
+    const first = marker.kind === "planned"
+      ? `Previous plan ${p?.title ?? marker.plan} became task ${t?.title ?? marker.task}; it starts now.`
+      : `${t?.title ?? marker.task}: done.`;
+    return [
+      "## Handoff",
+      first,
+      ...(t?.steps ?? []).map((s) => `${s.n}. ${s.title} — ${s.status}`),
+      "Knowledge and boards hold the rest.",
+    ].join("\n");
+  }
+
+  /**
+   * Between tasks, before the next message: Claude Code compacts its own saved conversation
+   * headless; any other harness, or a failed compaction, starts over with a short handoff instead.
+   * Only this project's Orchestrator takes the marker: another agent the user talks to directly
+   * (`--mode lead`), or another project's Orchestrator, leaves it for its owner.
+   */
+  async function compactIfPending() {
+    if (mode !== "lead" || !agent.lead) return "";
+    const marker = readJson(pendingCompact, null);
+    if (!marker || marker.project !== root) return "";
+    rmSync(pendingCompact, { force: true });
+    if (!state.session) return ""; // nothing to compact: the next message starts the conversation anyway
+    if (agent.harness === "claude") {
+      say(`${DIM}Compacting this conversation: ${marker.reason}.${OFF}`);
+      const { access, allow } = accessOf();
+      const done = await compactSession({ agent, known, state, cwd, access, allow });
+      if (done.ok) {
+        state.session = done.session ?? state.session;
+        save();
+        return "";
+      }
+      say(`${DIM}Couldn't compact (${done.error || "no session"}): a new conversation with a handoff.${OFF}`);
+    }
+    acp.current?.close();
+    acp.current = null;
+    state = { harness: agent.harness, session: null, root };
+    save();
+    return handoff(marker);
+  }
+
+  /** One line per turn for `bh usage` and `bh metrics`: what it cost, on which task and step (and in the task's file). */
   function recordUsage(usage, wallMs) {
+    const tokens = ["input", "output", "cacheRead", "cacheWrite"].some((k) => typeof usage[k] === "number");
     const record = {
       at: now(),
       agent: who,
+      role: team.knowledgeName(agent),
       harness: agent.harness,
       model: agent.model || null,
       effort: agent.effort || null,
+      project: root,
+      plan: plan ?? null,
       task: task ?? null,
       step: step === null ? null : Number(step),
       ...usage,
+      // Only what the harness gave this turn: metrics estimates the rest and marks it estimated.
+      reported: { tokens, cost: typeof usage.costUsd === "number" },
       ...(usage.ms === undefined ? { ms: wallMs } : {}),
     };
     // Best effort: a lock timeout or a write error must never fail the turn.
@@ -337,6 +404,7 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
 
   async function runTurn(text) {
     ({ agent, known } = current());
+    agent = team.withAllowlist(agent, skillEntry());
     if (state.harness !== agent.harness) {
       acp.current?.close();
       acp.current = null;
@@ -347,6 +415,7 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
       say(`${RED}${agent.harness} has no headless mode here. Type /cli to open it.${OFF}`);
       return finish({ text: "", error: `${agent.harness} has no headless mode here: open ${who}'s terminal and type /cli.` });
     }
+    const carried = await compactIfPending();
     if (!state.session && !acp.current) makeBrief();
     const update = state.seen ? briefUpdate(state.seen) : "";
     const { access, allow } = accessOf();
@@ -371,7 +440,7 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
       }
     };
     try {
-      running = turn({ agent, known, state, key, brief, briefFile, prompt: update ? `${update}\n\n${text}` : text, cwd, on, access, allow, acp });
+      running = turn({ agent, known, state, key, brief, briefFile, prompt: [carried, update, text].filter(Boolean).join("\n\n"), cwd, on, access, allow, acp });
     } catch (e) {
       return finish({ text: "", error: e.message }, text);
     }

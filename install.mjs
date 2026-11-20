@@ -44,9 +44,9 @@ for (const name of themes) cpSync(join(here, "themes", name), join(themeDir, nam
 console.log(`themes   ${themeDir} ${themes.join(", ")}`);
 
 const layout = join(appHome, "layouts", "bot-herdr.json");
-// A layout from before the pages (chat, terminals, tasks, plans, knowledge, settings) can't show
-// them: replace it.
-const old = existsSync(layout) && !readFileSync(layout, "utf8").includes('"id": "knowledge"');
+// A layout from before the pages (chat, terminals, tasks, plans, knowledge, metrics, settings)
+// can't show them: replace it.
+const old = existsSync(layout) && !readFileSync(layout, "utf8").includes('"id": "metrics"');
 if (old) cpSync(layout, `${layout}.old`);
 if (!existsSync(layout) || old || args.has("--force")) {
   mkdirSync(dirname(layout), { recursive: true });

@@ -11,7 +11,7 @@ import { alpha } from "./working.js";
 import { colors } from "./theme.js";
 import { blocks } from "./doc.js";
 import { bh, enc, projectDir } from "./bh.js";
-import { sendFromChat } from "./pages.js";
+import { sendFromChat, startPlanTask } from "./pages.js";
 
 /** How long a two-step action (Discard, Delete) waits for its second click. */
 export const CONFIRM_MS = 5000;
@@ -320,7 +320,7 @@ export class PlanDoc {
       .gap(SPACE[2])
       .items_center()
       .justify_end()
-      .when(ready, (el) => el.child(actionButton(c, "bh-plan-start", "Start task", () => sendFromChat(`The plan ${p.id} ("${p.title}") is agreed: make it a task (bh plan task ${p.id}) and start it.`), { tone: "primary", icon: "play" })))
+      .when(ready, (el) => el.child(actionButton(c, "bh-plan-start", "Start task", () => startPlanTask(p), { tone: "primary", icon: "play" })))
       .child(actionButton(c, "bh-plan-arch", archived ? "Unarchive" : "Archive", (_e, cx) => this.act(["plan", archived ? "unarchive" : "archive", p.id], cx), { icon: "archive" }))
       .child(this.discardButton(c, p))
       .child(actionButton(c, "bh-plan-doc-close", "Close", (_e, cx) => this.closeSelf(cx), { hint: "Esc" }));

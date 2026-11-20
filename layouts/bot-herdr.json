@@ -213,6 +213,16 @@
                   }
                 },
                 {
+                  "id": "metrics",
+                  "type": "block",
+                  "content": {
+                    "mod": "bot-herdr",
+                    "props": {
+                      "view": "metrics"
+                    }
+                  }
+                },
+                {
                   "id": "settings",
                   "type": "block",
                   "content": {

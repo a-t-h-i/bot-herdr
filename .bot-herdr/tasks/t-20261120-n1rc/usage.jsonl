@@ -1,0 +1,17 @@
+{"at":"2026-11-20T19:42:20.964Z","agent":"dev-lean","harness":"pi","model":null,"effort":"xhigh","task":"t-20261120-n1rc","step":2,"ms":143334}
+{"at":"2026-11-20T19:45:55.677Z","agent":"dev-lean","harness":"pi","model":null,"effort":"xhigh","task":"t-20261120-n1rc","step":2,"ms":203281}
+{"at":"2026-11-20T19:46:44.171Z","agent":"design-polish","harness":"claude","model":null,"effort":"medium","task":"t-20261120-n1rc","step":13,"input":74,"output":20381,"cacheRead":2171152,"cacheWrite":70076,"costUsd":1.4027543999999996,"ms":404931}
+{"at":"2026-11-20T19:47:10.647Z","agent":"dev-baseline","harness":"pi","model":null,"effort":"xhigh","task":"t-20261120-n1rc","step":1,"ms":532343}
+{"at":"2026-11-20T19:54:43.158Z","agent":"design-polish","harness":"claude","model":null,"effort":"medium","task":"t-20261120-n1rc","step":13,"input":88,"output":28129,"cacheRead":4993756,"cacheWrite":62678,"costUsd":3.4658616,"ms":407269}
+{"at":"2026-11-20T20:00:43.263Z","agent":"design-polish","harness":"claude","model":null,"effort":"medium","task":"t-20261120-n1rc","step":13,"input":26,"output":12497,"cacheRead":1988284,"cacheWrite":23192,"costUsd":4.2990984,"ms":233400}
+{"at":"2026-11-20T20:05:29.806Z","agent":"dev-lean","harness":"pi","model":null,"effort":"xhigh","task":"t-20261120-n1rc","step":2,"ms":1165541}
+{"at":"2026-11-20T20:06:55.132Z","agent":"research-prices","harness":"opencode","model":null,"effort":null,"task":"t-20261120-n1rc","step":6,"ms":1609000}
+{"at":"2026-11-20T20:16:38.213Z","agent":"dev-lean","harness":"pi","model":null,"effort":"xhigh","task":"t-20261120-n1rc","step":2,"ms":641808}
+{"at":"2026-11-20T20:19:47.999Z","agent":"design-polish","harness":"claude","model":null,"effort":"medium","task":"t-20261120-n1rc","step":13,"input":12,"output":3736,"cacheRead":848660,"cacheWrite":9796,"costUsd":4.621966399999999,"ms":113331}
+{"at":"2026-11-20T20:20:08.247Z","agent":"dev-lean","harness":"pi","model":null,"effort":"xhigh","task":"t-20261120-n1rc","step":2,"ms":210016}
+{"at":"2026-11-20T20:32:07.555Z","agent":"dev-lean","harness":"pi","model":null,"effort":"xhigh","task":"t-20261120-n1rc","step":2,"ms":719288}
+{"at":"2026-11-20T20:41:49.647Z","agent":"qa-gate","harness":"antigravity","model":"gemini-4-neon-high","effort":null,"task":"t-20261120-n1rc","step":null,"ms":533673}
+{"at":"2026-11-20T20:48:40.632Z","agent":"design-fix","harness":"claude","model":null,"effort":"medium","task":"t-20261120-n1rc","step":8,"input":26,"output":6981,"cacheRead":504075,"cacheWrite":39948,"costUsd":0.5601229999999999,"ms":258671}
+{"at":"2026-11-20T20:48:57.057Z","agent":"dev-lean","harness":"pi","model":null,"effort":"xhigh","task":"t-20261120-n1rc","step":2,"ms":409584}
+{"at":"2026-11-20T20:59:51.014Z","agent":"dev-lean","harness":"pi","model":null,"effort":"xhigh","task":"t-20261120-n1rc","step":2,"ms":251707}
+{"at":"2026-11-20T21:04:32.237Z","agent":"qa-gate3","harness":"antigravity","model":"gemini-4-neon-high","effort":null,"task":"t-20261120-n1rc","step":null,"ms":274349}

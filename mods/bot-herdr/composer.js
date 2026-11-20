@@ -226,6 +226,9 @@ export class Composer {
     try {
       cx.bind_keys([
         { keystroke: "enter", action: "bot_herdr_send", context: "BotHerdr > Input" },
+        { keystroke: "pageup", action: "bot_herdr_page_up", context: "BotHerdr > Input" },
+        { keystroke: "pagedown", action: "bot_herdr_page_down", context: "BotHerdr > Input" },
+        { keystroke: "ctrl-end", action: "bot_herdr_latest", context: "BotHerdr > Input" },
         { keystroke: "enter", action: "bot_herdr_pick", context: "BotHerdrMenu > Input" },
         { keystroke: "tab", action: "bot_herdr_pick", context: "BotHerdrMenu > Input" },
         { keystroke: "up", action: "bot_herdr_up", context: "BotHerdrMenu > Input" },
@@ -530,7 +533,7 @@ export class Composer {
   /** A CLI start of an agent kept to some skills or MCP servers: its argv denies the rest of what is installed. */
   async launchArgv(entry, run) {
     if (!entry.skills?.length && !entry.mcp?.length) return run;
-    const got = await bhJson(["tools", entry.harness, "--refresh"], { timeout: 60000 });
+    const got = await bhJson(["tools", entry.harness], { timeout: 60000 });
     if (!got?.supported) return run;
     return argvOf({ ...entry, installed: { skills: got.skills.map((s) => s.name), mcp: got.mcp.map((m) => m.name) } }, this.known);
   }
@@ -1143,6 +1146,9 @@ export class Composer {
       if (!typed && !(at.question?.multi && picks.length)) return;
       this.input.set_value("");
       this.text = "";
+      // A lone number answers with that option (toggles it on a multi-select question).
+      const option = Drawer.numberPick(typed, at.question);
+      if (option) return at.question.multi ? this.toggleAsk(q, option.label, cx) : this.answerAsk(q, { picks: [option.label] }, cx);
       return this.answerAsk(q, { text: typed }, cx);
     }
     const content = this.input.content();

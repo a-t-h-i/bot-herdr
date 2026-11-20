@@ -1,0 +1,51 @@
+{
+  "briefBytes": {
+    "orchestrator/lead": 19197,
+    "orchestrator/child": 19999,
+    "orchestrator/panel": 21935,
+    "design/child": 13644,
+    "design/panel": 13099,
+    "dev/child": 14193,
+    "dev/panel": 13649,
+    "qa/child": 12113,
+    "qa/panel": 11587,
+    "qa/review": 14608,
+    "research/child": 9694,
+    "research/panel": 11701,
+    "scout/child": 9392,
+    "scout/panel": 11419
+  },
+  "briefTokensApprox": {
+    "orchestrator/lead": 5333,
+    "orchestrator/child": 5555,
+    "orchestrator/panel": 6093,
+    "design/child": 3790,
+    "design/panel": 3639,
+    "dev/child": 3943,
+    "dev/panel": 3791,
+    "qa/child": 3365,
+    "qa/panel": 3219,
+    "qa/review": 4058,
+    "research/child": 2693,
+    "research/panel": 3250,
+    "scout/child": 2609,
+    "scout/panel": 3172
+  },
+  "bhMs": {
+    "bh task list --json": 350,
+    "bh task show <id> --json": 306.6,
+    "bh board read <id> --json": 293,
+    "bh team --json": 301.5,
+    "bh tools claude": 286.1,
+    "bh usage --json": 313.4
+  },
+  "spawnToPromptMs": 670,
+  "node": "v26.13.1",
+  "platform": "linux",
+  "at": "2026-11-20T19:46:31.112Z",
+  "commit": "544fdc1aa15b9f046f3b85d649c9d167f810a6f5",
+  "notes": [
+    "bh tools claude takes no --json: its output is always JSON (engine/bh.mjs:842).",
+    "spawnToPromptMs: median of 5 runs of `bh agent dev --mode child` to the fake harness reading its prompt."
+  ]
+}

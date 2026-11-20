@@ -51,7 +51,8 @@ export function listPlans(root, { all = false } = {}) {
     .sort((a, b) => String(b.updated).localeCompare(String(a.updated)));
 }
 
-export function newPlan(root, { idea, title }) {
+/** A new plan; `skills` is the classifier's picks per panel seat (contract #9 a). */
+export function newPlan(root, { idea, title, skills = {} }) {
   return savePlan(root, {
     id: newId("p"),
     title: title?.trim() || titleFrom(idea),
@@ -60,6 +61,7 @@ export function newPlan(root, { idea, title }) {
     round: 0,
     task: null,
     created: now(),
+    skills,
     markdown: "",
     comments: [],
   });

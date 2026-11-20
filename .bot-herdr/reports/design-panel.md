@@ -1,530 +1,144 @@
+## Summary
+Design panel round 1: two visual questions (Metrics layout, auto vs manual skill picks) with mockups, plus UI notes with path:line evidence.
+No files changed outside .bot-herdr.
+
+## Changes
+- .bot-herdr/tmp/p-7rw6-design-q.md, .bot-herdr/reports/design-panel.md — panel answer
+
 ## Status
 OPEN
 
 ## Questions
-
-1. Should the chat show a live list of agents, or keep one working line?
-   - Presence strip — one compact row per live agent above the composer: name, status, what it is doing now, elapsed; a click opens its terminal.
+1. How should the new Metrics tab lay out who works the most?
+   - Leaderboard table — totals on top, one sortable row per agent with an inline bar for the chosen measure (time, tokens, cost, tasks, steps)
      ```mockup
-    <style>
-    *{box-sizing:border-box}
-    html,body{margin:0}
-    body{width:1200px;height:825px;overflow:hidden;background:#262624;color:#faf9f5;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
-    .top{height:44px;padding:0 16px;display:flex;align-items:center;border-bottom:1px solid #4a4a47}
-    .tabs{display:flex;gap:4px}
-    .tab{height:29px;padding:0 12px;display:flex;align-items:center;gap:6px;border-radius:8px;font-size:12px;color:#bbb9b2}
-    .tab.on{background:#30302e;color:#faf9f5}
-    .main{height:781px;display:flex;flex-direction:column;align-items:center}
-    .feed{width:660px;flex:1;display:flex;flex-direction:column;gap:22px;padding:16px 0 10px;justify-content:flex-end;overflow:hidden}
-    .me{align-self:flex-end;max-width:520px;background:#3a3a37;border:1px solid #51514d;border-radius:12px;padding:12px 16px;font-size:13.5px;line-height:20px}
-    .r{width:640px}
-    .meta{display:flex;align-items:center;gap:8px;font-size:12px;height:18px}
-    .name{font-weight:600}
-    .time{color:#abaaa4;font-size:11px}
-    .body{font-size:13.5px;line-height:20px;color:#faf9f5}
-    .body .muted{color:#bbb9b2}
-    .strip{width:660px;background:#30302e;border:1px solid #4a4a47;border-radius:12px;padding:6px 6px 8px;margin-bottom:8px}
-    .shead{display:flex;align-items:center;padding:2px 8px 4px;font-size:10.5px;letter-spacing:.04em;color:#abaaa4;text-transform:uppercase}
-    .shead .right{margin-left:auto;text-transform:none;letter-spacing:0;color:#bbb9b2}
-    .srow{display:flex;align-items:center;gap:8px;height:34px;padding:0 8px;border-radius:8px}
-    .srow.you{background:rgba(251,191,36,.10);border:1px solid rgba(251,191,36,.32)}
-    .av{flex:none;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:600;border:1px solid}
-    .nm{flex:none;width:88px;font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    .st{flex:none;width:76px;display:flex;align-items:center;gap:5px;font-size:11px;color:#bbb9b2}
-    .dot{width:6px;height:6px;border-radius:50%}
-    .act{flex:1;min-width:0;font-size:12px;color:#bbb9b2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    .age{flex:none;font-size:11px;color:#abaaa4}
-    .answer{flex:none;height:28px;padding:0 12px;border-radius:8px;background:#e1987e;color:#141413;font-size:11px;font-weight:600;display:flex;align-items:center}
-    .rowa{display:flex;align-items:center;gap:8px}
-    .composer{width:660px;height:76px;background:#30302e;border:1px solid #4a4a47;border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;justify-content:space-between}
-    .ph{font-size:13.5px;color:#abaaa4}
-    .tools{display:flex;align-items:center;gap:8px;height:28px}
-    .tool{width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#bbb9b2}
-    .send{margin-left:auto;width:28px;height:28px;border-radius:50%;background:#e1987e;display:flex;align-items:center;justify-content:center;color:#141413;font-size:14px}
-    </style>
-    <div class="top">
-      <div class="tabs">
-        <div class="tab on">Chat</div><div class="tab">Terminals</div><div class="tab">Tasks</div><div class="tab">Plans</div><div class="tab">Knowledge</div><div class="tab">Settings</div>
-      </div>
-    </div>
-    <div class="main">
-      <div class="feed">
-        <div class="me">Check who is working right now, and whether Dev's and QA's reports landed before you called it done.</div>
-        <div class="r">
-          <div class="meta"><span class="name" style="color:#e1987e">Orchestrator</span><span class="time">14:22</span></div>
-          <div class="body">Done. Dev built the strip, Design checked the motion, QA tested the focus order. I read both reports before marking step 2 done: <span class="muted">the working line now lists each agent.</span></div>
-        </div>
-        <div class="r">
-          <div class="meta"><span class="name" style="color:#5b8def">Dev</span><span class="time">14:21</span></div>
-          <div class="body">Strip is in <span style="color:#e1987e">src/chat.js:958</span>. Rows read from <span style="color:#e1987e">workers()</span>, so the rotating line is gone.</div>
-        </div>
-      </div>
-      <div class="strip">
-        <div class="shead"><span>Working now · 4</span><span class="right">3 working · 1 needs you</span></div>
-        <div class="srow">
-          <div class="av" style="background:rgba(225,152,126,.16);border-color:rgba(225,152,126,.45);color:#e1987e">O</div>
-          <div class="nm" style="color:#e1987e">Orchestrator</div>
-          <div class="st"><span class="dot" style="background:#34d399"></span>working</div>
-          <div class="act">Waiting on 3 children</div><div class="age">12m</div>
-        </div>
-        <div class="srow">
-          <div class="av" style="background:rgba(91,141,239,.16);border-color:rgba(91,141,239,.45);color:#5b8def">D</div>
-          <div class="nm" style="color:#5b8def">Dev</div>
-          <div class="st"><span class="dot" style="background:#34d399"></span>working</div>
-          <div class="act">Editing src/chat.js — presence rows</div><div class="age">4m</div>
-        </div>
-        <div class="srow">
-          <div class="av" style="background:rgba(214,130,90,.16);border-color:rgba(214,130,90,.45);color:#d6825a">D</div>
-          <div class="nm" style="color:#d6825a">Design</div>
-          <div class="st"><span class="dot" style="background:#34d399"></span>working</div>
-          <div class="act">Checking the row at 1200px</div><div class="age">1m</div>
-        </div>
-        <div class="srow you">
-          <div class="av" style="background:rgba(63,168,119,.16);border-color:rgba(63,168,119,.45);color:#3fa877">Q</div>
-          <div class="nm" style="color:#3fa877">QA</div>
-          <div class="st"><span class="dot" style="background:#fbbf24"></span>needs you</div>
-          <div class="act">Should child reports stay in the feed?</div><div class="answer">Answer</div>
-        </div>
-      </div>
-      <div class="composer">
-        <div class="ph">Write a message, run a command, or ask an agent</div>
-        <div class="tools"><div class="tool">＋</div><div class="tool">▤</div><div class="send">↑</div></div>
-      </div>
-    </div>
+     <style>
+     body{margin:0;font-family:system-ui,sans-serif;background:#f5f4ef;color:#141413}
+     .page{padding:16px 24px}
+     .tabs{display:flex;gap:2px;background:#ebe9e2;border-radius:8px;padding:2px;width:max-content;margin-bottom:16px}
+     .tab{padding:5px 16px;font-size:12px;border-radius:6px;color:#6a6964}.tab.on{border-bottom:2px solid #a25338;color:#141413}
+     .bar{display:flex;gap:8px;align-items:center;margin-bottom:12px}
+     .seg{display:flex;background:#ebe9e2;border-radius:8px;padding:2px}.seg span{padding:4px 12px;font-size:12px;border-radius:6px;color:#6a6964}.seg .on{background:#fff;color:#141413}
+     .kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:16px}
+     .kpi{background:#fff;border:1px solid #e3e0d7;border-radius:10px;padding:12px 16px}.kpi b{display:block;font-size:20px;font-variant-numeric:tabular-nums}.kpi span{font-size:12px;color:#6a6964}
+     table{width:100%;border-collapse:collapse;background:#fff;border:1px solid #e3e0d7;border-radius:10px;overflow:hidden;font-size:13.5px}
+     th{text-align:left;font-size:12px;color:#6a6964;font-weight:500;padding:8px 16px;border-bottom:1px solid #e3e0d7}th.on{color:#141413}
+     td{padding:10px 16px;border-bottom:1px solid #efede6;font-variant-numeric:tabular-nums}
+     .who{display:flex;gap:8px;align-items:center}.av{width:22px;height:22px;border-radius:50%;color:#fff;font-size:11px;display:flex;align-items:center;justify-content:center}
+     .track{width:220px;height:8px;background:#ebe9e2;border-radius:4px}.fill{height:8px;background:#a25338;border-radius:4px}
+     </style>
+     <div class="page">
+     <div class="tabs"><span class="tab">Chat</span><span class="tab">Terminals</span><span class="tab">Tasks</span><span class="tab">Plans</span><span class="tab">Knowledge</span><span class="tab on">Metrics</span><span class="tab">Settings</span></div>
+     <div class="bar"><div class="seg"><span>Today</span><span class="on">7 days</span><span>30 days</span><span>All</span></div><div style="flex:1"></div><div class="seg"><span class="on">Time</span><span>Tokens</span><span>Cost</span><span>Tasks</span><span>Steps</span></div></div>
+     <div class="kpis"><div class="kpi"><b>14 h 20 min</b><span>Time worked</span></div><div class="kpi"><b>38.4M</b><span>Tokens</span></div><div class="kpi"><b>$52.10</b><span>Cost</span></div><div class="kpi"><b>23</b><span>Tasks</span></div><div class="kpi"><b>141</b><span>Steps</span></div></div>
+     <table><tr><th>Agent</th><th class="on">Time ▾</th><th></th><th>Tokens</th><th>Cost</th><th>Tasks</th><th>Steps</th></tr>
+     <tr><td><div class="who"><div class="av" style="background:#a25338">D</div>dev</div></td><td>5 h 40 min</td><td><div class="track"><div class="fill" style="width:100%"></div></div></td><td>16.2M</td><td>$21.80</td><td>19</td><td>58</td></tr>
+     <tr><td><div class="who"><div class="av" style="background:#5a7fa8">D</div>design</div></td><td>3 h 55 min</td><td><div class="track"><div class="fill" style="width:69%"></div></div></td><td>9.8M</td><td>$13.40</td><td>12</td><td>34</td></tr>
+     <tr><td><div class="who"><div class="av" style="background:#6b8f5a">Q</div>qa</div></td><td>2 h 30 min</td><td><div class="track"><div class="fill" style="width:44%"></div></div></td><td>6.1M</td><td>$8.20</td><td>15</td><td>27</td></tr>
+     <tr><td><div class="who"><div class="av" style="background:#8a6bb0">O</div>orchestrator</div></td><td>1 h 25 min</td><td><div class="track"><div class="fill" style="width:25%"></div></div></td><td>4.3M</td><td>$6.10</td><td>23</td><td>14</td></tr>
+     <tr><td><div class="who"><div class="av" style="background:#b08a3e">R</div>research</div></td><td>50 min</td><td><div class="track"><div class="fill" style="width:15%"></div></div></td><td>2.0M</td><td>$2.60</td><td>6</td><td>8</td></tr>
+     </table></div>
      ```
-   - Name the working line — keep the one line and add the agent's name, its current action and a working count; nothing else moves.
+   - Agent cards — one card per agent with its five numbers and a small daily-activity chart, busiest first
      ```mockup
-    <style>
-    *{box-sizing:border-box}
-    html,body{margin:0}
-    body{width:1200px;height:825px;overflow:hidden;background:#262624;color:#faf9f5;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
-    .top{height:44px;padding:0 16px;display:flex;align-items:center;border-bottom:1px solid #4a4a47}
-    .tabs{display:flex;gap:4px}
-    .tab{height:29px;padding:0 12px;display:flex;align-items:center;border-radius:8px;font-size:12px;color:#bbb9b2}
-    .tab.on{background:#30302e;color:#faf9f5}
-    .main{height:781px;display:flex;flex-direction:column;align-items:center}
-    .feed{width:660px;flex:1;display:flex;flex-direction:column;gap:22px;padding:16px 0 12px;justify-content:flex-end;overflow:hidden}
-    .me{align-self:flex-end;max-width:520px;background:#3a3a37;border:1px solid #51514d;border-radius:12px;padding:12px 16px;font-size:13.5px;line-height:20px}
-    .r{width:640px}
-    .meta{display:flex;align-items:center;gap:8px;height:18px;font-size:12px}
-    .name{font-weight:600}
-    .time{color:#abaaa4;font-size:11px}
-    .body{font-size:13.5px;line-height:20px}
-    .muted{color:#bbb9b2}
-    .line{width:660px;height:28px;display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:12px}
-    .glyph{width:16px;height:16px;flex:none;position:relative}
-    .glyph i{position:absolute;left:0;width:16px;height:2px;border-radius:2px;background:rgba(91,141,239,.35)}
-    .glyph i:nth-child(1){top:4px}
-    .glyph i:nth-child(2){top:9px;width:10px;background:#5b8def}
-    .glyph i:nth-child(3){top:14px}
-    .who{font-weight:600;color:#5b8def}
-    .what{color:#bbb9b2;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-    .count{margin-left:auto;flex:none;height:28px;padding:0 10px;border:1px solid #4a4a47;border-radius:8px;display:flex;align-items:center;gap:4px;font-size:12px;color:#bbb9b2;background:#30302e}
-    .composer{width:660px;height:76px;background:#30302e;border:1px solid #4a4a47;border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;justify-content:space-between}
-    .ph{font-size:13.5px;color:#abaaa4}
-    .tools{display:flex;align-items:center;gap:8px;height:28px}
-    .tool{width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#bbb9b2}
-    .send{margin-left:auto;width:28px;height:28px;border-radius:50%;background:#e1987e;display:flex;align-items:center;justify-content:center;color:#141413;font-size:14px}
-    </style>
-    <div class="top">
-      <div class="tabs">
-        <div class="tab on">Chat</div><div class="tab">Terminals</div><div class="tab">Tasks</div><div class="tab">Plans</div><div class="tab">Knowledge</div><div class="tab">Settings</div>
-      </div>
-    </div>
-    <div class="main">
-      <div class="feed">
-        <div class="me">Check who is working right now, and whether Dev's and QA's reports landed before you called it done.</div>
-        <div class="r">
-          <div class="meta"><span class="name" style="color:#e1987e">Orchestrator</span><span class="time">14:22</span></div>
-          <div class="body">Done. Dev built the strip, Design checked the motion, QA tested the focus order. I read both reports before marking step 2 done: <span class="muted">the working line now names the agent.</span></div>
-        </div>
-        <div class="r">
-          <div class="meta"><span class="name" style="color:#5b8def">Dev</span><span class="time">14:21</span></div>
-          <div class="body">Line is updated in <span style="color:#e1987e">src/chat.js:958</span>: it reads <span style="color:#e1987e">workers()[turn]</span>, so the name and what it is doing are on the line.</div>
-        </div>
-        <div class="r">
-          <div class="meta"><span class="name" style="color:#d6825a">Design</span><span class="time">14:20</span></div>
-          <div class="body">Name in the agent's hue, activity muted after the dot; the count stays a quiet button.</div>
-        </div>
-      </div>
-      <div class="line">
-        <div class="glyph"><i></i><i></i><i></i></div>
-        <div class="who">Dev</div>
-        <div class="what">· Editing src/chat.js — presence rows</div>
-        <div class="count">1 of 3 working <span>›</span></div>
-      </div>
-      <div class="composer">
-        <div class="ph">Write a message, run a command, or ask an agent</div>
-        <div class="tools"><div class="tool">＋</div><div class="tool">▤</div><div class="send">↑</div></div>
-      </div>
-    </div>
+     <style>
+     body{margin:0;font-family:system-ui,sans-serif;background:#f5f4ef;color:#141413}
+     .page{padding:16px 24px}
+     .tabs{display:flex;gap:2px;background:#ebe9e2;border-radius:8px;padding:2px;width:max-content;margin-bottom:16px}
+     .tab{padding:5px 16px;font-size:12px;border-radius:6px;color:#6a6964}.tab.on{border-bottom:2px solid #a25338;color:#141413}
+     .seg{display:flex;background:#ebe9e2;border-radius:8px;padding:2px;width:max-content;margin-bottom:16px}.seg span{padding:4px 12px;font-size:12px;border-radius:6px;color:#6a6964}.seg .on{background:#fff;color:#141413}
+     .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+     .card{background:#fff;border:1px solid #e3e0d7;border-radius:10px;padding:16px}
+     .head{display:flex;gap:8px;align-items:center;font-weight:600;font-size:16px;margin-bottom:12px}.av{width:26px;height:26px;border-radius:50%;color:#fff;font-size:12px;display:flex;align-items:center;justify-content:center}
+     .rank{margin-left:auto;font-size:12px;color:#6a6964;font-weight:400}
+     .nums{display:grid;grid-template-columns:repeat(3,1fr);gap:8px 12px;margin-bottom:12px}.nums b{display:block;font-size:15px;font-variant-numeric:tabular-nums}.nums span{font-size:12px;color:#6a6964}
+     .spark{display:flex;align-items:flex-end;gap:4px;height:44px;border-top:1px solid #efede6;padding-top:8px}.spark i{flex:1;background:#a25338;opacity:.8;border-radius:2px}
+     </style>
+     <div class="page">
+     <div class="tabs"><span class="tab">Chat</span><span class="tab">Terminals</span><span class="tab">Tasks</span><span class="tab">Plans</span><span class="tab">Knowledge</span><span class="tab on">Metrics</span><span class="tab">Settings</span></div>
+     <div class="seg"><span>Today</span><span class="on">7 days</span><span>30 days</span><span>All</span></div>
+     <div class="grid">
+     <div class="card"><div class="head"><div class="av" style="background:#a25338">D</div>dev<span class="rank">#1 · 40% of time</span></div><div class="nums"><div><b>5 h 40 min</b><span>Time</span></div><div><b>16.2M</b><span>Tokens</span></div><div><b>$21.80</b><span>Cost</span></div><div><b>19</b><span>Tasks</span></div><div><b>58</b><span>Steps</span></div></div><div class="spark"><i style="height:40%"></i><i style="height:70%"></i><i style="height:55%"></i><i style="height:100%"></i><i style="height:80%"></i><i style="height:30%"></i><i style="height:60%"></i></div></div>
+     <div class="card"><div class="head"><div class="av" style="background:#5a7fa8">D</div>design<span class="rank">#2 · 27%</span></div><div class="nums"><div><b>3 h 55 min</b><span>Time</span></div><div><b>9.8M</b><span>Tokens</span></div><div><b>$13.40</b><span>Cost</span></div><div><b>12</b><span>Tasks</span></div><div><b>34</b><span>Steps</span></div></div><div class="spark"><i style="height:20%"></i><i style="height:50%"></i><i style="height:65%"></i><i style="height:45%"></i><i style="height:90%"></i><i style="height:35%"></i><i style="height:25%"></i></div></div>
+     <div class="card"><div class="head"><div class="av" style="background:#6b8f5a">Q</div>qa<span class="rank">#3 · 17%</span></div><div class="nums"><div><b>2 h 30 min</b><span>Time</span></div><div><b>6.1M</b><span>Tokens</span></div><div><b>$8.20</b><span>Cost</span></div><div><b>15</b><span>Tasks</span></div><div><b>27</b><span>Steps</span></div></div><div class="spark"><i style="height:30%"></i><i style="height:25%"></i><i style="height:60%"></i><i style="height:40%"></i><i style="height:55%"></i><i style="height:70%"></i><i style="height:20%"></i></div></div>
+     <div class="card"><div class="head"><div class="av" style="background:#8a6bb0">O</div>orchestrator<span class="rank">#4 · 10%</span></div><div class="nums"><div><b>1 h 25 min</b><span>Time</span></div><div><b>4.3M</b><span>Tokens</span></div><div><b>$6.10</b><span>Cost</span></div><div><b>23</b><span>Tasks</span></div><div><b>14</b><span>Steps</span></div></div><div class="spark"><i style="height:50%"></i><i style="height:45%"></i><i style="height:40%"></i><i style="height:60%"></i><i style="height:50%"></i><i style="height:30%"></i><i style="height:35%"></i></div></div>
+     <div class="card"><div class="head"><div class="av" style="background:#b08a3e">R</div>research<span class="rank">#5 · 6%</span></div><div class="nums"><div><b>50 min</b><span>Time</span></div><div><b>2.0M</b><span>Tokens</span></div><div><b>$2.60</b><span>Cost</span></div><div><b>6</b><span>Tasks</span></div><div><b>8</b><span>Steps</span></div></div><div class="spark"><i style="height:10%"></i><i style="height:0%"></i><i style="height:40%"></i><i style="height:15%"></i><i style="height:20%"></i><i style="height:5%"></i><i style="height:30%"></i></div></div>
+     </div></div>
      ```
-   - Agents rail — a fixed column beside the chat with every agent grouped needs-you, working, idle; the chat column gives up that width.
+   - Chart over time — a stacked daily bar chart (one colour per agent) for the chosen measure, with a compact leaderboard under it
      ```mockup
-    <style>
-    *{box-sizing:border-box}
-    html,body{margin:0}
-    body{width:1200px;height:825px;overflow:hidden;background:#262624;color:#faf9f5;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
-    .top{height:44px;padding:0 16px;display:flex;align-items:center;border-bottom:1px solid #4a4a47}
-    .tabs{display:flex;gap:4px}
-    .tab{height:29px;padding:0 12px;display:flex;align-items:center;border-radius:8px;font-size:12px;color:#bbb9b2}
-    .tab.on{background:#30302e;color:#faf9f5}
-    .page{height:781px;display:flex;justify-content:center;gap:16px;padding:16px 0}
-    .column{width:660px;display:flex;flex-direction:column;min-height:0}
-    .feed{flex:1;display:flex;flex-direction:column;gap:22px;justify-content:flex-end;overflow:hidden}
-    .me{align-self:flex-end;max-width:500px;background:#3a3a37;border:1px solid #51514d;border-radius:12px;padding:12px 16px;font-size:13.5px;line-height:20px}
-    .r{width:640px}
-    .meta{display:flex;align-items:center;gap:8px;height:18px;font-size:12px}
-    .name{font-weight:600}
-    .time{color:#abaaa4;font-size:11px}
-    .body{font-size:13.5px;line-height:20px}
-    .muted{color:#bbb9b2}
-    .line{height:28px;display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:12px;color:#bbb9b2}
-    .line .who{color:#5b8def;font-weight:600}
-    .composer{height:76px;background:#30302e;border:1px solid #4a4a47;border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;justify-content:space-between}
-    .ph{font-size:13.5px;color:#abaaa4}
-    .tools{display:flex;align-items:center;gap:8px;height:28px}
-    .tool{width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#bbb9b2}
-    .send{margin-left:auto;width:28px;height:28px;border-radius:50%;background:#e1987e;display:flex;align-items:center;justify-content:center;color:#141413;font-size:14px}
-    .rail{width:248px;flex:none;background:#30302e;border:1px solid #4a4a47;border-radius:12px;padding:10px 8px;align-self:flex-start}
-    .rhead{display:flex;align-items:center;padding:2px 8px 8px;font-size:10.5px;letter-spacing:.04em;color:#abaaa4;text-transform:uppercase}
-    .rhead b{margin-left:auto;color:#bbb9b2;font-weight:400;letter-spacing:0;text-transform:none;font-size:11px}
-    .group{font-size:10.5px;letter-spacing:.04em;color:#abaaa4;text-transform:uppercase;padding:8px 8px 4px}
-    .arow{display:flex;gap:8px;padding:6px 8px;border-radius:8px;align-items:flex-start}
-    .arow.you{background:rgba(251,191,36,.10);border:1px solid rgba(251,191,36,.32);padding:5px 7px}
-    .av{flex:none;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;border:1px solid}
-    .aw{flex:1;min-width:0}
-    .an{display:flex;align-items:center;gap:5px;font-size:12px;font-weight:600}
-    .dot{width:6px;height:6px;border-radius:50%;flex:none}
-    .aa{font-size:11px;color:#bbb9b2;line-height:15px;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    .at{font-size:11px;color:#abaaa4}
-    .answer{height:26px;padding:0 10px;border-radius:8px;background:#e1987e;color:#141413;font-size:11px;font-weight:600;display:inline-flex;align-items:center;margin-top:6px}
-    .q{font-size:11px;color:#fbbf24;line-height:15px;margin-top:2px}
-    </style>
-    <div class="top">
-      <div class="tabs">
-        <div class="tab on">Chat</div><div class="tab">Terminals</div><div class="tab">Tasks</div><div class="tab">Plans</div><div class="tab">Knowledge</div><div class="tab">Settings</div>
-      </div>
-    </div>
-    <div class="page">
-      <div class="column">
-        <div class="feed">
-          <div class="me">Check who is working right now, and whether Dev's and QA's reports landed before you called it done.</div>
-          <div class="r">
-            <div class="meta"><span class="name" style="color:#e1987e">Orchestrator</span><span class="time">14:22</span></div>
-            <div class="body">Done. Dev built it, Design checked the motion, QA tested the focus order. I read both reports before marking step 2 done: <span class="muted">the rail lists every agent beside the chat.</span></div>
-          </div>
-          <div class="r">
-            <div class="meta"><span class="name" style="color:#5b8def">Dev</span><span class="time">14:21</span></div>
-            <div class="body">Rail is in <span style="color:#e1987e">src/chat.js</span>; rows read from <span style="color:#e1987e">workers()</span> and <span style="color:#e1987e">children()</span>.</div>
-          </div>
-        </div>
-        <div class="line"><span class="who">Dev</span><span>· Editing src/chat.js</span></div>
-        <div class="composer">
-          <div class="ph">Write a message, run a command, or ask an agent</div>
-          <div class="tools"><div class="tool">＋</div><div class="tool">▤</div><div class="send">↑</div></div>
-        </div>
-      </div>
-      <div class="rail">
-        <div class="rhead"><span>Agents</span><b>6 live</b></div>
-        <div class="group">Needs you</div>
-        <div class="arow you">
-          <div class="av" style="background:rgba(63,168,119,.16);border-color:rgba(63,168,119,.45);color:#3fa877">Q</div>
-          <div class="aw">
-            <div class="an" style="color:#3fa877">QA</div>
-            <div class="q">Should child reports stay in the feed?</div>
-            <div class="answer">Answer</div>
-          </div>
-        </div>
-        <div class="group">Working</div>
-        <div class="arow">
-          <div class="av" style="background:rgba(225,152,126,.16);border-color:rgba(225,152,126,.45);color:#e1987e">O</div>
-          <div class="aw"><div class="an" style="color:#e1987e">Orchestrator<span class="dot" style="background:#34d399"></span></div><div class="aa">Waiting on 3 children · 12m</div></div>
-        </div>
-        <div class="arow">
-          <div class="av" style="background:rgba(91,141,239,.16);border-color:rgba(91,141,239,.45);color:#5b8def">D</div>
-          <div class="aw"><div class="an" style="color:#5b8def">Dev<span class="dot" style="background:#34d399"></span></div><div class="aa">Editing src/chat.js · 4m</div></div>
-        </div>
-        <div class="arow">
-          <div class="av" style="background:rgba(214,130,90,.16);border-color:rgba(214,130,90,.45);color:#d6825a">D</div>
-          <div class="aw"><div class="an" style="color:#d6825a">Design<span class="dot" style="background:#34d399"></span></div><div class="aa">Checking the row at 1200px · 1m</div></div>
-        </div>
-        <div class="group">Idle</div>
-        <div class="arow">
-          <div class="av" style="background:rgba(164,123,214,.16);border-color:rgba(164,123,214,.45);color:#a47bd6">R</div>
-          <div class="aw"><div class="an" style="color:#a47bd6">Research<span class="dot" style="background:#abaaa4"></span></div><div class="aa">Waiting for a task</div></div>
-        </div>
-        <div class="arow">
-          <div class="av" style="background:rgba(62,163,181,.16);border-color:rgba(62,163,181,.45);color:#3ea3b5">S</div>
-          <div class="aw"><div class="an" style="color:#3ea3b5">Scout<span class="dot" style="background:#abaaa4"></span></div><div class="aa">Waiting for a task</div></div>
-        </div>
-      </div>
-    </div>
+     <style>
+     body{margin:0;font-family:system-ui,sans-serif;background:#f5f4ef;color:#141413}
+     .page{padding:16px 24px}
+     .tabs{display:flex;gap:2px;background:#ebe9e2;border-radius:8px;padding:2px;width:max-content;margin-bottom:16px}
+     .tab{padding:5px 16px;font-size:12px;border-radius:6px;color:#6a6964}.tab.on{border-bottom:2px solid #a25338;color:#141413}
+     .bar{display:flex;gap:8px;margin-bottom:12px}.seg{display:flex;background:#ebe9e2;border-radius:8px;padding:2px}.seg span{padding:4px 12px;font-size:12px;border-radius:6px;color:#6a6964}.seg .on{background:#fff;color:#141413}
+     .panel{background:#fff;border:1px solid #e3e0d7;border-radius:10px;padding:16px;margin-bottom:12px}
+     .chart{display:flex;align-items:flex-end;gap:24px;height:240px;border-bottom:1px solid #e3e0d7;padding:0 12px}
+     .col{flex:1;display:flex;flex-direction:column-reverse;gap:2px}.col i{display:block;border-radius:2px}
+     .days{display:flex;gap:24px;padding:6px 12px 0;font-size:12px;color:#6a6964}.days span{flex:1;text-align:center}
+     .legend{display:flex;gap:16px;font-size:12px;color:#6a6964;margin-top:12px}.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px}
+     .rows{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;font-size:13.5px}.rows b{font-variant-numeric:tabular-nums}
+     </style>
+     <div class="page">
+     <div class="tabs"><span class="tab">Chat</span><span class="tab">Terminals</span><span class="tab">Tasks</span><span class="tab">Plans</span><span class="tab">Knowledge</span><span class="tab on">Metrics</span><span class="tab">Settings</span></div>
+     <div class="bar"><div class="seg"><span>Today</span><span class="on">7 days</span><span>30 days</span></div><div style="flex:1"></div><div class="seg"><span>Time</span><span class="on">Tokens</span><span>Cost</span><span>Tasks</span><span>Steps</span></div></div>
+     <div class="panel"><div class="chart">
+     <div class="col"><i style="height:40px;background:#a25338"></i><i style="height:20px;background:#5a7fa8"></i><i style="height:14px;background:#6b8f5a"></i><i style="height:10px;background:#8a6bb0"></i></div>
+     <div class="col"><i style="height:70px;background:#a25338"></i><i style="height:40px;background:#5a7fa8"></i><i style="height:20px;background:#6b8f5a"></i><i style="height:12px;background:#8a6bb0"></i><i style="height:8px;background:#b08a3e"></i></div>
+     <div class="col"><i style="height:55px;background:#a25338"></i><i style="height:50px;background:#5a7fa8"></i><i style="height:30px;background:#6b8f5a"></i><i style="height:14px;background:#8a6bb0"></i></div>
+     <div class="col"><i style="height:100px;background:#a25338"></i><i style="height:36px;background:#5a7fa8"></i><i style="height:22px;background:#6b8f5a"></i><i style="height:18px;background:#8a6bb0"></i><i style="height:20px;background:#b08a3e"></i></div>
+     <div class="col"><i style="height:80px;background:#a25338"></i><i style="height:70px;background:#5a7fa8"></i><i style="height:28px;background:#6b8f5a"></i><i style="height:16px;background:#8a6bb0"></i></div>
+     <div class="col"><i style="height:30px;background:#a25338"></i><i style="height:24px;background:#5a7fa8"></i><i style="height:36px;background:#6b8f5a"></i><i style="height:10px;background:#8a6bb0"></i></div>
+     <div class="col"><i style="height:60px;background:#a25338"></i><i style="height:20px;background:#5a7fa8"></i><i style="height:10px;background:#6b8f5a"></i><i style="height:12px;background:#8a6bb0"></i><i style="height:14px;background:#b08a3e"></i></div>
+     </div><div class="days"><span>Fri 14</span><span>Sat 15</span><span>Sun 16</span><span>Mon 17</span><span>Tue 18</span><span>Wed 19</span><span>Thu 20</span></div>
+     <div class="legend"><span><i style="background:#a25338"></i>dev</span><span><i style="background:#5a7fa8"></i>design</span><span><i style="background:#6b8f5a"></i>qa</span><span><i style="background:#8a6bb0"></i>orchestrator</span><span><i style="background:#b08a3e"></i>research</span></div></div>
+     <div class="panel rows"><div>dev <b>16.2M</b></div><div>design <b>9.8M</b></div><div>qa <b>6.1M</b></div><div>orchestrator <b>4.3M</b></div><div>research <b>2.0M</b></div></div>
+     </div>
      ```
-
-2. How should a child agent's report appear in the feed?
-   - Tag, keep flat — child replies stay where they happened, tagged "child of X" and "report", with a Team only / Everything filter.
+2. Once the classifier picks skills per agent, how should Settings show your manual picks next to the automatic ones?
+   - One chip list, three states — each skill chip cycles Auto → Always → Never; the card shows a short count line
      ```mockup
-    <style>
-    *{box-sizing:border-box}
-    html,body{margin:0}
-    body{width:1200px;height:825px;overflow:hidden;background:#262624;color:#faf9f5;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
-    .top{height:44px;padding:0 16px;display:flex;align-items:center;border-bottom:1px solid #4a4a47}
-    .tabs{display:flex;gap:4px}
-    .tab{height:29px;padding:0 12px;display:flex;align-items:center;border-radius:8px;font-size:12px;color:#bbb9b2}
-    .tab.on{background:#30302e;color:#faf9f5}
-    .main{height:781px;display:flex;flex-direction:column;align-items:center}
-    .filter{width:660px;display:flex;align-items:center;gap:8px;padding:12px 0 4px}
-    .filter .label{font-size:11px;color:#abaaa4}
-    .seg{margin-left:auto;display:flex;padding:2px;gap:2px;background:#222220;border-radius:10px}
-    .seg div{height:24px;padding:0 10px;display:flex;align-items:center;border-radius:8px;font-size:11px;color:#bbb9b2}
-    .seg .on{background:#30302e;color:#faf9f5}
-    .feed{width:660px;flex:1;display:flex;flex-direction:column;gap:22px;padding:8px 0 12px;justify-content:flex-end;overflow:hidden}
-    .me{align-self:flex-end;max-width:520px;background:#3a3a37;border:1px solid #51514d;border-radius:12px;padding:12px 16px;font-size:13.5px;line-height:20px}
-    .r{width:640px}
-    .meta{display:flex;align-items:center;gap:8px;height:18px;font-size:12px}
-    .name{font-weight:600}
-    .time{color:#abaaa4;font-size:11px}
-    .body{font-size:13.5px;line-height:20px}
-    .muted{color:#bbb9b2}
-    .tag{display:flex;align-items:center;gap:6px;height:18px;margin-bottom:3px;font-size:10.5px;color:#abaaa4}
-    .pill{height:16px;padding:0 6px;border-radius:8px;background:#222220;border:1px solid #4a4a47;display:flex;align-items:center;gap:4px;color:#bbb9b2;font-size:10px}
-    .pill i{width:5px;height:5px;border-radius:50%;background:#abaaa4}
-    .line{width:660px;height:28px;display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:12px;color:#bbb9b2}
-    .line .who{color:#5b8def;font-weight:600}
-    .composer{width:660px;height:76px;background:#30302e;border:1px solid #4a4a47;border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;justify-content:space-between}
-    .ph{font-size:13.5px;color:#abaaa4}
-    .tools{display:flex;align-items:center;gap:8px;height:28px}
-    .tool{width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#bbb9b2}
-    .send{margin-left:auto;width:28px;height:28px;border-radius:50%;background:#e1987e;display:flex;align-items:center;justify-content:center;color:#141413;font-size:14px}
-    </style>
-    <div class="top">
-      <div class="tabs">
-        <div class="tab on">Chat</div><div class="tab">Terminals</div><div class="tab">Tasks</div><div class="tab">Plans</div><div class="tab">Knowledge</div><div class="tab">Settings</div>
-      </div>
-    </div>
-    <div class="main">
-      <div class="filter"><span class="label">Feed</span><div class="seg"><div>Team only</div><div class="on">Everything</div></div></div>
-      <div class="feed">
-        <div class="me">Add a presence strip so I can see who is working.</div>
-        <div class="r">
-          <div class="meta"><span class="name" style="color:#e1987e">Orchestrator</span><span class="time">14:22</span></div>
-          <div class="body">Done. Dev built it, Design checked the motion, QA tested the focus order. I read both reports first; step 2 is done.</div>
-        </div>
-        <div class="r">
-          <div class="tag"><span class="pill"><i></i>report</span><span>child of Orchestrator</span></div>
-          <div class="meta"><span class="name" style="color:#5b8def">Dev</span><span class="time">14:21</span></div>
-          <div class="body">Strip is in <span style="color:#e1987e">src/chat.js:958</span>. Rows read from <span style="color:#e1987e">workers()</span>; the rotating line is gone.</div>
-        </div>
-        <div class="r">
-          <div class="tag"><span class="pill"><i></i>report</span><span>child of Orchestrator</span></div>
-          <div class="meta"><span class="name" style="color:#d6825a">Design</span><span class="time">14:20</span></div>
-          <div class="body">Rows are 34px, name in the agent's hue, activity truncated. Two fixes, both in.</div>
-        </div>
-        <div class="r">
-          <div class="tag"><span class="pill"><i></i>report</span><span>child of Orchestrator</span></div>
-          <div class="meta"><span class="name" style="color:#3fa877">QA</span><span class="time">14:19</span></div>
-          <div class="body">Focus order checked; rows are reachable and cost nothing when idle.</div>
-        </div>
-      </div>
-      <div class="line"><span class="who">Dev</span><span>· Editing src/chat.js</span></div>
-      <div class="composer">
-        <div class="ph">Write a message, run a command, or ask an agent</div>
-        <div class="tools"><div class="tool">＋</div><div class="tool">▤</div><div class="send">↑</div></div>
-      </div>
-    </div>
+     <style>
+     body{margin:0;font-family:system-ui,sans-serif;background:#f5f4ef;color:#141413}
+     .dlg{width:560px;margin:24px auto;background:#fff;border:1px solid #e3e0d7;border-radius:10px}
+     .hd{display:flex;gap:8px;align-items:center;padding:12px 16px;border-bottom:1px solid #e3e0d7;font-size:16px;font-weight:600}.av{width:28px;height:28px;border-radius:50%;background:#5a7fa8;color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px}
+     .bd{padding:16px}.lbl{font-size:12px;font-weight:500;color:#6a6964;margin-bottom:4px}.hint{font-size:10.5px;color:#6a6964;margin-bottom:8px}
+     .chips{display:flex;flex-wrap:wrap;gap:4px}.chip{font-size:12px;padding:5px 10px;border-radius:14px;border:1px solid #e3e0d7;background:#fff}
+     .chip.always{background:#a25338;color:#fff;border-color:#a25338}.chip.never{color:#6a6964;text-decoration:line-through;background:#ebe9e2}
+     .chip small{opacity:.8;margin-left:4px}
+     .key{display:flex;gap:16px;font-size:10.5px;color:#6a6964;margin-top:12px}
+     </style>
+     <div class="dlg"><div class="hd"><div class="av">D</div>design</div><div class="bd">
+     <div class="lbl">Skills</div><div class="hint">Auto: the classifier picks per task. Click a chip to pin it on or off.</div>
+     <div class="chips"><span class="chip always">dataviz<small>Always</small></span><span class="chip">plugin-authoring<small>Auto</small></span><span class="chip">run<small>Auto</small></span><span class="chip">code-review<small>Auto</small></span><span class="chip never">claude-api<small>Never</small></span><span class="chip">docx<small>Auto</small></span><span class="chip">pdf<small>Auto</small></span><span class="chip">simplify<small>Auto</small></span></div>
+     <div class="key"><span>1 always</span><span>1 never</span><span>6 auto</span></div>
+     </div></div>
      ```
-   - Group under the turn — each team reply collects the child reports that answered it, indented and compact, opened one by one.
+   - Two sections — "Pinned by you" (ticked chips, as today) and a read-only "Picked for the current task" list from the classifier
      ```mockup
-    <style>
-    *{box-sizing:border-box}
-    html,body{margin:0}
-    body{width:1200px;height:825px;overflow:hidden;background:#262624;color:#faf9f5;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
-    .top{height:44px;padding:0 16px;display:flex;align-items:center;border-bottom:1px solid #4a4a47}
-    .tabs{display:flex;gap:4px}
-    .tab{height:29px;padding:0 12px;display:flex;align-items:center;border-radius:8px;font-size:12px;color:#bbb9b2}
-    .tab.on{background:#30302e;color:#faf9f5}
-    .main{height:781px;display:flex;flex-direction:column;align-items:center}
-    .feed{width:660px;flex:1;display:flex;flex-direction:column;gap:22px;padding:16px 0 12px;justify-content:flex-end;overflow:hidden}
-    .me{align-self:flex-end;max-width:520px;background:#3a3a37;border:1px solid #51514d;border-radius:12px;padding:12px 16px;font-size:13.5px;line-height:20px}
-    .r{width:640px}
-    .meta{display:flex;align-items:center;gap:8px;height:18px;font-size:12px}
-    .name{font-weight:600}
-    .time{color:#abaaa4;font-size:11px}
-    .body{font-size:13.5px;line-height:20px}
-    .muted{color:#bbb9b2}
-    .group{margin-left:16px;border-left:2px solid #4a4a47;padding-left:12px;display:flex;flex-direction:column;gap:10px}
-    .ghead{display:flex;align-items:center;gap:8px;height:22px;font-size:11px;color:#bbb9b2}
-    .ghead b{font-weight:600;color:#faf9f5}
-    .ghead .chev{color:#abaaa4}
-    .rep{display:flex;align-items:center;gap:8px;height:34px}
-    .rep .av{flex:none;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:600;border:1px solid}
-    .rep .rn{flex:none;width:70px;font-size:12px;font-weight:600}
-    .rep .rs{flex:1;min-width:0;font-size:12px;color:#bbb9b2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    .rep .rt{flex:none;font-size:11px;color:#abaaa4}
-    .rep .open{flex:none;height:24px;padding:0 8px;border:1px solid #4a4a47;border-radius:8px;display:flex;align-items:center;font-size:11px;color:#bbb9b2}
-    .line{width:660px;height:28px;display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:12px;color:#bbb9b2}
-    .line .who{color:#5b8def;font-weight:600}
-    .composer{width:660px;height:76px;background:#30302e;border:1px solid #4a4a47;border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;justify-content:space-between}
-    .ph{font-size:13.5px;color:#abaaa4}
-    .tools{display:flex;align-items:center;gap:8px;height:28px}
-    .tool{width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#bbb9b2}
-    .send{margin-left:auto;width:28px;height:28px;border-radius:50%;background:#e1987e;display:flex;align-items:center;justify-content:center;color:#141413;font-size:14px}
-    </style>
-    <div class="top">
-      <div class="tabs">
-        <div class="tab on">Chat</div><div class="tab">Terminals</div><div class="tab">Tasks</div><div class="tab">Plans</div><div class="tab">Knowledge</div><div class="tab">Settings</div>
-      </div>
-    </div>
-    <div class="main">
-      <div class="feed">
-        <div class="me">Add a presence strip so I can see who is working.</div>
-        <div class="r">
-          <div class="meta"><span class="name" style="color:#e1987e">Orchestrator</span><span class="time">14:22</span></div>
-          <div class="body">Done. Dev built it, Design checked the motion, QA tested the focus order. I read both reports first; step 2 is done.</div>
-        </div>
-        <div class="group">
-          <div class="ghead"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5l3 3 3-3" fill="none" stroke="#abaaa4" stroke-width="1.5" stroke-linecap="round"/></svg><b>3 reports</b><span>this turn · Dev, Design, QA · 2m</span></div>
-          <div class="rep">
-            <div class="av" style="background:rgba(91,141,239,.16);border-color:rgba(91,141,239,.45);color:#5b8def">D</div>
-            <div class="rn" style="color:#5b8def">Dev</div>
-            <div class="rs">Strip is in src/chat.js:958; rows read from workers()</div>
-            <div class="rt">14:21</div><div class="open">Open</div>
-          </div>
-          <div class="rep">
-            <div class="av" style="background:rgba(214,130,90,.16);border-color:rgba(214,130,90,.45);color:#d6825a">D</div>
-            <div class="rn" style="color:#d6825a">Design</div>
-            <div class="rs">Rows are 34px, name in the agent's hue; two fixes</div>
-            <div class="rt">14:20</div><div class="open">Open</div>
-          </div>
-          <div class="rep">
-            <div class="av" style="background:rgba(63,168,119,.16);border-color:rgba(63,168,119,.45);color:#3fa877">Q</div>
-            <div class="rn" style="color:#3fa877">QA</div>
-            <div class="rs">Focus order checked; rows reachable, idle costs nothing</div>
-            <div class="rt">14:19</div><div class="open">Open</div>
-          </div>
-        </div>
-        <div class="r">
-          <div class="meta"><span class="name" style="color:#e1987e">Orchestrator</span><span class="time">14:18</span></div>
-          <div class="body muted">Starting QA on the focus order while Dev finishes.</div>
-        </div>
-      </div>
-      <div class="line"><span class="who">Dev</span><span>· Editing src/chat.js</span></div>
-      <div class="composer">
-        <div class="ph">Write a message, run a command, or ask an agent</div>
-        <div class="tools"><div class="tool">＋</div><div class="tool">▤</div><div class="send">↑</div></div>
-      </div>
-    </div>
-     ```
-   - Team replies only — the feed shows the team's replies; each turn's child reports sit behind one "N child reports" row.
-     ```mockup
-    <style>
-    *{box-sizing:border-box}
-    html,body{margin:0}
-    body{width:1200px;height:825px;overflow:hidden;background:#262624;color:#faf9f5;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
-    .top{height:44px;padding:0 16px;display:flex;align-items:center;border-bottom:1px solid #4a4a47}
-    .tabs{display:flex;gap:4px}
-    .tab{height:29px;padding:0 12px;display:flex;align-items:center;border-radius:8px;font-size:12px;color:#bbb9b2}
-    .tab.on{background:#30302e;color:#faf9f5}
-    .main{height:781px;display:flex;flex-direction:column;align-items:center}
-    .feed{width:660px;flex:1;display:flex;flex-direction:column;gap:22px;padding:16px 0 12px;justify-content:flex-end;overflow:hidden}
-    .me{align-self:flex-end;max-width:520px;background:#3a3a37;border:1px solid #51514d;border-radius:12px;padding:12px 16px;font-size:13.5px;line-height:20px}
-    .r{width:640px}
-    .meta{display:flex;align-items:center;gap:8px;height:18px;font-size:12px}
-    .name{font-weight:600}
-    .time{color:#abaaa4;font-size:11px}
-    .body{font-size:13.5px;line-height:20px}
-    .muted{color:#bbb9b2}
-    .expander{width:640px;margin-left:16px;border:1px solid #4a4a47;background:#222220;border-radius:10px;height:40px;display:flex;align-items:center;gap:8px;padding:0 12px;font-size:12px;color:#bbb9b2}
-    .expander b{font-weight:600;color:#faf9f5}
-    .avs{display:flex;gap:3px;margin-left:auto}
-    .av{width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:9.5px;font-weight:600;border:1px solid}
-    .chev{color:#abaaa4}
-    .line{width:660px;height:28px;display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:12px;color:#bbb9b2}
-    .line .who{color:#5b8def;font-weight:600}
-    .composer{width:660px;height:76px;background:#30302e;border:1px solid #4a4a47;border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;justify-content:space-between}
-    .ph{font-size:13.5px;color:#abaaa4}
-    .tools{display:flex;align-items:center;gap:8px;height:28px}
-    .tool{width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#bbb9b2}
-    .send{margin-left:auto;width:28px;height:28px;border-radius:50%;background:#e1987e;display:flex;align-items:center;justify-content:center;color:#141413;font-size:14px}
-    </style>
-    <div class="top">
-      <div class="tabs">
-        <div class="tab on">Chat</div><div class="tab">Terminals</div><div class="tab">Tasks</div><div class="tab">Plans</div><div class="tab">Knowledge</div><div class="tab">Settings</div>
-      </div>
-    </div>
-    <div class="main">
-      <div class="feed">
-        <div class="me">Add a presence strip so I can see who is working.</div>
-        <div class="r">
-          <div class="meta"><span class="name" style="color:#e1987e">Orchestrator</span><span class="time">14:22</span></div>
-          <div class="body">Done. Dev built it, Design checked the motion, QA tested the focus order. I read both reports first; step 2 is done.</div>
-        </div>
-        <div class="expander">
-          <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M3.5 2l3 3-3 3" fill="none" stroke="#abaaa4" stroke-width="1.5" stroke-linecap="round"/></svg><b>3 child reports</b><span>Dev, Design, QA</span>
-          <div class="avs">
-            <div class="av" style="background:rgba(91,141,239,.16);border-color:rgba(91,141,239,.45);color:#5b8def">D</div>
-            <div class="av" style="background:rgba(214,130,90,.16);border-color:rgba(214,130,90,.45);color:#d6825a">D</div>
-            <div class="av" style="background:rgba(63,168,119,.16);border-color:rgba(63,168,119,.45);color:#3fa877">Q</div>
-          </div>
-        </div>
-        <div class="r">
-          <div class="meta"><span class="name" style="color:#e1987e">Orchestrator</span><span class="time">14:18</span></div>
-          <div class="body muted">Starting QA on the focus order while Dev finishes. Reports stay folded unless you ask for them.</div>
-        </div>
-        <div class="r">
-          <div class="meta"><span class="name" style="color:#e1987e">Orchestrator</span><span class="time">14:12</span></div>
-          <div class="body muted">Task t-20261113-gq2: 3 steps, Dev and QA on it.</div>
-        </div>
-      </div>
-      <div class="line"><span class="who">Dev</span><span>· Editing src/chat.js</span></div>
-      <div class="composer">
-        <div class="ph">Write a message, run a command, or ask an agent</div>
-        <div class="tools"><div class="tool">＋</div><div class="tool">▤</div><div class="send">↑</div></div>
-      </div>
-    </div>
+     <style>
+     body{margin:0;font-family:system-ui,sans-serif;background:#f5f4ef;color:#141413}
+     .dlg{width:560px;margin:24px auto;background:#fff;border:1px solid #e3e0d7;border-radius:10px}
+     .hd{display:flex;gap:8px;align-items:center;padding:12px 16px;border-bottom:1px solid #e3e0d7;font-size:16px;font-weight:600}.av{width:28px;height:28px;border-radius:50%;background:#5a7fa8;color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px}
+     .bd{padding:16px}.sec{margin-bottom:16px}.lbl{font-size:12px;font-weight:500;color:#6a6964;margin-bottom:4px}.hint{font-size:10.5px;color:#6a6964;margin-bottom:8px}
+     .chips{display:flex;flex-wrap:wrap;gap:4px}.chip{font-size:12px;padding:5px 10px;border-radius:14px;border:1px solid #e3e0d7;background:#fff}.chip.on{background:#a25338;color:#fff;border-color:#a25338}
+     .auto{font-size:13.5px;border:1px solid #efede6;border-radius:8px}.auto div{display:flex;justify-content:space-between;padding:8px 12px;border-bottom:1px solid #efede6}.auto div:last-child{border:0}.auto span{font-size:12px;color:#6a6964}
+     </style>
+     <div class="dlg"><div class="hd"><div class="av">D</div>design</div><div class="bd">
+     <div class="sec"><div class="lbl">Pinned by you</div><div class="hint">Always loaded, whatever the task.</div>
+     <div class="chips"><span class="chip on">dataviz</span><span class="chip">plugin-authoring</span><span class="chip">run</span><span class="chip">code-review</span><span class="chip">claude-api</span><span class="chip">docx</span><span class="chip">simplify</span></div></div>
+     <div class="sec"><div class="lbl">Picked for t-20261120-ab12 by the classifier</div>
+     <div class="auto"><div>plugin-authoring<span>role: UI mod work</span></div><div>run<span>task asks to check it in the app</span></div></div></div>
+     </div></div>
      ```
 
 ## Notes
+- Tabs: pages are one list in `mods/bot-herdr/pages.js:8` (PAGES); the switch fits labels by narrowing padding then clipping (`switch.js:29-32`), so a 7th tab costs width on narrow windows. Metrics fits best between Knowledge and Settings; it needs a new `page-metrics` icon in `icons/` (none fits today) and a layout child `metrics` alongside the others.
+- gpui-kit has no chart component: only `PathBuilder` + `window.paint_path` (gpui-kit.d.ts:20403-20510), `Progress/ProgressTrack/ProgressIndicator` (:20757-20776) and semantic `Table*` (:21008-21033). A leaderboard needs only Table + bars (cheap, accessible); time charts need hand-drawn paths and a text alternative. Put the aggregation in a pure module (no gpui imports) so Node tests can cover it.
+- Data exists: every turn appends {agent, harness, model, task, step, tokens, cost, ms} to `.bot-herdr/usage/*.jsonl` (`engine/lib/agent.mjs:311-327`) and `bh usage` already sums per agent. Metrics should read one JSON command (e.g. `bh usage --json`), not parse files in the UI — DEV's seat. Note `bh usage` today reports input/output/cache split; "tokens" in the UI (`steps.js:18`) is a single total — pick one definition.
+- Skill picks today: only inside the agent's More dialog (`settings.js:1143-1165`) as toggle chips, "None ticked: it can use all of them." The agent card (`settings.js:640-689`) shows no skills at all, and the Tasks/Plans pages never show which skills a step used (no "skill" in plandoc.js/work.js). Auto-assigned skills will be invisible unless a step row or plan doc shows them.
+- Harness support message is hard-coded "Claude Code, Codex and OpenCode" (`settings.js:1151`); adding Gemini etc. must update it (better: derive from the engine's list in `engine/lib/tools.mjs:15`).
+- UX friction seen: skill list is unsearchable flat chips — with plugins (`bh tools claude` lists ~30+) the dialog becomes a wall; tool discovery has no cache age shown, only a refresh button (`settings.js:1146`).
+- Assumed: Metrics is read-only, no export, time windows Today/7d/30d/All. Design will follow existing tokens (look.js SPACE/TYPE/CONTROL, actionButton, segmented, agentBadge).
 
-**What the mod shows today (read this round, with anchors)**
-- The working line names no one: `working()` draws only the role's verb and motion (mods/bot-herdr/chat.js:953-1001), one agent at a time, rotated every 4s (mods/bot-herdr/working.js:122). With two Devs, or a Dev and a Design child, the user cannot tell who is where.
-- The activity text exists and is never drawn: `poll()` reads each headless agent's current tool call into `this.doing` (chat.js:337-351) and `workers()` returns it (chat.js:540-548); no element renders it.
-- Parentage exists and is used only for @-mentions: `children()` returns live child terminals with `parent` and `parentName` (mods/bot-herdr/composer.js:527-537), consumed only in `mentionContext()` (composer.js:582).
-- A child's turn is indistinguishable from a team reply: every headless agent's last message is written to the chat reply file (mods/bot-herdr/engine/lib/agent.mjs:304-307) and drawn as an ordinary reply (chat.js:822-859).
-- Replies can be lost: `poll()` loops over live agents only (chat.js:302-337), and each turn replaces one reply file per address (engine/lib/agent.mjs:51-53,307). Two turns between polls (2.5s, chat.js:35), or an agent killed or exited before the next poll, leaves nothing in the feed — the "report never arrived" feeling. Needs an engine change (append per turn or keep a per-turn log) plus a UI that reads the whole replies folder.
-- A pending question is invisible off the pages with a composer: `OpenQuestions` is polled per page (chat.js:505; mods/bot-herdr/work.js:458); the page switch can draw a tab count (mods/bot-herdr/switch.js:59) but `PAGES` items pass none (switch.js:230). On Terminals, where users watch agents, there is no signal at all.
-- The Tasks page hides the evidence: board posts exist (`bh board post/read`, engine/lib/tasks.mjs:145-152) and every brief tells agents to use them (engine/lib/team.mjs:90); reports land in `.bot-herdr/tasks/<id>/reports/<name>.md` (tasks.mjs:201). `taskBody()` draws actions, title, facts, progress, steps, full plan and comments only (work.js:932-948) — no board, no report links.
-- "Resume" claims what it did not do: work.js:972-976 toasts `Resumed <title>` after only `sendFromChat(...)`; the status changes only when the Orchestrator acts. The chat widget's Pause swallows failures (`catch {}`, chat.js:385-395).
-- Plans: an open question says "Waiting for your answer in the chat" (work.js:1599) although the plan box below answers it; seat pills are static (work.js:1693-1729); "Reading the code…" is a local timer (work.js:1519-1525), not a signal.
-- Accessibility: reply actions are hover-only (`opacity(show ? 1 : 0)`, chat.js:822-859,234-247) but stay in the tab order, so keyboard focus lands on invisible buttons.
-- Cost: nothing captures usage — runner.mjs parses none, the activity file is `{line, at}` (engine/lib/agent.mjs:228), sessions hold `{harness, session, root, updated}`. A spend number would be invented. Elapsed time is available now (waits.at, activity timestamps, task `workedMs`). Cost needs an engine change first (DEV/orchestrator), then per-agent and per-task spend in the strip and task facts.
-- Not missing: the question card answers in one go, the task page already shows each step's owner and time, and plan questions/answers with mockups render well.
-
-**Candidates, in the order I would build them**
-1. Presence strip (question 1) — rows from `workers()` + `children()`, activity from `doing`, elapsed from the wait; needs-you row is the question entry point; fixed height so the bottom-anchored feed (chat.js:585-607) does not jump.
-2. Child voice (question 2) — parentage from `children()`; always-available fallback is "is this address the lead?".
-3. Question visibility — one layout-level `OpenQuestions` (or its stamp in shared state), a count on the Chat/Plans tabs (switch.js:59 already draws `count`) and a line in the strip. Keep the single answer path (`bh answer`).
-4. Reply scan (engine + UI) — read the replies folder instead of only live agents; one entry per turn. Without it, 1-3 still show a feed that can lie about what agents said.
-5. Task evidence — a Board section (kind, from, age; open comments first) and per-step report links opened in `viewer.js`; no new backend.
-6. Delivery state on your own message — "sent 14:02 · working 4m · replied 14:09" or "no status yet" from `waits`/`outcome` (chat.js:292-300; mods/bot-herdr/feed.js:119). Never say "delivered" without evidence.
-7. Plan rail states and copy — working / waiting / done per seat (panel members run as `<seat>-panel`), replace the fake "Reading the code…", say "Answer below".
-8. Copy/state fixes — "Asked the Orchestrator to resume" plus a pending mark until the status changes; surface a failed Pause.
-9. Keyboard — keep reply actions visible (quiet tone) or reveal them on focus, not hover only.
-10. Cost — engine captures per-turn usage first; then spend beside elapsed time, per agent and per task, with a daily total.
-
-**Constraints and risks**
-- The chat feed is bottom-anchored with measured heights and clamped scroll (chat.js:585-607); a strip whose height changes with the agent count reflows it on every poll. Give it a fixed max height and fold it when nobody works.
-- Exact parentage needs the engine or the roster name: `children()` only knows live children, so a child that exited before its reply was read loses its parent. Tag by lead/non-lead if the parent is unknown; never guess silently.
-- Board/report UI must reuse `openFile` (viewer.js) and the project paths already resolved in `Work`; do not add another file reader.
-- Questions can be answered on several pages; one `OpenQuestions` path only (page composers must keep `hooks.answered` wired).
-- No new design tokens: chat column 660, 28px controls, 34px presence row, radii 12/10/8, agent hues from `look.js agentHue`; keep the ONE `actionButton` (28px) rule.
-- Motion stays native and stops when idle; the strip must not add polling loops beyond the existing 2.5s/5s timers.
-
-**Done for my seat**
-- The chat answers "who is working, on what, since when, and who needs me" without opening Terminals.
-- Every reply an agent writes reaches the feed once, even if the agent exits right after.
-- Children are visibly internal and filterable; the team's summary and a child's report never read the same.
-- A pending question is visible on every page (tab count plus a strip row or notice).
-- The task page links the raw evidence (board posts, per-step reports) under the steps.
-- No action claims a state it did not set; every action is reachable and visible from the keyboard.

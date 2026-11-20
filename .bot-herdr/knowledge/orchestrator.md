@@ -3,6 +3,8 @@
 ## Facts
 - bh in an agent shell resolves to the installed mod (~/.config/herdr-app/mods/bot-herdr/engine/bh.mjs), not the repo copy.
 - A writing child worktree branches from the task last commit, so uncommitted task work is not in it: spawn with --shared to build on uncommitted work.
+- test/bench/baseline.mjs records brief sizes, bh latency and spawn-to-first-prompt time on an isolated temp project (node test/bench/baseline.mjs <out.json>); use it before and after performance work.
+- bh metrics reads every usage record; a record's cost is Claude Code's reported total_cost_usd, so the Orchestrator's long resumed session dominates spend ($718 reported over 7 days as of 2026-11-20).
 
 ## Standards
 - gpui-kit declares no rotate or transform and .loop() takes no delay: check mods/bot-herdr/gpui-kit.d.ts (npx tsc -p mods/bot-herdr/jsconfig.json) before using a style method.

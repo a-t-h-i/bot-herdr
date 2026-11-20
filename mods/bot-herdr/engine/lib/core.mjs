@@ -36,12 +36,16 @@ export function accessOf() {
 /** The command an agent types to run bh. */
 export const bhCommand = () => `node "${BH.replace(/\\/g, "/")}"`;
 
-/** The git work tree around `cwd` (a task's own worktree stays itself: its files are there), else `cwd`. */
+/**
+ * The git work tree around `cwd` (a task's own worktree stays itself: its files are there), else
+ * `cwd`. A walk up looking for `.git` finds the same folder as `git rev-parse --show-toplevel`,
+ * without starting git: a folder with `.git` is the root, and so is a worktree's `.git` file.
+ */
 export function projectRoot(cwd = process.cwd()) {
-  try {
-    return execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || cwd;
-  } catch {
-    return cwd;
+  const start = resolve(cwd);
+  for (let dir = start; ; dir = dirname(dir)) {
+    if (existsSync(join(dir, ".git"))) return dir;
+    if (dirname(dir) === dir) return start;
   }
 }
 

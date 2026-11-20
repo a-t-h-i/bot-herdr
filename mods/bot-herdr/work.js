@@ -18,7 +18,7 @@ import { actionButton } from "./button.js";
 import { segmented, stateView, pill } from "./switch.js";
 import { commentRow, openFirst, openPlan, sectionLabel, COMMENT_LINKS, arm, armed } from "./plandoc.js";
 import { colors } from "./theme.js";
-import { activePage, sendFromChat, OPEN_TASK } from "./pages.js";
+import { activePage, sendFromChat, startPlanTask, OPEN_TASK } from "./pages.js";
 import { ROSTER_KEY, roster, slug } from "./roster.js";
 import { bh, bhJson, enc, projectDir } from "./bh.js";
 import { outline, notesOn } from "./doc.js";
@@ -33,8 +33,9 @@ import { mockupFile, openInBrowser } from "./media.js";
 import { openLightbox } from "./lightbox.js";
 import { openFile, openLink } from "./viewer.js";
 import { OpenQuestions, publishCounts } from "./questions.js";
-import { awaited, seatStates, boardAge, boardRows, boardTone } from "./signals.js";
+import { awaited, seatStates, seatsOf, boardAge, boardRows, boardTone } from "./signals.js";
 import { stepAgents, usageText } from "./steps.js";
+import { skillsLine } from "./skillsview.js";
 
 const TABS = [
   { id: "tasks", icon: "page-tasks", label: "Tasks" },
@@ -63,14 +64,9 @@ const PLAN_STATUS = {
 };
 const planTone = (c, status) => c[PLAN_STATUS[status]?.tone] ?? c.muted;
 
-/** The panel that plans with you, in the order it sits, with the names and the rail's three letters. */
-const SEATS = [
-  { id: "orchestrator", short: "Orc", name: "Orchestrator", fixed: true },
-  { id: "dev", short: "Dev", name: "Dev" },
-  { id: "design", short: "Des", name: "Design" },
-  { id: "qa", short: "QA", name: "QA" },
-  { id: "research", short: "Res", name: "Research" },
-];
+/** The panel that plans with you, in the order it sits: the built-in seats, then the team's custom agents. */
+const seats = () => seatsOf(roster(shared(ROSTER_KEY), []));
+
 
 /** Which status circle a task or step gets: each word of the status maps to one mark. */
 const MARK_KIND = { done: "done", active: "active", now: "active", paused: "paused", blocked: "blocked", abandoned: "cross", skipped: "cross" };
@@ -317,7 +313,7 @@ function answerOf(q, i) {
 /** A seat's name as the page writes it: "Orchestrator", "QA", or the word itself capitalised. */
 function seatName(seat) {
   const key = String(seat ?? "").toLowerCase();
-  return SEATS.find((s) => s.id === key)?.name ?? key.charAt(0).toUpperCase() + key.slice(1);
+  return seats().find((s) => s.id === key)?.name ?? key.charAt(0).toUpperCase() + key.slice(1);
 }
 
 export class Work {
@@ -480,7 +476,7 @@ export class Work {
 
   /** Each seat's state from the live terminal named `<seat>-panel`. */
   seatsNow() {
-    return seatStates(terminals(), SEATS);
+    return seatStates(terminals(), seats());
   }
 
   /** Whether a seat's state changed since the last draw (the rail's pills follow their terminals). */
@@ -1155,9 +1151,12 @@ export class Work {
     const notes = comments.filter((x) => x.step === s.n);
     const on = this.addingAt("task", t.id, s.n);
     const who = stepAgents(s);
+    const skills = skillsLine(s.skills);
     return v_flex()
       .flex_none()
       .child(this.stepLine(c, t, s, { next, on, who, live: notes.filter((x) => x.open !== false).length }))
+      // What the step's spawn was allowed to use.
+      .when(Boolean(skills), (el) => el.child(div().pl(STEP_TEXT).pr(SPACE[3]).pb(SPACE[1]).text_size(TYPE.xs).text_color(c.muted).truncate().child(skills)))
       // What the step's report says, under the step's title.
       .when(Boolean(s.report?.summary), (el) => el.child(
         div().pl(STEP_TEXT).pr(SPACE[3]).pb(SPACE[1]).text_size(TYPE.sm).text_color(c.muted).truncate().child(s.report.summary),
@@ -1504,7 +1503,8 @@ export class Work {
     const status = p.status ?? "grilling";
     return h_flex().flex_none().gap(SPACE[3]).items_center()
       .child(div().flex_1().min_w(0).truncate().text_size(TYPE.lg).font_semibold().child(p.title || p.idea || p.id))
-      .child(pill(c, PLAN_STATUS[status]?.label ?? status, planTone(c, status), { pulse: status === "grilling" }));
+      .child(pill(c, PLAN_STATUS[status]?.label ?? status, planTone(c, status), { pulse: status === "grilling" }))
+      .when(status === "ready" && !p.task, (el) => el.child(actionButton(c, "bh-plan-start-" + p.id, "Start task", () => startPlanTask(p), { tone: "primary", icon: "play" })));
   }
 
   /** The tab on the box's top edge that opens the plan as a sheet: it tucks into the box, then the sheet slides in. */
@@ -1790,7 +1790,7 @@ export class Work {
       .when(!horizontal, (el) => el.gap(SPACE[3]))
       .child(div().tooltip(`Round ${round}`).flex_none().size(32).rounded_full().border_1().border_color(c.edge).flex().items_center().justify_center()
         .text_size(TYPE.sm).font_semibold().child(String(round)))
-      .children(SEATS.map((seat) => this.seatPill(c, p, seat, off.has(seat.id), states[seat.id])))
+      .children(seats().map((seat) => this.seatPill(c, p, seat, off.has(seat.id), states[seat.id])))
       .child(div().flex_none().bg(c.edge)
         .when(horizontal, (el) => el.w(HAIR).h(CONTROL))
         .when(!horizontal, (el) => el.w(CONTROL + SPACE[2]).h(HAIR)))

@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { extname, join, relative } from "node:path";
+import { extname, join, relative, win32 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { APP_HOME, DATA, ensureDir } from "./core.mjs";
 
@@ -51,8 +51,8 @@ export function findBrowser({ env = process.env, platform = process.platform, ex
 
 function windowsBrowser({ env, exists, which, reg }) {
   const roots = [env.PROGRAMFILES, env["PROGRAMFILES(X86)"], env.LOCALAPPDATA].filter(Boolean);
-  const installed = WIN_BROWSERS.flatMap((app) => roots.map((root) => join(root, app)));
-  const scoop = env.USERPROFILE ? SCOOP.map(([app, exe]) => join(env.USERPROFILE, "scoop", "apps", app, "current", exe)) : [];
+  const installed = WIN_BROWSERS.flatMap((app) => roots.map((root) => win32.join(root, app)));
+  const scoop = env.USERPROFILE ? SCOOP.map(([app, exe]) => win32.join(env.USERPROFILE, "scoop", "apps", app, "current", exe)) : [];
   return [...installed, ...scoop].find((file) => exists(file)) ?? registryBrowser(exists, reg) ?? which("msedge", env) ?? which("chrome", env);
 }
 

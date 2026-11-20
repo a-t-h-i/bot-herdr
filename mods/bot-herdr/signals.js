@@ -2,6 +2,28 @@
 // many questions are open where, what the panel's seats are doing, and how long a resume ask
 // stands. Pure, so `npm test` checks them; switch.js, questions.js, chat.js and work.js use them.
 
+import { slug } from "./roster.js";
+
+/** The built-in planning seats in the order the rail shows them. */
+const BUILT_IN_SEATS = [
+  { id: "orchestrator", short: "Orc", name: "Orchestrator", fixed: true },
+  { id: "dev", short: "Dev", name: "Dev" },
+  { id: "design", short: "Des", name: "Design" },
+  { id: "qa", short: "QA", name: "QA" },
+  { id: "research", short: "Res", name: "Research" },
+];
+
+/** The planning panel from a roster: the built-in seats, then each custom agent (id its slug, short its first three letters). */
+export function seatsOf(list) {
+  const out = [...BUILT_IN_SEATS];
+  for (const a of list ?? []) {
+    const name = String(a?.name ?? "").trim();
+    if (a?.role !== "custom" || !name || out.some((s) => s.id === slug(name))) continue;
+    out.push({ id: slug(name), short: name.charAt(0).toUpperCase() + name.slice(1, 3), name });
+  }
+  return out;
+}
+
 /** How long a "resume asked" mark stands before it stops meaning anything. */
 export const RESUME_MS = 10 * 60000;
 

@@ -4,7 +4,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -73,14 +73,18 @@ test("opencode: its skills folders; mcp.servers or mcp keys from opencode.json[c
   assert.deepEqual(names(r.mcp), ["user:playwright", "project:sentry"]);
 });
 
-test("other harnesses are not supported; an answer is cached until --refresh", () => {
-  assert.deepEqual(T.listTools("gemini"), { harness: "gemini", supported: false, skills: [], mcp: [] });
+test("other harnesses are not supported; an answer is cached until a skills folder changes or --refresh", () => {
+  assert.deepEqual(T.listTools("omp"), { harness: "omp", supported: false, skills: [], mcp: [] }); // no skills folder known
   const { home, root } = fixture("cache");
   skill(join(home, ".claude", "skills", "one"), "one", "First");
   assert.equal(T.listTools("claude", { home, root, env: {} }).skills.length, 1);
   skill(join(home, ".claude", "skills", "two"), "two", "Second");
-  assert.equal(T.listTools("claude", { home, root, env: {} }).skills.length, 1);
-  assert.equal(T.listTools("claude", { home, root, env: {}, refresh: true }).skills.length, 2);
+  const later = new Date(Date.now() + 2000);
+  utimesSync(join(home, ".claude", "skills"), later, later); // installing a skill moves the folder's mtime on
+  assert.equal(T.listTools("claude", { home, root, env: {} }).skills.length, 2); // a new skill folder: read again
+  skill(join(home, ".claude", "skills", "two"), "renamed", "Second"); // inside one skill: its folder is unchanged
+  assert.equal(T.listTools("claude", { home, root, env: {} }).skills.some((s) => s.name === "renamed"), false);
+  assert.equal(T.listTools("claude", { home, root, env: {}, refresh: true }).skills.some((s) => s.name === "renamed"), true);
 });
 
 test("the launch denies what was not ticked: claude by --settings, codex by -c; nothing ticked, nothing denied", () => {
@@ -97,7 +101,7 @@ test("the launch denies what was not ticked: claude by --settings, codex by -c; 
 test("the brief names the picks after the role, and leaves the section out when nothing is ticked", () => {
   const dev = { id: "dev", role: "dev", name: "Dev", harness: "claude", model: "", effort: "", args: "", instructions: "" };
   const limited = team.brief({ ...dev, skills: ["review", "deploy"], mcp: ["github"] }, { root: tmp });
-  assert.match(limited, /## Your skills and MCP servers\nUse only these skills: review, deploy\.\nUse only these MCP servers: github\./);
+  assert.match(limited, /## Your skills and MCP servers\nUse only these skills: review, deploy\. If you need another, post a blocker naming it\.\nUse only these MCP servers: github\./);
   assert.ok(limited.indexOf("## Your skills and MCP servers") < limited.indexOf("## Your tools here"));
   assert.match(team.brief({ ...dev, skills: [], mcp: ["x"] }, { root: tmp }), /## Your skills and MCP servers\nUse only these MCP servers: x\./);
   assert.doesNotMatch(team.brief({ ...dev, skills: [], mcp: [] }, { root: tmp }), /Your skills and MCP servers/);
