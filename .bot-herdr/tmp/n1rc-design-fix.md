@@ -1,0 +1,7 @@
+Fix step after the QA gate of task t-20261120-n1rc (read .bot-herdr/tasks/t-20261120-n1rc/reports/qa-gate.md, findings 1, 5 and 6). Shared tree; Dev is changing engine files at the same time. Touch only: mods/bot-herdr/metricsview.js, mods/bot-herdr/metrics.js, mods/bot-herdr/settings.js, mods/bot-herdr/button.js, test/metrics-view.test.mjs.
+
+1. Finding 1 (view half), per board contract #24 (bh board read t-20261120-n1rc --since 23): in metricsview.js, tokens null shows "—" (no cached line) and costUsd null shows "—", on agent cards and the totals row; never "0" or "$0.00" for a null. Add tests with the QA reproduction shapes (tokens null and costUsd null on an agent; totals with costUsd null).
+2. Finding 5: settings.js FEATURES (around lines 86-92) gains the classifier feature "skills", label "Skill picks", hint "Picks skills for each agent when a task or plan starts.", in the same style as the others.
+3. Finding 6: in button.js body(), an icon-only button with neither label nor tooltip takes its accessibility label from a new optional "a11y" option. Give the icon-only buttons QA lists in settings.js (bh-more-close: "Close", bh-tools-refresh: "Refresh skills and MCP servers", and the others at settings.js:983, 1184, 1190) that option or a tooltip. Do not touch pick.js, viewer.js, lightbox.js or composer.js; list their unlabeled buttons in your report instead.
+
+Done when npm test, herdr-app check mods/bot-herdr and tsc (no new TS2304/TS2552 outside engine/) pass. Record with bh report t-20261120-n1rc --step 8.

@@ -1,0 +1,189 @@
+{
+  "at": "2026-11-20T19:57:05.694Z",
+  "mtimeMs": 1794661005236.202,
+  "size": 400,
+  "usage": {
+    "tokens": 2881844,
+    "costUsd": 1.7914,
+    "minutes": 11.67
+  },
+  "timeMs": 700457,
+  "steps": {
+    "1": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    },
+    "2": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    },
+    "3": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    },
+    "4": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    },
+    "5": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    },
+    "6": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    },
+    "7": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    },
+    "8": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    },
+    "9": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    },
+    "10": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    },
+    "11": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    },
+    "12": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    },
+    "13": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    },
+    "14": {
+      "timeMs": 256140,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 4.27
+      }
+    },
+    "15": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    },
+    "16": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    },
+    "17": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    },
+    "18": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    },
+    "19": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    },
+    "20": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    },
+    "21": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    },
+    "22": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    }
+  }
+}

@@ -1,0 +1,125 @@
+{
+  "at": "2026-11-20T21:05:18.247Z",
+  "mtimeMs": 1795208672242.1633,
+  "size": 3010,
+  "usage": {
+    "tokens": 10783567,
+    "costUsd": 14.3498,
+    "minutes": 135.19
+  },
+  "timeMs": 4698526,
+  "steps": {
+    "1": {
+      "timeMs": 532343,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 8.87
+      }
+    },
+    "2": {
+      "timeMs": 3744559,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 62.41
+      }
+    },
+    "3": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    },
+    "4": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    },
+    "5": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    },
+    "6": {
+      "timeMs": 1609000,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 26.82
+      }
+    },
+    "7": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    },
+    "8": {
+      "timeMs": 258671,
+      "usage": {
+        "tokens": 551030,
+        "costUsd": 0.5601,
+        "minutes": 4.31
+      }
+    },
+    "9": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    },
+    "10": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    },
+    "11": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    },
+    "12": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    },
+    "13": {
+      "timeMs": 1158931,
+      "usage": {
+        "tokens": 10232537,
+        "costUsd": 13.7897,
+        "minutes": 19.32
+      }
+    },
+    "14": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    }
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "at": "2026-11-20T19:57:05.704Z",
+  "mtimeMs": 1795004072437.119,
+  "size": 1826,
+  "usage": {
+    "tokens": 6633050,
+    "costUsd": 5.0438,
+    "minutes": 34.27
+  },
+  "timeMs": 1698326,
+  "steps": {
+    "1": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    },
+    "2": {
+      "timeMs": 262417,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 4.37
+      }
+    },
+    "3": {
+      "timeMs": 526528,
+      "usage": {
+        "tokens": 3804556,
+        "costUsd": 2.4438,
+        "minutes": 8.78
+      }
+    },
+    "4": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    },
+    "5": {
+      "timeMs": 153812,
+      "usage": {
+        "tokens": 861619,
+        "costUsd": 0.7572,
+        "minutes": 2.56
+      }
+    },
+    "6": {
+      "timeMs": 0,
+      "usage": {
+        "tokens": 0,
+        "costUsd": 0,
+        "minutes": 0
+      }
+    }
+  }
+}

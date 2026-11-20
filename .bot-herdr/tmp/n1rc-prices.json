@@ -1,0 +1,90 @@
+{
+  "updated": "2026-11-20",
+  "models": {
+    "claude-opus-5-5": {
+      "input": 4,
+      "output": 20,
+      "cacheRead": 0.2,
+      "cacheWrite": 5,
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "checked": "2026-11-20"
+    },
+    "claude-sonnet-5-5": {
+      "input": 2,
+      "output": 10,
+      "cacheRead": 0.1,
+      "cacheWrite": 2.5,
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "checked": "2026-11-20"
+    },
+    "claude-haiku-5-5": {
+      "input": 0.1,
+      "output": 0.5,
+      "cacheRead": 0.01,
+      "cacheWrite": 0.125,
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "checked": "2026-11-20"
+    },
+    "claude-fable-5-2": {
+      "input": 8,
+      "output": 40,
+      "cacheRead": 0.2,
+      "cacheWrite": 10,
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "checked": "2026-11-20"
+    },
+    "deepseek/deepseek-flash": {
+      "input": 0.3,
+      "output": 1.2,
+      "cacheRead": 0.006,
+      "cacheWrite": 0,
+      "source": "https://pi.dev/models",
+      "checked": "2026-11-20"
+    },
+    "opencode-go/iceman-contributor-free": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "source": "https://pi.dev/models",
+      "checked": "2026-11-20"
+    },
+    "opencode-go/deepseek-v4.1-flash": {
+      "input": 0.15,
+      "output": 0.6,
+      "cacheRead": 0.003,
+      "cacheWrite": 0,
+      "source": "https://pi.dev/models",
+      "checked": "2026-11-20"
+    },
+    "gpt-6.2-sol": {
+      "input": 2,
+      "output": 10,
+      "cacheRead": 0.1,
+      "cacheWrite": null,
+      "source": "https://developers.openai.com/codex/pricing",
+      "checked": "2026-11-20"
+    },
+    "gemini-4-neon-medium": {
+      "input": 3,
+      "output": 15,
+      "cacheRead": 0.15,
+      "cacheWrite": 0,
+      "source": "https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-gemini-4-neon",
+      "checked": "2026-11-20"
+    },
+    "gemini-4-neon-high": {
+      "input": 3,
+      "output": 15,
+      "cacheRead": 0.15,
+      "cacheWrite": 0,
+      "source": "https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-gemini-4-neon",
+      "checked": "2026-11-20"
+    }
+  },
+  "aliases": {
+    "claude/default": "claude-opus-5-5",
+    "pi/default": "claude-opus-5-5",
+    "codex/default": "gpt-6.2-sol"
+  }
+}
