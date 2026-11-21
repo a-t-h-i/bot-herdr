@@ -32,7 +32,6 @@ import { mockup, openInBrowser, previews, isImage } from "./media.js";
 import { commentRow } from "./plandoc.js";
 import { openLightbox } from "./lightbox.js";
 import { OpenQuestions, publishCounts } from "./questions.js";
-import { ResilienceMonitor, renderStatusStrip, STRIP_HEIGHT, openResilienceSettings } from "./statusstrip.js";
 
 /** An agent's round initial, in its hue: a folded child row's badge. `size` is the circle's. */
 function agentBadge(c, name, size = CONTROL) {
@@ -176,8 +175,6 @@ export class Chat {
       answered: (q, answers, cx, opts) => this.submit(q, answers, cx, opts),
     });
     this.composer.init(props, cx);
-    this.resilience = new ResilienceMonitor({ isActive: () => activePage() === "chat" });
-    this.resilience.start(cx);
     cx.spawn(async () => {
       try {
         await fs.mkdir(outboxDir(), { recursive: true });
@@ -591,9 +588,7 @@ export class Chat {
     const width = Math.max(320, Math.min(SIZE.maxWidth, this.size.width - SIZE.gutter * 2));
     const space = this.space();
     const columnLeft = Math.round((this.size.width - width) / 2);
-    const strip = this.resilience.model();
-    const stripH = strip.visible ? STRIP_HEIGHT + SPACE[3] : 0;
-    const foot = SIZE.foot + this.composer.height(width) + SPACE[4] + stripH;
+    const foot = SIZE.foot + this.composer.height(width) + SPACE[4];
     // The feed's height. Heights measured since the last wheel, or the composer folding to its
     // slim bar, can change how far up the feed goes: never leave empty space above the oldest.
     this.room = Math.max(0, this.size.height - foot);
@@ -706,23 +701,15 @@ export class Chat {
             this.composer.close(cx);
           })
           .on_scroll_wheel((_e, cx) => cx.stop_propagation())))
-      // The status strip (when active) and composer, bottom centre of the chat column.
+      // The composer, bottom centre of the chat column.
       .child(
-        v_flex()
+        div()
           .absolute()
           .left(0)
           .right(0)
           .bottom(SIZE.foot)
-          .items_center()
-          .gap(SPACE[3])
-          .when(strip.visible, (el) => el.child(
-            div().w(width).child(renderStatusStrip(c, strip, {
-              idPrefix: "bh-chat-strip",
-              onPause: (_e, cx) => this.resilience.pause(cx),
-              onReset: (_e, cx) => this.resilience.reset(cx),
-              onOpenSettings: () => openResilienceSettings(),
-            })),
-          ))
+          .flex()
+          .justify_center()
           .child(this.composer.render(cx, this.size.width, this.size.height)),
       );
   }

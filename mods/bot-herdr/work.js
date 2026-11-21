@@ -36,7 +36,6 @@ import { OpenQuestions, publishCounts } from "./questions.js";
 import { seatStates, seatsOf, boardAge, boardTone } from "./signals.js";
 import { stepAgents, usageText } from "./steps.js";
 import { skillsLine } from "./skillsview.js";
-import { ResilienceMonitor, renderStatusStrip, STRIP_HEIGHT, openResilienceSettings } from "./statusstrip.js";
 import {
   STATUS_CHIPS,
   BOARD_KINDS,
@@ -434,11 +433,6 @@ export class Work {
     cx.timer.every(QUESTIONS_MS, (cx) => {
       if (activePage() === (this.fixed ?? "work")) this.readQuestions(cx);
     });
-    this.resilience = new ResilienceMonitor({
-      isActive: () => activePage() === (this.fixed ?? "work") && this.tab === "tasks",
-      cwd: () => projectDir(),
-    });
-    this.resilience.start(cx);
     this.reload(cx);
     cx.timer.every(REFRESH_MS, (cx) => {
       if (activePage() === (this.fixed ?? "work")) this.reload(cx);
@@ -453,7 +447,6 @@ export class Work {
     this.reloadQueued = step.state.queued;
     if (step.action !== "run") return;
     const dir = projectDir();
-    if (this.tab === "tasks") this.resilience?.refresh(cx);
     cx.spawn(async (cx) => {
       try {
         this.switchTo(dir);
@@ -1051,16 +1044,9 @@ export class Work {
 
   /** The Tasks workbench: searchable, filterable split list with tabbed interactive detail. */
   tasksView(c, width) {
-    const strip = this.resilience.model();
-    const stripEl = strip.visible ? renderStatusStrip(c, strip, {
-      idPrefix: "bh-tasks-strip",
-      onPause: (_e, cx) => this.resilience.pause(cx),
-      onReset: (_e, cx) => this.resilience.reset(cx),
-      onOpenSettings: () => openResilienceSettings(),
-    }) : null;
     if (this.tasks === null) return stateView(c, { id: "bh-tasks-loading", title: "Loading tasks…", loading: true });
     if (!this.tasks.length) {
-      const empty = v_flex()
+      return v_flex()
         .w(width)
         .items_center()
         .gap(SPACE[4])
@@ -1068,7 +1054,6 @@ export class Work {
         .child(this.creatingTask
           ? div().w(Math.min(440, width)).child(this.newTaskCard(c))
           : actionButton(c, "bh-task-empty-new", "New task", (_e, cx) => this.toggleNewTask(cx), { icon: "plus", tone: "primary" }));
-      return stripEl ? v_flex().w(width).gap(SPACE[3]).child(stripEl).child(empty) : empty;
     }
     const narrow = this.width < NARROW;
     const counts = chipCounts(this.tasks);
@@ -1088,18 +1073,16 @@ export class Work {
       }
     }
     const open = filtered.find((t) => t.id === this.opened) ?? this.tasks.find((t) => t.id === this.opened) ?? null;
-    const stripH = stripEl ? STRIP_HEIGHT + SPACE[3] : 0;
-    const paneH = Math.max(320, this.height - PAGE_CHROME - stripH);
+    const paneH = Math.max(320, this.height - PAGE_CHROME);
     const listW = narrow ? width : Math.min(LIST_W, Math.floor(width * 0.42));
     const paneW = narrow ? width : Math.max(0, width - listW - HAIR);
-    const split = h_flex()
+    return h_flex()
       .w(width)
       .h(paneH)
       .items_start()
       .when(!narrow || !open, (el) => el.child(this.taskList(c, { filtered, counts, query, width: listW, height: paneH, narrow })))
       .when(!narrow, (el) => el.child(div().flex_none().w(HAIR).h(paneH).bg(c.edge)))
       .when(!narrow || Boolean(open), (el) => el.child(this.taskPane(c, open, { width: paneW, height: paneH, narrow })));
-    return stripEl ? v_flex().w(width).gap(SPACE[3]).child(stripEl).child(split) : split;
   }
 
   /** Toggles the compact inline task creation card and focuses its input when opening. */

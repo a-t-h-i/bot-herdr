@@ -422,7 +422,8 @@ test("static GPUI guards: tasksview.js is pure and work.js obeys runtime & Tasks
   assert.match(workSrc, /"--summary"/);
   assert.match(workSrc, /"task",\s*"show"/);
   assert.match(workSrc, /"--if-updated"/);
-  assert.match(workSrc, /\brenderStatusStrip\b/);
+  assert.doesNotMatch(workSrc, /\brenderStatusStrip\b/);
+  assert.doesNotMatch(modSrc("chat.js"), /\brenderStatusStrip\b/);
   // Mutations ask for the structured payload, so a stale write is a conflict, not a guess at stderr.
   assert.match(workSrc, /actTask\(args, cx, done = null, updated = null\) \{\s*this\.run\(this\.withIfUpdated\(\[\.\.\.args, "--json"\]/);
   assert.match(workSrc, /this\.remove\(this\.withIfUpdated\(\["task", "delete", t\.id, "--json"\]/);
