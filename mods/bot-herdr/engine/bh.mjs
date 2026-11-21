@@ -68,7 +68,10 @@ Goals (autonomous verification loops)
   bh goal approve-amend|reject-amend <task>  (the user's to approve or reject)
 
 Redesign foundation (placeholders until the Design Language Redesign milestones land)
-  bh ui-audit                     the design-language audit (tokens, contrast, spacing)
+  bh ui-audit [--json] [--page P] [--theme T] [--shots DIR] [--baseline write] [--a11y FILE]
+                                  the design-language audit: renders every page headless, counts
+                                  the Fix table, checks all 16 themes' contrast, records the
+                                  baseline (exit 0 whenever the audit ran; pass:false is a result)
   bh home                         the Home page's data
   bh thread                       a chat thread's stored conversation
   bh approvals                    approval cards for commands agents may not run on their own
