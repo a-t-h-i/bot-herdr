@@ -199,6 +199,8 @@ export class Composer {
     this.width = SIZE.maxWidth;
     this.justBriefed = new Set(); // briefed this session; the label can take a moment to show
     this.expanded = true;
+    this._frame = null; // per-render cache of bridge reads (roster, live agents, spaces, rows)
+    this._textRowsCache = null;
 
     // The box's height is ours (see box()): the text box fills whatever it is given, so it is
     // never left to size itself.
@@ -263,25 +265,66 @@ export class Composer {
 
   // ── What is where ──────────────────────────────────────────────────────────────────────────
 
+  /** Runs `fn` with a single-frame cache of bridge reads (roster, agents, spaces, terminals, rows). Re-entrant. */
+  withFrame(fn) {
+    if (this._frame) return fn();
+    this._frame = {};
+    try {
+      return fn();
+    } finally {
+      this._frame = null;
+    }
+  }
+
+  allSpaces() {
+    if (this._frame?.spaces) return this._frame.spaces;
+    const list = spaces();
+    if (this._frame) this._frame.spaces = list;
+    return list;
+  }
+
+  allTerminals() {
+    if (this._frame?.terminals) return this._frame.terminals;
+    const list = terminals();
+    if (this._frame) this._frame.terminals = list;
+    return list;
+  }
+
+  live() {
+    if (this._frame?.live) return this._frame.live;
+    const list = withQuiet({ agents: reported(), panes: panes(), spaces: this.allSpaces() });
+    if (this._frame) this._frame.live = list;
+    return list;
+  }
+
   space() {
+    if (this._frame && "space" in this._frame) return this._frame.space;
     const f = focused();
-    return spaces().find((s) => s.id === f?.space) ?? spaces().find((s) => s.active) ?? null;
+    const list = this.allSpaces();
+    const current = list.find((s) => s.id === f?.space) ?? list.find((s) => s.active) ?? null;
+    if (this._frame) this._frame.space = current;
+    return current;
   }
 
   /** The agents set up in Settings. */
   roster() {
-    return roster(shared(ROSTER_KEY), this.known);
+    if (this._frame?.roster) return this._frame.roster;
+    const list = roster(shared(ROSTER_KEY), this.known);
+    if (this._frame) this._frame.roster = list;
+    return list;
   }
 
   leadEntry() {
-    return this.roster().find((a) => a.lead);
+    if (this._frame && "lead" in this._frame) return this._frame.lead;
+    const lead = this.roster().find((a) => a.lead) ?? null;
+    if (this._frame) this._frame.lead = lead;
+    return lead;
   }
 
   // ── The Orchestrator's model, picked from the bar (the others are set in Settings) ────────
 
   /** The Orchestrator's model as the chip shows it: its name, or its harness's default. */
-  leadModelName() {
-    const a = this.leadEntry();
+  leadModelName(a = this.leadEntry()) {
     if (!a?.model) return "Default model";
     const got = COMPOSER_MODELS.get(a.harness);
     return (got?.models ?? []).find((m) => m.id === a.model)?.name ?? modelsOf(a.harness).find((m) => m.id === a.model)?.name ?? a.model;
@@ -320,8 +363,7 @@ export class Composer {
    * Every installed harness's models, each section headed by the harness, the Orchestrator's own
    * first: what the harness reports, else the built-in list meanwhile. Filtered by the search.
    */
-  modelRows() {
-    const a = this.leadEntry();
+  modelRows(a = this.leadEntry()) {
     if (!a) return [];
     const local = !this.space()?.machine;
     const installed = this.known.filter((k) => k.installed);
@@ -364,7 +406,7 @@ export class Composer {
   /** The model pane: search on top, the Orchestrator's effort, then the models, scrolling. */
   modelBody(c) {
     const a = this.leadEntry();
-    const rows = this.modelRows();
+    const rows = this.modelRows(a);
     const levels = a ? effortsOf(a.harness, a.model ?? "") : [];
     const listH = Math.min(7 * ROW, Math.max(ROW, rows.reduce((n, o) => n + (o.heading ? CONTROL : ROW), 0)));
     const head = CONTROL + SPACE[3] + (levels.length ? CHIP + SPACE[3] : 0) + (this.askingModels ? ROW + SPACE[3] : 0);
@@ -415,6 +457,7 @@ export class Composer {
   saveLead(patch, cx) {
     const list = this.roster().map((a) => (a.lead ? { ...a, ...patch } : a));
     setShared(ROSTER_KEY, list);
+    this._frame = null;
     const known = this.known.map((k) => ({ key: k.key, name: k.name, run: k.run, installed: k.installed }));
     cx.timer.after(1, (cx) => cx.spawn(async (cx) => {
       const r = await bh(["team", "save", "--data", enc({ agents: list, known })]);
@@ -426,21 +469,22 @@ export class Composer {
 
   /** The Orchestrator a plain message goes to, or null when this space has none yet. */
   target() {
-    return orchestratorOf(agents(), this.space()?.id ?? null, this.leadEntry().name);
+    return orchestratorOf(this.live(), this.space()?.id ?? null, this.leadEntry()?.name);
   }
 
   /** What starts a new Orchestrator, or null when its harness is not installed. */
   lead() {
     const entry = this.leadEntry();
-    if (!runnable(entry, this.known)) return null;
+    if (!entry || !runnable(entry, this.known)) return null;
     return { run: argvOf(entry, this.known), name: this.known.find((k) => k.key === entry.harness)?.name ?? entry.harness, tab: entry.name };
   }
 
   /** Roster agents that are not running in this space: `@name` starts them. Then the bare harnesses. */
   startables() {
     const space = this.space()?.id ?? null;
+    const live = this.live();
     const mine = this.roster()
-      .filter((a) => !a.lead && runnable(a, this.known) && !runningAs(a, agents(), space))
+      .filter((a) => !a.lead && runnable(a, this.known) && !runningAs(a, live, space))
       .map((a) => {
         const k = this.known.find((k) => k.key === a.harness);
         return {
@@ -455,9 +499,10 @@ export class Composer {
   /** Running agents that are roster entries, by address: the name they go by. */
   names() {
     const space = this.space()?.id ?? null;
+    const live = this.live();
     const out = {};
     for (const a of this.roster()) {
-      const running = runningAs(a, agents(), space);
+      const running = runningAs(a, live, space);
       if (running) out[running.address] = a.name;
     }
     return out;
@@ -480,10 +525,11 @@ export class Composer {
    * roster and of the running agents, for a feed that asks about every reply in it.
    */
   entriesByAddress() {
+    if (this._frame?.byAddress) return this._frame.byAddress;
     const space = this.space()?.id ?? null;
     const list = this.roster();
-    const live = agents();
-    const lead = list.find((a) => a.lead);
+    const live = this.live();
+    const lead = this.leadEntry();
     const byAddress = new Map();
     for (const a of list) {
       const running = runningAs(a, live, space);
@@ -491,6 +537,7 @@ export class Composer {
     }
     const target = orchestratorOf(live, space, lead?.name);
     if (target?.address) byAddress.set(target.address, lead);
+    if (this._frame) this._frame.byAddress = byAddress;
     return byAddress;
   }
 
@@ -560,10 +607,11 @@ export class Composer {
 
   /** Live child agents that have no pane of their own (those with one are in agents()). */
   children() {
-    const listed = new Set(agents().map((a) => a.address));
-    const all = terminals().filter((t) => t.state === "live");
+    const listed = new Set(this.live().map((a) => a.address));
+    const all = this.allTerminals().filter((t) => t.state === "live");
+    const byAddr = new Map(all.map((x) => [x.address, x]));
     const nameOf = (address) => {
-      const t = all.find((x) => x.address === address);
+      const t = byAddr.get(address);
       return t?.name || t?.program?.name || address;
     };
     return all
@@ -573,12 +621,11 @@ export class Composer {
 
   /** What to call a terminal in a message to the user. */
   nameOf(address) {
-    const named = this.names()[address];
-    if (named) return named;
-    if (this.target()?.address === address) return this.leadEntry().name;
-    const a = agents().find((x) => x.address === address);
+    const entry = this.entriesByAddress().get(address);
+    if (entry) return entry.name;
+    const a = this.live().find((x) => x.address === address);
     if (a) return a.program?.name ?? address;
-    const t = terminals().find((x) => x.address === address);
+    const t = this.allTerminals().find((x) => x.address === address);
     return t?.name || t?.program?.name || address;
   }
 
@@ -607,18 +654,22 @@ export class Composer {
 
   rows() {
     if (this.pane !== "suggest" || !this.trigger) return [];
-    if (this.trigger.kind === "slash") return slashRows(this.trigger.query);
-    return mentionRows(this.trigger.query, this.mentionContext());
+    if (this._frame?.rows) return this._frame.rows;
+    const out = this.trigger.kind === "slash"
+      ? slashRows(this.trigger.query)
+      : mentionRows(this.trigger.query, this.mentionContext());
+    if (this._frame) this._frame.rows = out;
+    return out;
   }
 
   mentionContext(mode = this.mode) {
     return {
-      agents: agents(),
+      agents: this.live(),
       children: this.children(),
       known: this.startables(),
       space: this.space()?.id ?? null,
       mode,
-      leadName: this.leadEntry().name,
+      leadName: this.leadEntry()?.name,
       names: this.names(),
     };
   }
@@ -1445,7 +1496,12 @@ export class Composer {
   // The box's height at a width: the text's rows and the tools row. Attachments sit above the box.
   /** The text box's rows: what the text needs, at least `minRows` (a page can ask for a taller box). */
   textRows(width) {
-    return Math.max(this.minRows ?? 0, rowsFor(this.text, width - SIZE.textX * 2 - 2));
+    const min = this.minRows ?? 0;
+    const cached = this._textRowsCache;
+    if (cached && cached.text === this.text && cached.width === width && cached.min === min) return cached.rows;
+    const rows = Math.max(min, rowsFor(this.text, width - SIZE.textX * 2 - 2));
+    this._textRowsCache = { text: this.text, width, min, rows };
+    return rows;
   }
 
   height(width) {
@@ -1460,27 +1516,29 @@ export class Composer {
   }
 
   /** The bubble, for the foot of a page `pageWidth` wide. Its pane grows upward from it. */
-  render(cx, pageWidth, pageHeight = this.pageHeight) {
-    this.cx = cx; // mockups start drawing while the questions are drawn
-    this.width = pageWidth;
-    this.pageHeight = pageHeight;
-    this.takeNotes(cx);
-    this.takeChoice(cx);
-    // A pane that just changed is drawn closed for one frame, then opens, so it grows into place.
-    const now = this.paneNow();
-    if (now !== this.shownPane) {
-      this.shownPane = now;
-      this.ready = false;
-      if (now) {
-        cx.timer.after(16, (cx) => {
-          this.ready = true;
-          cx.notify();
-        });
+  render(cx, pageWidth, pageHeight = this.pageHeight, c = null) {
+    return this.withFrame(() => {
+      this.cx = cx; // mockups start drawing while the questions are drawn
+      this.width = pageWidth;
+      this.pageHeight = pageHeight;
+      this.takeNotes(cx);
+      this.takeChoice(cx);
+      // A pane that just changed is drawn closed for one frame, then opens, so it grows into place.
+      const now = this.paneNow();
+      if (now !== this.shownPane) {
+        this.shownPane = now;
+        this.ready = false;
+        if (now) {
+          cx.timer.after(16, (cx) => {
+            this.ready = true;
+            cx.notify();
+          });
+        }
       }
-    }
-    const c = colors();
-    const width = Math.max(320, Math.min(SIZE.maxWidth, pageWidth - SIZE.gutter * 2));
-    return this.bubble(c, width);
+      const themeColors = c ?? colors();
+      const width = Math.max(320, Math.min(SIZE.maxWidth, pageWidth - SIZE.gutter * 2));
+      return this.bubble(themeColors, width);
+    });
   }
 
   bubble(c, width) {
@@ -1513,10 +1571,13 @@ export class Composer {
 
   // The composer box: the text and the tools row. Attachments sit above it as thumbnails.
   box(c, width, joined = false) {
+    const team = this.roster();
+    const lead = this.leadEntry();
+    const live = this.live();
     const target = this.target();
     const busy = target?.status === "working";
     const empty = !this.text.trim() && !this.files.length;
-    const placeholder = !this.pane && this.paneNow() === "ask" ? "Or type your own reply…" : busy ? `${this.leadEntry().name} is working. Enter steers it…` : this.placeholder ?? PLACEHOLDER;
+    const placeholder = !this.pane && this.paneNow() === "ask" ? "Or type your own reply…" : busy ? `${lead?.name ?? "Orchestrator"} is working. Enter steers it…` : this.placeholder ?? PLACEHOLDER;
     // Every height here is stated. The text box stretches to fill its parent, and a floating
     // surface may be offered the whole window, so nothing is left to size itself.
     const textH = this.textRows(width) * SIZE.line;
@@ -1561,14 +1622,14 @@ export class Composer {
               .text_size(TYPE.md)
               .line_height(`${SIZE.line}px`)
               .text_color(c.ink)
-              .token((tok) => this.chip(c, tok.token))
+              .token((tok) => this.chip(c, tok.token, team, live))
               .on_token_click((ev, cx) => {
                 this.input.set_selected_range(ev.range);
                 cx.notify();
               }),
           ),
       )
-      .child(this.tools(c, target, busy, empty));
+      .child(this.tools(c, target, busy, empty, lead));
   }
 
   /** A slim bar when the feed is scrolled away: click or type to grow it back, draft intact. */
@@ -1599,22 +1660,20 @@ export class Composer {
     );
   }
 
-  chip(c, token) {
-    const agent = token.id.startsWith("agent:") ? agents().find((a) => a.address === token.id.slice(6)) : null;
+  chip(c, token, team = this.roster(), live = this.live()) {
     const command = token.id.startsWith("cmd:") ? commandColor(token.id.slice(4)) : null;
-    // An agent's mention wears its type's colour, as it does everywhere; a command its own.
-    const named = agent?.name ?? String(token.text ?? "").replace(/^@/, "");
-    const color = command ? readable(command, c.hover, 4.5, c.ink)
-      : token.id === "all" ? c.accent
-        : readable(mentionTone(c, named, this.roster()), c.hover, 4.5, c.ink);
     // An agent is its @name, bold in its colour, set in the text like a word; a command keeps a chip.
     if (!command) {
+      const agent = token.id.startsWith("agent:") ? live.find((a) => a.address === token.id.slice(6)) : null;
+      const named = agent?.name ?? String(token.text ?? "").replace(/^@/, "");
+      const color = token.id === "all" ? readable(c.accent, c.fill, 4.5, c.ink) : readable(mentionTone(c, named, team), c.fill, 4.5, c.ink);
       return div()
         .text_size(TYPE.md)
         .font_semibold()
-        .text_color(readable(mentionTone(c, named, this.roster()), c.fill, 4.5, c.ink))
+        .text_color(color)
         .child(token.text ?? `@${named}`);
     }
+    const color = readable(command, c.hover, 4.5, c.ink);
     return h_flex()
       .px(SPACE[3])
       .h(CHIP)
@@ -1755,9 +1814,11 @@ export class Composer {
     return div().id("bc-toast").absolute().left(0).right(0).top(-slot).h(slot).child(shape).child(body);
   }
 
-  tools(c, target, busy, empty) {
+  tools(c, target, busy, empty, lead = this.leadEntry()) {
     const space = this.space();
     const canSend = !empty && !this.sending;
+    const leadHarness = lead ? (this.known.find((k) => k.key === lead.harness) ?? { key: lead.harness, name: lead.harness }) : null;
+    const leadModel = lead ? this.leadModelName(lead) : "";
     return h_flex()
       .id("bc-tools")
       .flex_none()
@@ -1785,7 +1846,7 @@ export class Composer {
         "bc-space",
       ))
       // The Orchestrator's model: picked here; every other agent's is set in Settings.
-      .when(Boolean(this.leadEntry()), (el) => el.child(clickable(
+      .when(Boolean(lead), (el) => el.child(clickable(
         h_flex()
           .h(CONTROL)
           .px(SPACE[3])
@@ -1797,9 +1858,9 @@ export class Composer {
           .hover((x) => x.bg(c.well).text_color(c.ink))
           .when(this.pane === "model", (x) => x.bg(c.well).text_color(c.ink))
           .on_click((_e, cx) => this.toggleModels(cx))
-          .child(harnessMark(c, this.known.find((k) => k.key === this.leadEntry().harness) ?? { key: this.leadEntry().harness, name: this.leadEntry().harness }, GLYPH.md))
-          .child(div().max_w(this.width >= 560 ? 180 : 110).truncate().child(this.leadModelName()))
-          .when(Boolean(this.leadEntry().effort), (x) => x.child(div().flex_none().text_color(c.faint).child(this.leadEntry().effort)))
+          .child(harnessMark(c, leadHarness, GLYPH.md))
+          .child(div().max_w(this.width >= 560 ? 180 : 110).truncate().child(leadModel))
+          .when(Boolean(lead.effort), (x) => x.child(div().flex_none().text_color(c.faint).child(lead.effort)))
           .child(svg(ICON("chevron-down")).size(GLYPH.sm).text_color(c.faint)),
         c,
         "bc-lead-model",
@@ -1921,6 +1982,7 @@ export class Composer {
     } else if (kind === "suggest") {
       const rows = this.rows();
       if (!rows.length) return null;
+      const team = this.roster();
       const shown = rows.slice(this.offset, this.offset + SIZE.rowsShown);
       let w = 0;
       for (const r of rows) w = Math.max(w, textWidth(r.label && r.kind !== "command" ? r.label : r.name, 13) + textWidth(r.hint, 12.5) + textWidth(r.tag, 10.5));
@@ -1934,7 +1996,7 @@ export class Composer {
           this.offset = Math.max(0, Math.min(max, this.offset + step));
           cx.notify();
         })
-        .children(shown.map((r, i) => this.row(c, r, this.offset + i, shown.length - 1 - i)));
+        .children(shown.map((r, i) => this.row(c, r, this.offset + i, shown.length - 1 - i, team)));
     } else if (kind === "attach" && this.browse) {
       const got = this.browseBody(c);
       size = { w: 420, h: got.h };
@@ -1953,7 +2015,7 @@ export class Composer {
         .child(this.menuItem(c, "bc-attach-folder", "folder", "Attach folder…", 1, (_e, cx) => this.pickFolderToAttach(cx)))
         .child(h_flex().h(ROW).px(SPACE[3]).items_center().text_size(TYPE.xs).text_color(c.muted).child("Or drop files on the composer"));
     } else {
-      const list = spaces();
+      const list = this.allSpaces();
       const current = this.space()?.id;
       const shown = list.slice(0, 7);
       size = { w: 400, h: 12 + (shown.length + 1) * ROW };
@@ -2049,7 +2111,7 @@ export class Composer {
 
   /** Who asked, in their colour: the colour reads on the pane. */
   askerTone(c, q) {
-    const tile = agents().find((a) => a.address === q.from)?.program?.tile ?? terminals().find((t) => t.address === q.from)?.program?.tile ?? null;
+    const tile = this.live().find((a) => a.address === q.from)?.program?.tile ?? this.allTerminals().find((t) => t.address === q.from)?.program?.tile ?? null;
     return tile ? readable(tile, c.fill, 4.5, c.ink) : c.accent;
   }
 
@@ -2344,11 +2406,11 @@ export class Composer {
     };
   }
 
-  row(c, r, index, fromBottom) {
+  row(c, r, index, fromBottom, team = this.roster()) {
     const active = index === this.at;
     const agentRow = r.kind === "agent" || r.kind === "start";
     // An agent's name wears its colour (the same as everywhere); a command keeps its own.
-    const color = agentRow ? readable(mentionTone(c, r.name ?? r.label, this.roster()), c.hover, 4.5, c.ink) : tint(c, r);
+    const color = agentRow ? readable(mentionTone(c, r.name ?? r.label, team), c.hover, 4.5, c.ink) : tint(c, r);
     const showName = r.kind === "command" ? r.name : r.label;
     return clickable(
       h_flex()
