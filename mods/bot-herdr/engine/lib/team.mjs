@@ -203,11 +203,12 @@ const MARK = "managed: bot-herdr";
 export const runsHeadless = (agent) => headless(agent.harness) && accessOf().headless;
 
 /** `bh agent …`: the agent terminal that runs a headless harness (agent.mjs). */
-export function agentArgv(agent, { mode = "child", name = null, parent = null, task = null, step = null, plan = null, effort = null, model = null } = {}) {
+export function agentArgv(agent, { mode = "child", name = null, parent = null, task = null, step = null, plan = null, effort = null, model = null, depth = null } = {}) {
   return [
     "node", BH.replace(/\\/g, "/"), "agent", slug(agent.name), "--mode", mode,
     ...(name ? ["--name", name] : []), ...(parent ? ["--parent", parent] : []), ...(task ? ["--task", task] : []),
     ...(step ? ["--step", String(step)] : []), ...(plan ? ["--plan", plan] : []),
+    ...(depth !== null && depth !== undefined ? ["--depth", String(depth)] : []),
     ...(effort && effort !== agent.effort ? ["--effort", effort] : []), ...(model ? ["--model", model] : []),
   ];
 }

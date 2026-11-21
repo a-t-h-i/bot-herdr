@@ -13,6 +13,8 @@
 - Bundled binaries (rg, fd, ast-grep) cache under appHome/cache/bot-herdr-bin/ and install to engine/bin/ via install.mjs; BH_BIN_DIR overrides it for tests.
 - Retrieval tiers in engine/scripts/lib/common.mjs: files fd -> rg --files -> git ls-files -> Node; search rg -> git grep --untracked -> Node; .bot-herdr/ excluded unless includeMeta.
 - Reply logs (DATA/replies/<key>.jsonl) are the single append-only chat event log ({id,at,kind,name,space,text}); kind:'asked' clears waits without a bubble; logReply trims atomically only past REPLY_LOG_MAX.
+- Claude Code headless can exit 0 with a single-line synthetic quota message (anthropics/claude-code#79500); classify only whole-line anchored matches <=220 chars, never prose.
+- runner.turn() must refresh the live Acp instance agent each turn, and resumeState() resets state.harness to the roster harness so fallback reuse checks state.sessions[harness].
 
 ## Standards
 - team.hc never runs hc through a shell (a brief is one argument); tests stand in for hc with a script named by BH_HC

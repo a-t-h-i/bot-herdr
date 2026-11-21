@@ -20,6 +20,8 @@ import * as T from "./tasks.mjs";
 import * as P from "./plans.mjs";
 import * as knowledge from "./knowledge.mjs";
 import { HEADLESS, agentUser, asRoot, compactSession, headless, interactive, launch, turn } from "./runner.mjs";
+import { classifyFailure } from "./failures.mjs";
+import { cooldownKey, dirtyTreeHandoff, fallbackPlan, isCooledDown, pickFallback, readCooldowns, recordCooldown, recordFailover, resilienceConfig } from "./resilience.mjs";
 import * as Q from "./ask.mjs";
 
 export { accessOf };
@@ -228,14 +230,18 @@ export function statusReport(state, { app, title, msg } = {}) {
 
 /**
  * The saved conversation to resume, for this harness and project. A conversation belongs to one
- * project: one saved for another starts over (`moved`). One saved before roots were kept keeps its
- * session and takes this project's root.
+ * project: one saved for another starts over (`moved`). Sessions are kept per harness, side by
+ * side, so a failover to another harness does not throw the first one's conversation away: when
+ * it comes back after its cooldown, it picks up where it was.
  */
 export function resumeState(saved, { harness, root }) {
-  if (saved?.harness !== harness) return { state: { harness, session: null, root }, moved: false };
-  if (!saved.root) return { state: { ...saved, root }, moved: false };
-  if (saved.root !== root) return { state: { harness, session: null, root }, moved: true };
-  return { state: saved, moved: false };
+  const sessions = saved?.sessions && typeof saved.sessions === "object" && !Array.isArray(saved.sessions) ? { ...saved.sessions } : {};
+  const made = (session) => (Object.keys(sessions).length ? { harness, session, sessions, root } : { harness, session, root });
+  if (!saved) return { state: made(null), moved: false };
+  if (saved.root && saved.root !== root) return { state: { harness, session: null, root }, moved: true };
+  if (saved.harness !== harness) return { state: made(sessions[harness] ?? null), moved: false };
+  const base = { ...saved, ...(saved.root ? {} : { root }) };
+  return { state: Object.keys(sessions).length ? { ...base, sessions } : base, moved: false };
 }
 
 /** The harness's question tool as a card, as bh ask makes it, with its mockups drawn now. */
@@ -251,7 +257,7 @@ function askCard(e, { address, who, cwd, say }) {
 }
 
 /** Runs the agent until the user quits. `first`: a message to start with. */
-export async function runAgent({ word, mode = "lead", name = null, parent = null, task = null, step = null, plan = null, model = null, effort = null, first = "" }) {
+export async function runAgent({ word, mode = "lead", name = null, parent = null, task = null, step = null, plan = null, model = null, effort = null, depth = null, first = "" }) {
   const root = projectRoot();
   const cwd = process.cwd();
   const address = process.env.HC_TERMINAL_ID || null;
@@ -400,7 +406,9 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
     }
     acp.current?.close();
     acp.current = null;
-    state = { harness: agent.harness, session: null, root };
+    const sessions = { ...(state.sessions ?? {}) };
+    delete sessions[agent.harness]; // the compacted conversation was this harness's
+    state = { harness: agent.harness, session: null, sessions, root };
     save();
     return handoff(marker);
   }
@@ -431,32 +439,95 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
     } catch {}
   }
 
-  function makeBrief() {
+  /**
+   * Follows a harness change (Settings, or a failover): that harness's own saved conversation
+   * resumes when it has one, so claude → codex → claude really is back where it left off.
+   */
+  function syncHarness({ announce = true } = {}) {
+    if (state.harness === agent.harness) return;
+    acp.current?.close();
+    acp.current = null;
+    const sessions = { ...(state.sessions ?? {}) };
+    const session = sessions[agent.harness] ?? null;
+    state = { ...state, harness: agent.harness, session, sessions, root }; // seen and the rest stay
+    if (announce) say(`${DIM}${who} now runs on ${agent.harness}: ${session ? "its own conversation resumes" : "a new conversation"}.${OFF}`);
+    save();
+  }
+
+  /** The role brief, written afresh: a new conversation on this harness gets it as its prompt. */
+  function writeBrief() {
     const child = task ? (load(T.loadTask, task)?.children ?? []).find((c) => c.state === "open" && c.name === who) : null;
     brief = team.brief(agent, { mode, root, parent, task, plan, step, name: name ?? null, headless: true, worktree: child ? { path: child.path, branch: child.branch } : null });
     writeText(briefFile, brief);
+  }
+
+  function makeBrief() {
+    writeBrief();
     state.seen = seenNow();
     save();
   }
 
-  async function runTurn(text) {
-    ({ agent, known } = current());
-    agent = team.withAllowlist(agent, skillEntry());
-    if (state.harness !== agent.harness) {
-      acp.current?.close();
-      acp.current = null;
-      state = { harness: agent.harness, session: null, root };
-      say(`${DIM}${who} now runs on ${agent.harness}: a new conversation.${OFF}`);
+  /** A clean stop when no fallback is left: it says what ran out and when it is back. */
+  function held(r, failure, skipped = []) {
+    const when = failure.resetAt ? ` It is back at ${String(failure.resetAt).replace("T", " ").replace(/\.\d+Z$/, " UTC")}.` : "";
+    const why = skipped.length
+      ? ` No fallback is left: ${skipped.map((s) => `${s.harness}${s.model ? ` ${s.model}` : ""} (${s.reason})`).join("; ")}.`
+      : " No fallback is configured.";
+    const note = `**Held — ${failure.reason}.**${when}${why} The work in the worktree is untouched; the next turn after the reset continues from it.`;
+    if (task) {
+      try {
+        T.post(root, task, { kind: "note", text: `Held: ${failure.reason}.${when}`, from: who });
+      } catch {}
     }
-    if (!headless(agent.harness)) {
-      say(`${RED}${agent.harness} has no headless mode here. Type /cli to open it.${OFF}`);
-      return finish({ text: "", error: `${agent.harness} has no headless mode here: open ${who}'s terminal and type /cli.` });
+    return { ...r, error: null, cancelled: false, text: note };
+  }
+
+  /**
+   * Moves this turn to the fallback: another model on the live session (the conversation
+   * continues), or another harness with a handoff from the dirty worktree. Returns the prompt
+   * the next attempt gets.
+   */
+  function applyFallback(plan, { prompt, lastReply, reason, failure = null, notes = [], visited, silent = false }) {
+    const target = plan.target;
+    const from = { harness: agent.harness, model: agent.model || "default" };
+    const until = failure?.resetAt ?? new Date(Date.now() + 30 * 60_000).toISOString();
+    visited.add(cooldownKey(target.harness, target.model));
+    if (plan.sameHarness) {
+      agent = { ...agent, model: target.model, effort: target.effort || agent.effort };
+      say(`${DIM}Failover: ${from.harness} ${from.model} → ${target.model || "default"} (${reason}); the conversation continues.${OFF}`);
+      recordFailover({ agent: who, from: `${from.harness}:${from.model}`, to: `${target.harness}:${target.model || "default"}`, until, reason });
+      return prompt;
     }
-    const carried = await compactIfPending();
-    if (!state.session && !acp.current) makeBrief();
-    const update = state.seen ? briefUpdate(state.seen) : "";
+    // It is already this agent's live fallback: take its own conversation back, say nothing again.
+    if (silent) {
+      agent = { ...agent, harness: target.harness, model: target.model, effort: target.effort || agent.effort };
+      agent = team.withAllowlist({ ...agent, installed: undefined }, skillEntry());
+      syncHarness({ announce: false });
+      return prompt;
+    }
+    const handoff = dirtyTreeHandoff({ cwd, root, task, step, from: `${from.harness}:${from.model}`, to: `${target.harness}:${target.model || "default"}`, reason, lastReply, input: prompt });
+    notes.push(`_Failover: ${from.harness} → ${target.harness} (${reason}). ${target.harness} continues from the same worktree._`);
+    say(`${DIM}Failover: ${from.harness} → ${target.harness} (${reason}); continuing from this worktree.${OFF}`);
+    for (const s of plan.skipped ?? []) say(`${DIM}  · passed over ${s.harness}${s.model ? ` ${s.model}` : ""}: ${s.reason}${OFF}`);
+    agent = { ...agent, harness: target.harness, model: target.model, effort: target.effort || "" };
+    // Skills and MCP allowlists are per harness: this one's own installed names are what the
+    // launch must deny, never the harness it is taking over from.
+    agent = team.withAllowlist({ ...agent, installed: undefined }, skillEntry());
+    syncHarness({ announce: false });
+    if (!state.session) writeBrief();
+    recordFailover({ agent: who, from: `${from.harness}:${from.model}`, to: `${target.harness}:${target.model || "default"}`, until, reason });
+    if (task) {
+      try {
+        T.post(root, task, { kind: "note", text: `Failover ${from.harness} → ${target.harness}: ${reason}`, from: who });
+      } catch {}
+    }
+    return handoff;
+  }
+
+  /** One attempt on whichever harness and model the agent is on now: its answer and numbers. */
+  async function attempt(promptText, session = null) {
     const { access, allow } = accessOf();
-    status("working", text.split("\n")[0]);
+    status("working", promptText.split("\n")[0]);
     let shown = "";
     let usage = {};
     const started = Date.now();
@@ -477,21 +548,80 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
       }
     };
     try {
-      running = turn({ agent, known, state, key, brief, briefFile, prompt: [carried, update, text].filter(Boolean).join("\n\n"), cwd, on, access, allow, acp });
+      running = turn({ agent, known, state: session ? { ...state, session } : state, key, brief, briefFile, prompt: promptText, cwd, on, access, allow, acp });
     } catch (e) {
-      return finish({ text: "", error: e.message }, text);
+      return { r: { text: "", error: e.message, exitCode: null, meta: null }, usage, started, shown };
     }
     const r = await running.done;
     running = null;
-    if (r.session && (r.text || !r.error)) state.session = r.session;
-    state.seen = seenNow(); // the next turn's update starts from here
-    save();
-    recordUsage(usage, Date.now() - started);
-    if (r.text && r.text !== shown) say(`\n${stripUnsafeEscapes(r.text.trim())}\n`);
-    return finish(r, text);
+    return { r, usage, started, shown };
   }
 
-  function finish(r, input = "") {
+  async function runTurn(text) {
+    ({ agent, known } = current());
+    agent = team.withAllowlist(agent, skillEntry());
+    if (!headless(agent.harness)) {
+      say(`${RED}${agent.harness} has no headless mode here. Type /cli to open it.${OFF}`);
+      return finish({ text: "", error: `${agent.harness} has no headless mode here: open ${who}'s terminal and type /cli.` });
+    }
+    const carried = await compactIfPending();
+    // The brief on disk is refreshed for every turn that starts a conversation, but the cursor the
+    // updates are counted from only moves on a turn that ended well (below).
+    if (!state.session && !acp.current) writeBrief();
+    const update = state.seen ? briefUpdate(state.seen) : "";
+    let prompt = [carried, update, text].filter(Boolean).join("\n\n");
+    const notes = [];
+    const config = resilienceConfig();
+    const visited = new Set();
+    const maxHops = (Array.isArray(agent.fallbacks) ? agent.fallbacks.length : 0) + (config.fallbacks?.length ?? 0);
+    let hops = 0;
+    // A failed turn's session, kept only for a retry on the same CLI inside this turn: a session
+    // that never answered is never saved as the conversation's.
+    let retrySession = null;
+    const here = () => ({ harness: agent.harness, model: agent.model });
+
+    // A primary already cooling down starts on a healthy fallback instead of failing first. One
+    // this agent already runs on is continued quietly: no second handoff, banner, note or record.
+    if (isCooledDown(agent.harness, agent.model)) {
+      const plan = pickFallback({ agent, current: here(), config, known, cooldowns: readCooldowns(), visited });
+      if (plan) {
+        hops++;
+        const already = plan.target.harness === state.harness || Boolean(state.sessions?.[plan.target.harness]);
+        prompt = applyFallback(plan, { prompt, lastReply: "", reason: "its harness is cooling down", notes, visited, silent: already });
+      }
+    }
+    syncHarness({ announce: true }); // a harness changed in Settings applies to this turn (a no-op after a failover)
+
+    for (;;) {
+      const { r, usage, started, shown } = await attempt(prompt, retrySession);
+      const failure = r.cancelled || r.asked ? null : classifyFailure({ harness: agent.harness, error: r.error, text: r.text, exitCode: r.exitCode, meta: r.meta });
+      const exhausted = failure && (failure.kind === "quota" || (failure.kind === "rate_limit" && (failure.retryAfterMs ?? 0) >= 300_000));
+      // A held or failed turn leaves the saved conversation alone: it started nothing that can be resumed.
+      if (r.session && !exhausted && !r.error) {
+        state.sessions = { ...(state.sessions ?? {}), [agent.harness]: r.session };
+        state.session = r.session;
+      }
+      // Only a turn that ended well moves the brief's cursor: a failed turn (or a hold) loses
+      // nothing unread, so the next turn carries the same update again.
+      if (!r.error && !r.cancelled && !exhausted) state.seen = seenNow();
+      save();
+      recordUsage(usage, Date.now() - started);
+      if (r.text && r.text !== shown) say(`\n${stripUnsafeEscapes(r.text.trim())}\n`);
+      if (!exhausted) return finish(r, text, notes);
+
+      recordCooldown({ harness: agent.harness, model: agent.model, kind: failure.kind, reason: failure.reason, until: failure.resetAt });
+      const plan = hops >= maxHops ? null : pickFallback({ agent, current: here(), config, known, cooldowns: readCooldowns(), visited });
+      if (!plan) {
+        const skipped = hops >= maxHops ? [] : (fallbackPlan({ agent, current: here(), config, known, cooldowns: readCooldowns(), visited })?.skipped ?? []);
+        return finish(held(r, failure, skipped), text, notes);
+      }
+      hops++;
+      retrySession = plan.sameHarness ? r.session ?? retrySession : null;
+      prompt = applyFallback(plan, { prompt, lastReply: r.text, reason: failure.reason, failure, notes, visited });
+    }
+  }
+
+  function finish(r, input = "", notes = []) {
     if (address) writeJson(join(DATA, "activity", `${fileKey(address)}.json`), { line: null, at: now() });
     let reply = r.text?.trim() ?? "";
     if (r.cancelled) {
@@ -501,6 +631,8 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
       say(`${RED}${stripUnsafeEscapes(r.error)}${OFF}`);
       reply = `${reply ? `${reply}\n\n` : ""}**Couldn't finish:**\n\n\`\`\`\n${String(r.error).slice(-1500)}\n\`\`\``;
     }
+    // A failover says so once, before the answer it brought back.
+    if (notes.length) reply = [notes.join("\n\n"), reply].filter(Boolean).join("\n\n");
     // Every agent's answer reaches the chat, a child's too (it also reports to its parent); toChat
     // says when a turn leaves nothing there.
     const chat = toChat(input, reply, { asked: r.asked });
@@ -546,7 +678,7 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
     if (words === "/new") {
       acp.current?.close();
       acp.current = null;
-      state = { harness: agent.harness, session: null, root };
+      state = { harness: agent.harness, session: null, sessions: {}, root };
       save();
       say(`${DIM}A new conversation: the next message starts it.${OFF}`);
       return;
@@ -638,6 +770,8 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
 
   // Everything the harness runs knows it is an agent: bh then refuses the user's settings.
   process.env.BH_AGENT = who;
+  const spawnDepth = Number(depth);
+  if (depth !== null && depth !== undefined && Number.isFinite(spawnDepth)) process.env.BH_SPAWN_DEPTH = String(Math.max(0, Math.floor(spawnDepth)));
   if (parent) process.env.BH_PARENT = parent;
   if (task) process.env.BH_TASK = task;
   if (step) process.env.BH_STEP = String(step);

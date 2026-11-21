@@ -115,6 +115,12 @@ export function migrateArgs(a) {
 /** A list of names: trimmed, non-empty and each once. */
 const names = (list) => [...new Set((Array.isArray(list) ? list : []).map((x) => String(x ?? "").trim()).filter(Boolean))];
 
+/** An agent's own fallback chain: harness, model and effort, each trimmed; entries without a harness are dropped. */
+const fallbacks = (list) => (Array.isArray(list) ? list
+  .filter((f) => f && typeof f === "object")
+  .map((f) => ({ harness: String(f.harness ?? "").trim(), model: String(f.model ?? "").trim(), effort: String(f.effort ?? "").trim() }))
+  .filter((f) => f.harness) : []);
+
 const clean = (a, i, fallback) => migrateArgs({
   id: String(a.id ?? `a${i}`),
   role: String(a.role ?? "custom"),
@@ -126,6 +132,8 @@ const clean = (a, i, fallback) => migrateArgs({
   instructions: String(a.instructions ?? "").trim(),
   does: String(a.does ?? "").trim(),
   lead: Boolean(a.lead),
+  // The models and harnesses it fails over to when its own runs out (the first one first).
+  fallbacks: fallbacks(a.fallbacks),
   // The skills and MCP servers it may use; empty = whatever its harness has installed.
   skills: names(a.skills),
   mcp: names(a.mcp),

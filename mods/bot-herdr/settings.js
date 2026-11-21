@@ -26,6 +26,10 @@ import { PICKED, REFRESH, openPick, harnessMark } from "./pick.js";
 import { withQuiet } from "./live.js";
 import { arm, armed } from "./plandoc.js";
 import { SEARCH_OVER, filterTools, newestActive, pickedFor, supportedNames } from "./skillsview.js";
+import {
+  normalizeStatus, providerRows, addFallbackStep, removeFallbackStep, moveFallbackStep, parseBudgetNumber, harnessLabel,
+} from "./resilienceview.js";
+import { OPEN_RESILIENCE } from "./statusstrip.js";
 
 const GAP = 14; // between cards
 const MAX = 1140; // the page's widest
@@ -39,6 +43,7 @@ const CARD_H = 320;
 const SECTIONS = [
   { id: "agents", label: "Agents", icon: "users" },
   { id: "general", label: "General", icon: "page-settings" },
+  { id: "resilience", label: "Resilience", icon: "shield-check" },
   { id: "harnesses", label: "Harnesses", icon: "page-terminals" },
 ];
 const SECTION_KEY = "bot-herdr.settings-section";
@@ -101,6 +106,19 @@ const THRESHOLDS = [
 /** OpenRouter's classifier models (System One): the only provider the classifier uses. */
 const OPENROUTER_MODELS = [{ id: "~typesafe/jev-latest", label: "Jev" }];
 
+/** Presets for the Resilience tab's autonomy mode and guardrail budgets. */
+const AUTONOMY_OPTIONS = [["ask", "Ask"], ["guarded", "Guarded"], ["autonomous", "Autonomous"]];
+const AUTONOMY_HINTS = {
+  ask: "Pauses for approval before autonomous retries or fallbacks",
+  guarded: "Auto-retries and falls back within guardrail limits",
+  autonomous: "Runs end-to-end with git isolation and budget ceilings",
+};
+const SPEND_OPTIONS = [["5", "$5"], ["10", "$10"], ["25", "$25"], ["0", "Off"]];
+const RETRY_OPTIONS = [["2", "2"], ["3", "3"], ["5", "5"]];
+const SPAWN_OPTIONS = [["2", "2"], ["4", "4"], ["6", "6"]];
+const QA_OPTIONS = [["2", "2"], ["3", "3"], ["5", "5"]];
+const FALLBACK_HARNESSES = ["claude", "codex", "gemini", "opencode", "pi", "qwen"];
+
 /** How long the roster's "Saved" cue stays. */
 const SAVED_MS = 2000;
 
@@ -156,6 +174,16 @@ export class Settings {
     this.refreshedAt = shared(REFRESH)?.at ?? 0;
     this.harnessAddedAt = Number(shared(HARNESS_ADDED) ?? 0);
     this.configChangedAt = Number(shared(CONFIG_CHANGED) ?? 0);
+    this.openResilienceAt = Number(shared(OPEN_RESILIENCE)?.at ?? 0);
+    this.resilience = null;
+    this.resilienceLoading = false;
+    this.resilienceBusy = false;
+    this.resilienceUnavailable = false;
+    this.addingStep = false;
+    this.draftHarness = "";
+    this.draftEffort = "";
+    this.draftModelInput = InputState.new({ placeholder: "Model id (optional)" });
+    this.draftModelInput.on("submit", (_e, cx) => this.commitFallbackStep(cx));
     this.asking = {}; // harness → true while `bh models` runs for it
     this.waiting = {}; // harness → what to do with the answer (reopen its list)
     this.pickBounds = null; // where the open list's field sits, to reopen it after a refresh
@@ -200,6 +228,7 @@ export class Settings {
     this.loadKnown(cx);
     this.loadConfig(cx);
     this.loadAccess(cx);
+    this.loadResilience(cx);
     cx.timer.every(60000, (cx) => this.loadKnown(cx));
   }
 
@@ -280,6 +309,116 @@ export class Settings {
       else this.problem = "Couldn't save how agents run. Is node on your PATH?";
       cx.notify();
     });
+  }
+
+  loadResilience(cx) {
+    if (this.resilienceLoading) return;
+    this.resilienceLoading = true;
+    cx.spawn(async (cx) => {
+      try {
+        const got = await bhJson(["resilience", "status"]);
+        if (got) {
+          this.resilience = normalizeStatus(got);
+          this.resilienceUnavailable = false;
+        } else {
+          this.resilience ??= normalizeStatus(null);
+          this.resilienceUnavailable = true;
+        }
+      } finally {
+        this.resilienceLoading = false;
+        cx.notify();
+      }
+    });
+  }
+
+  saveResilience(nextConfig, cx) {
+    const cur = this.resilience ?? normalizeStatus(null);
+    this.resilience = { ...cur, config: nextConfig };
+    cx.notify();
+    cx.spawn(async (cx) => {
+      const got = await bhJson(["resilience", "save", "--data", enc(nextConfig)]);
+      if (got && got.ok !== false) {
+        const saved = normalizeStatus({ ...this.resilience, config: got.config ?? nextConfig });
+        this.resilience = { ...this.resilience, config: saved.config };
+        this.resilienceUnavailable = false;
+        this.problem = null;
+        this.markSaved(cx);
+      } else {
+        this.problem = got?.error ?? "Couldn't save resilience settings. Is node on your PATH?";
+      }
+      cx.notify();
+    });
+  }
+
+  updateResilience(patch, cx) {
+    const cur = (this.resilience ?? normalizeStatus(null)).config;
+    this.saveResilience({ ...cur, ...patch }, cx);
+  }
+
+  updateGuardrails(patch, cx) {
+    const cur = (this.resilience ?? normalizeStatus(null)).config;
+    this.saveResilience({ ...cur, guardrails: { ...cur.guardrails, ...patch } }, cx);
+  }
+
+  resetResilience(key, cx) {
+    if (this.resilienceBusy) return;
+    this.resilienceBusy = true;
+    cx.notify();
+    cx.spawn(async (cx) => {
+      try {
+        const r = await bh(key ? ["resilience", "reset", key] : ["resilience", "reset"]);
+        if (r.code === 0) {
+          this.problem = null;
+          this.markSaved(cx);
+        } else {
+          this.problem = `Couldn't reset cooldowns: ${(r.stderr || r.stdout || "command failed").trim().split("\n")[0]}`;
+        }
+      } finally {
+        this.resilienceBusy = false;
+        this.loadResilience(cx);
+        cx.notify();
+      }
+    });
+  }
+
+  fallbackHarnesses() {
+    const installed = this.known.filter((k) => k.installed).map((k) => k.key);
+    return installed.length ? installed : FALLBACK_HARNESSES;
+  }
+
+  toggleAddStep(cx) {
+    this.addingStep = !this.addingStep;
+    if (this.addingStep) {
+      const choices = this.fallbackHarnesses();
+      this.draftHarness = choices[0] ?? "claude";
+      this.draftEffort = "";
+      this.draftModelInput.set_value("");
+    }
+    cx.notify();
+  }
+
+  commitFallbackStep(cx) {
+    if (!this.draftHarness) return;
+    const cur = (this.resilience ?? normalizeStatus(null)).config;
+    const next = addFallbackStep(cur.fallbacks, {
+      harness: this.draftHarness,
+      model: this.draftModelInput.value(),
+      effort: this.draftEffort,
+    });
+    this.addingStep = false;
+    this.draftEffort = "";
+    this.draftModelInput.set_value("");
+    this.updateResilience({ fallbacks: next }, cx);
+  }
+
+  moveFallback(index, delta, cx) {
+    const cur = (this.resilience ?? normalizeStatus(null)).config;
+    this.updateResilience({ fallbacks: moveFallbackStep(cur.fallbacks, index, delta) }, cx);
+  }
+
+  removeFallback(index, cx) {
+    const cur = (this.resilience ?? normalizeStatus(null)).config;
+    this.updateResilience({ fallbacks: removeFallbackStep(cur.fallbacks, index) }, cx);
   }
 
   saveKey(cx) {
@@ -517,6 +656,13 @@ export class Settings {
       this.configChangedAt = configChanged;
       cx.timer.after(1, (cx) => this.loadConfig(cx));
     }
+    const openResilience = Number(shared(OPEN_RESILIENCE)?.at ?? 0);
+    if (openResilience > this.openResilienceAt) {
+      this.openResilienceAt = openResilience;
+      this.section = "resilience";
+      remember("resilience");
+      cx.timer.after(1, (cx) => this.loadResilience(cx));
+    }
     // The roster changed from outside (the composer's model chip or MoreSheet): sync and persist.
     // shared() deserializes a fresh copy each call, so compare by content instead of reference.
     const rosterNow = JSON.stringify(shared(ROSTER_KEY) ?? null);
@@ -573,6 +719,7 @@ export class Settings {
                 onPick: (id, cx) => {
                   this.section = id;
                   remember(id);
+                  if (id === "resilience") this.loadResilience(cx);
                   cx.notify();
                 },
               }))
@@ -593,6 +740,7 @@ export class Settings {
               .when(section === "general", (el) => el.child(v_flex().w(Math.min(640, content)).gap(GAP)
                 .child(this.accessCard(c))
                 .child(this.classifierCard(c))))
+              .when(section === "resilience", (el) => el.child(this.resilienceSection(c, content)))
               .when(section === "harnesses", (el) => el.child(this.harnesses(c))),
           ),
       );
@@ -948,14 +1096,260 @@ export class Settings {
     });
   }
 
+  /** The Resilience tab: provider health & cooldowns, ordered fallback chain, and guardrail budgets. */
+  resilienceSection(c, content) {
+    if (!this.resilience && this.resilienceLoading) {
+      return stateView(c, { id: "bh-res-loading", title: "Loading resilience…", loading: true });
+    }
+    const r = this.resilience ?? normalizeStatus(null);
+    return v_flex()
+      .w(Math.min(720, content))
+      .gap(GAP)
+      .when(this.resilienceUnavailable, (el) => el.child(
+        div().text_size(TYPE.xs).text_color(c.muted).child("Live resilience status unavailable; showing defaults."),
+      ))
+      .child(this.providerHealthCard(c, r))
+      .child(this.fallbackChainCard(c, r))
+      .child(this.guardrailsCard(c, r));
+  }
+
+  providerHealthCard(c, r) {
+    const rows = providerRows(this.known, r.cooldowns, r.activeFailovers);
+    const controls = h_flex()
+      .gap(SPACE[2])
+      .items_center()
+      .child(actionButton(c, "bh-res-refresh", null, (_e, cx) => this.loadResilience(cx), {
+        icon: "refresh-cw",
+        tone: "quiet",
+        tooltip: "Refresh status",
+        a11y: "Refresh provider health",
+      }))
+      .child(actionButton(c, "bh-res-reset-all", "Reset all", (_e, cx) => this.resetResilience(null, cx), {
+        icon: "refresh-cw",
+        tone: "secondary",
+        disabled: this.resilienceBusy,
+        tooltip: "Clear all provider cooldowns",
+      }));
+    return this.group(c, {
+      id: "bh-resilience-health",
+      icon: "shield-check",
+      title: "Provider health & cooldowns",
+      right: controls,
+      rows: rows.length
+        ? rows.map((row) => this.providerHealthRow(c, row))
+        : [div().px(PAD).py(SPACE[3]).text_size(TYPE.sm).text_color(c.muted).child("No installed harnesses detected.")],
+    });
+  }
+
+  providerHealthRow(c, row) {
+    const entry = this.known.find((k) => k.key === row.key) ?? { key: row.key, name: row.label };
+    const badge = row.status === "cooldown"
+      ? pill(c, `Cooldown ${row.remainingText}`, c.warning)
+      : row.status === "active_fallback"
+        ? pill(c, "Active fallback", c.info, { pulse: true })
+        : pill(c, "Healthy", c.success);
+    return h_flex()
+      .id(`bh-res-prov-${row.key}`)
+      .min_h(CONTROL + SPACE[3])
+      .px(PAD)
+      .py(SPACE[3])
+      .gap(SPACE[3])
+      .items_center()
+      .child(harnessMark(c, entry, GLYPH.lg))
+      .child(
+        v_flex()
+          .flex_1()
+          .min_w(0)
+          .gap(SPACE[1])
+          .child(div().truncate().text_size(TYPE.md).font_medium().text_color(c.ink).child(row.label))
+          .child(div().truncate().text_size(TYPE.xs).text_color(c.faint).child(row.detail)),
+      )
+      .child(badge)
+      .when(row.status === "cooldown", (el) => el.child(
+        actionButton(c, `bh-res-retry-${row.key}`, "Retry now", (_e, cx) => this.resetResilience(row.cooldownKey ?? row.key, cx), {
+          icon: "refresh-cw",
+          tone: "secondary",
+          disabled: this.resilienceBusy,
+          tooltip: `Clear cooldown for ${row.label}`,
+        }),
+      ));
+  }
+
+  fallbackChainCard(c, r) {
+    const chain = r.config.fallbacks;
+    const toggleBtn = actionButton(c, "bh-fb-add-toggle", this.addingStep ? "Cancel" : "Add step", (_e, cx) => this.toggleAddStep(cx), {
+      icon: this.addingStep ? "x" : "plus",
+      tone: this.addingStep ? "quiet" : "secondary",
+    });
+    const rows = chain.length
+      ? chain.map((step, i) => this.fallbackStepRow(c, step, i, chain.length))
+      : [div().px(PAD).py(SPACE[3]).text_size(TYPE.sm).text_color(c.muted).child("No fallback steps yet. Add a model or harness to continue automatically if quota runs out.")];
+    if (this.addingStep) rows.push(this.addFallbackRow(c));
+    return this.group(c, {
+      id: "bh-resilience-fallbacks",
+      icon: "zap",
+      title: "Fallback chain",
+      right: toggleBtn,
+      rows,
+    });
+  }
+
+  fallbackStepRow(c, step, i, total) {
+    const entry = this.known.find((k) => k.key === step.harness) ?? { key: step.harness, name: harnessLabel(step.harness, this.known) };
+    const title = `${i + 1}. ${harnessLabel(step.harness, this.known)}${step.model ? ` · ${step.model}` : " · default model"}${step.effort ? ` (${step.effort})` : ""}`;
+    return h_flex()
+      .id(`bh-fb-row-${i}`)
+      .min_h(CONTROL + SPACE[3])
+      .px(PAD)
+      .py(SPACE[2])
+      .gap(SPACE[3])
+      .items_center()
+      .child(harnessMark(c, entry, GLYPH.md))
+      .child(div().flex_1().min_w(0).truncate().text_size(TYPE.md).text_color(c.ink).child(title))
+      .child(
+        h_flex()
+          .flex_none()
+          .gap(SPACE[1])
+          .items_center()
+          .child(actionButton(c, `bh-fb-up-${i}`, "↑", (_e, cx) => this.moveFallback(i, -1, cx), {
+            tone: "quiet",
+            disabled: i === 0,
+            tooltip: `Move step ${i + 1} up`,
+            a11y: `Move fallback step ${i + 1} up`,
+          }))
+          .child(actionButton(c, `bh-fb-down-${i}`, "↓", (_e, cx) => this.moveFallback(i, 1, cx), {
+            tone: "quiet",
+            disabled: i === total - 1,
+            tooltip: `Move step ${i + 1} down`,
+            a11y: `Move fallback step ${i + 1} down`,
+          }))
+          .child(actionButton(c, `bh-fb-rm-${i}`, "✕", (_e, cx) => this.removeFallback(i, cx), {
+            tone: "danger",
+            tooltip: `Remove step ${i + 1}`,
+            a11y: `Remove fallback step ${i + 1}`,
+          })),
+      );
+  }
+
+  addFallbackRow(c) {
+    const harnesses = this.fallbackHarnesses();
+    const chosen = this.draftHarness || harnesses[0] || "claude";
+    const efforts = effortsOf(chosen, this.draftModelInput.value().trim());
+    const effortStops = ["", ...efforts];
+    return v_flex()
+      .id("bh-fb-draft")
+      .mx(PAD)
+      .my(SPACE[2])
+      .p(SPACE[4])
+      .gap(SPACE[3])
+      .rounded(SIZE.control)
+      .bg(c.ground)
+      .border_1()
+      .border_color(c.edge)
+      .child(labelRow(c, "Harness"))
+      .child(h_flex().flex_wrap().gap(SPACE[2]).children(harnesses.map((key) =>
+        chipButton(c, `bh-fb-h-${key}`, harnessLabel(key, this.known), key === chosen, (_e, cx) => {
+          this.draftHarness = key;
+          if (!effortsOf(key).includes(this.draftEffort)) this.draftEffort = "";
+          cx.notify();
+        }))))
+      .child(labelRow(c, "Model (optional)"))
+      .child(textField(c, this.draftModelInput))
+      .when(efforts.length > 0, (el) => el
+        .child(labelRow(c, "Effort (optional)"))
+        .child(h_flex().flex_wrap().gap(SPACE[2]).children(effortStops.map((eff) =>
+          chipButton(c, `bh-fb-e-${eff || "default"}`, eff ? eff.charAt(0).toUpperCase() + eff.slice(1) : "Default", eff === this.draftEffort, (_e, cx) => {
+            this.draftEffort = eff;
+            cx.notify();
+          })))))
+      .child(h_flex().justify_end().gap(SPACE[2])
+        .child(actionButton(c, "bh-fb-cancel", "Cancel", (_e, cx) => this.toggleAddStep(cx), { tone: "quiet" }))
+        .child(actionButton(c, "bh-fb-commit", "Add to chain", (_e, cx) => this.commitFallbackStep(cx), { icon: "plus", tone: "primary" })));
+  }
+
+  guardrailsCard(c, r) {
+    const cfg = r.config;
+    const g = cfg.guardrails;
+    const presetHint = (options, val, fmt = (v) => String(v)) =>
+      options.some(([k]) => Number(k) === val) ? null : `Current: ${fmt(val)}`;
+    return this.group(c, {
+      id: "bh-resilience-guardrails",
+      icon: "shield-check",
+      title: "Guardrails & Autonomous budgets",
+      rows: [
+        this.settingRow(
+          c,
+          "Autonomy mode",
+          this.choice(c, "bh-res-autonomy", AUTONOMY_OPTIONS, cfg.autonomy, (v, cx) => this.updateResilience({ autonomy: v }, cx)),
+          AUTONOMY_HINTS[cfg.autonomy] ?? null,
+        ),
+        this.settingRow(
+          c,
+          "Require bh check before step done",
+          this.toggle(c, "bh-res-check", g.requireCheckBeforeDone, (_e, cx) => this.updateGuardrails({ requireCheckBeforeDone: !g.requireCheckBeforeDone }, cx), "Require bh check before step done"),
+        ),
+        this.settingRow(
+          c,
+          "Require git isolation in Autonomous mode",
+          this.toggle(c, "bh-res-git-iso", g.requireGitIsolationInAutonomous, (_e, cx) => this.updateGuardrails({ requireGitIsolationInAutonomous: !g.requireGitIsolationInAutonomous }, cx), "Require git isolation in Autonomous mode"),
+        ),
+        this.settingRow(
+          c,
+          "Task spend cap ($)",
+          this.choice(c, "bh-res-spend", SPEND_OPTIONS, String(g.maxTaskSpendUsd), (v, cx) => this.updateGuardrails({ maxTaskSpendUsd: parseBudgetNumber(v, 10, { min: 0, max: 10000 }) }, cx)),
+          presetHint(SPEND_OPTIONS, g.maxTaskSpendUsd, (v) => (v > 0 ? `$${v}` : "Off")),
+        ),
+        this.settingRow(
+          c,
+          "Max retries on identical failure",
+          this.choice(c, "bh-res-retries", RETRY_OPTIONS, String(g.maxStepRetries), (v, cx) => this.updateGuardrails({ maxStepRetries: parseBudgetNumber(v, 3, { min: 0, max: 50 }) }, cx)),
+          presetHint(RETRY_OPTIONS, g.maxStepRetries),
+        ),
+        this.settingRow(
+          c,
+          "Max concurrent spawns",
+          this.choice(c, "bh-res-spawns", SPAWN_OPTIONS, String(g.maxConcurrentSpawns), (v, cx) => this.updateGuardrails({ maxConcurrentSpawns: parseBudgetNumber(v, 4, { min: 1, max: 32 }) }, cx)),
+          presetHint(SPAWN_OPTIONS, g.maxConcurrentSpawns),
+        ),
+        this.settingRow(
+          c,
+          "Max QA rounds",
+          this.choice(c, "bh-res-qa", QA_OPTIONS, String(g.maxQaRounds), (v, cx) => this.updateGuardrails({ maxQaRounds: parseBudgetNumber(v, 3, { min: 0, max: 50 }) }, cx)),
+          presetHint(QA_OPTIONS, g.maxQaRounds),
+        ),
+        this.invariantsRow(c, g.protectedPaths),
+      ],
+    });
+  }
+
+  invariantsRow(c, protectedPaths) {
+    const paths = (Array.isArray(protectedPaths) ? protectedPaths : []).join(", ");
+    const summary = `personOnly, access checks, built-in bh check scripts${paths ? ` · ${paths}` : ""}`;
+    return v_flex()
+      .id("bh-res-invariants")
+      .px(PAD)
+      .py(SPACE[3])
+      .gap(SPACE[1])
+      .child(
+        h_flex()
+          .gap(SPACE[2])
+          .items_center()
+          .child(div().text_size(TYPE.md).font_medium().text_color(c.ink).child("Protected invariants"))
+          .child(div().px(SPACE[2]).rounded_full().bg(c.well).text_size(TYPE.xs).text_color(c.muted).child("Read-only")),
+      )
+      .child(div().text_size(TYPE.xs).text_color(c.faint).child(summary));
+  }
+
   /** A switch: a pill track, the knob centred in it, sliding to the side that's set. */
-  toggle(c, id, on, onClick) {
+  toggle(c, id, on, onClick, label = null) {
     const W = 36;
     const H = 20;
     const KNOB_D = 14;
     const inset = (H - 2 - KNOB_D) / 2; // inside the 1px border
     return focusable(
       div()
+        .role("switch")
+        .when(Boolean(label), (el) => el.accessibility_label(label))
         .relative()
         .flex_none()
         .w(W)

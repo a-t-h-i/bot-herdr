@@ -19,6 +19,7 @@ import * as team from "./lib/team.mjs";
 import * as MX from "./lib/metrics.mjs";
 import { listHarnesses, listTools } from "./lib/tools.mjs";
 import * as W from "./lib/workspace.mjs";
+import * as RZ from "./lib/resilience.mjs";
 import * as C from "./classifier/index.mjs";
 import { fileKind } from "./classifier/qa-risk.mjs";
 import { tail, testCommand, testCounts, listProjectFiles } from "./scripts/lib/common.mjs";
@@ -62,6 +63,12 @@ Scripts
   bh scripts                      bh scripts show <name>        bh scripts run <name> [args…]
   bh scripts pick "<step>"        bh scripts save <file> [--name snake_case]
   bh check [--base <ref>]         lint, typecheck and tests for what changed
+
+Resilience
+  bh resilience status [--task T] [--json]   config, cooldowns, failovers and the task's breaker
+  bh resilience save --data <json>           the fallback chain and guardrails (the user's to set)
+  bh resilience reset [<harness>[:<model>]]  clear a cooldown, a harness's cooldowns, or all of them
+  bh resilience pause [--task <id>]          pause a task where it stands
 
 The user
   bh ask --file questions.md [--title T] [--plan <id>]      (or: bh ask "<question>" --option "A — meaning" --option "B")
@@ -159,6 +166,64 @@ function isolate(root, task, flags) {
 
 function git(root, args) {
   return sh("git", args, { cwd: root });
+}
+
+/** The task a resilience command means: --task, else the project's current one, else null. */
+function guardTask(root, flags) {
+  const id = flags.task ? T.loadTask(root, flags.task).id : T.currentTask(root)?.id ?? null;
+  return id ? T.loadTask(root, id) : null;
+}
+
+/** `bh resilience status`: the config, what is cooling down, and where the current task stands. */
+function resilienceStatus(root, flags) {
+  const nowMs = Date.now();
+  RZ.pruneCooldowns(nowMs);
+  const config = RZ.resilienceConfig();
+  const task = guardTask(root, flags);
+  let state = null;
+  if (task) {
+    const budget = RZ.checkTaskBudget(root, task.id, config);
+    state = { id: task.id, status: task.status, spendUsd: budget.spendUsd, maxTaskSpendUsd: config.guardrails.maxTaskSpendUsd, turns: budget.turns, breaker: budget.tripped ? budget.reason : null };
+  }
+  return { config, cooldowns: RZ.readCooldowns(nowMs), activeFailovers: RZ.readFailovers(nowMs), task: state };
+}
+
+/**
+ * The engine's own limits on spawning: how many children may be open, how deep spawns may nest,
+ * the task's budget, and git isolation in autonomous mode. Returns { ok, reason, depth }.
+ */
+function guardSpawn(root, taskId, config = RZ.resilienceConfig()) {
+  // A non-numeric or negative depth is no depth: it must never turn into NaN and slip past the limit.
+  const carried = Number(process.env.BH_SPAWN_DEPTH);
+  const depth = (Number.isFinite(carried) && carried >= 0 ? Math.floor(carried) : 0) + 1;
+  const task = taskId ? T.loadTask(root, taskId) : null;
+  // `bh resilience pause` (and the status strip's Pause) stops the work where it stands.
+  if (task?.status === "paused") return { ok: false, reason: `${task.id} is paused: resume it with bh task status ${task.id} active before starting another agent.` };
+  const limits = RZ.checkSpawnLimits(root, task, config, { depth });
+  if (!limits.ok) return { ok: false, reason: limits.reason };
+  if (task) {
+    const budget = RZ.checkTaskBudget(root, task.id, config);
+    if (!budget.ok) {
+      T.updateTask(root, task.id, (t) => T.setStatus(t, "paused"));
+      return { ok: false, reason: `${task.id} is paused: ${budget.reason}. Raise the ceiling in Settings → Resilience (or fix the check), then bh task status ${task.id} active.` };
+    }
+  }
+  const isolation = RZ.checkAutonomousIsolation(root, config, task);
+  if (!isolation.ok) return { ok: false, reason: isolation.reason };
+  return { ok: true, depth };
+}
+
+/**
+ * Settings → Resilience → require a green check before a step is done: the task's latest
+ * `bh check` failed, so the step is refused. `--force` is for a change that cannot be checked here;
+ * a task where no check ever ran is never blocked.
+ */
+function checkBeforeDone(root, task, n, flags) {
+  const config = RZ.resilienceConfig();
+  if (!config.guardrails.requireCheckBeforeDone || flags.force) return "";
+  const last = T.checks(root, task.id).at(-1);
+  if (!last || Number(last.exit ?? 0) === 0) return "";
+  return `Step ${n} not marked done: the latest bh check failed (exit ${last.exit}). Fix it and run bh check, or pass --force when this change cannot be checked here.`;
 }
 
 /** A check script's `--json` line, its exit code and the text a person reads. */
@@ -403,6 +468,10 @@ async function main(argv) {
       if (sub === "step") {
         const [n, to] = rest2;
         need(to, "bh task step <id> <n> start|done|block|skip");
+        if (to === "done") {
+          const refused = checkBeforeDone(root, T.loadTask(root, id), n, flags);
+          if (refused) throw new Error(refused);
+        }
         const step = T.updateTask(root, id, (t) => T.moveStep(t, n, to, { agent: stepAgent(flags, t, n, to), note: flags.note }));
         return out(flags, step, (s) => `Step ${s.n} is ${s.status}: ${s.title}`);
       }
@@ -462,7 +531,14 @@ async function main(argv) {
       const task = T.loadTask(root, id);
       const head = git(W.taskCwd(task, root), ["rev-parse", "HEAD"]).out.trim() || null;
       const gate = T.recordGate(root, id, { verdict, round: flags.round ? Number(flags.round) : null, file, summary, from: flags.from ?? actor(), head });
-      return out(flags, gate, (g) => `Gate round ${g.round}: ${g.verdict} — ${g.summary}`);
+      // The QA rounds are a guardrail: past the limit, a person decides how to go on.
+      const maxQaRounds = RZ.resilienceConfig().guardrails.maxQaRounds;
+      let escalated = null;
+      if (maxQaRounds > 0 && gate.round > maxQaRounds) {
+        escalated = `QA round ${gate.round} is past the ${maxQaRounds} rounds the guardrails allow: this needs the user's decision.`;
+        T.post(root, id, { kind: "note", text: escalated, from: flags.from ?? actor(), to: null });
+      }
+      return out(flags, { ...gate, escalated }, (g) => `Gate round ${g.round}: ${g.verdict} — ${g.summary}${escalated ? `\n${escalated}` : ""}`);
     }
 
     case "report": {
@@ -753,6 +829,10 @@ async function main(argv) {
       const text = need(bodyText(flags, args), 'bh spawn <agent> --name <short> "<brief>"');
       const mode = flags.panel ? "panel" : flags.review ? "review" : "child";
       const plan = flags.panel ?? flags.plan ?? null;
+      // The engine's own limits, checked before any work is started (and before a worktree is made).
+      const guard = guardSpawn(root, task);
+      if (!guard.ok) throw new Error(guard.reason);
+      process.env.BH_SPAWN_DEPTH = String(guard.depth); // every child it starts sees one level deeper
       const id = team.knowledgeName(a);
       // `--skill` is for a skill the agent reported missing (a blocker): it joins the picks.
       const added = Array.isArray(flags.skill) ? flags.skill : typeof flags.skill === "string" ? [flags.skill] : [];
@@ -814,7 +894,7 @@ async function main(argv) {
       if (team.runsHeadless(agent)) {
         // The agent terminal: it runs the harness headless, writes its own brief, and reports
         // its status, so hc wait sees each turn end.
-        const argv = team.agentArgv(agent, { mode, name, parent, task, step: flags.step ?? null, plan, effort, model: flags.model ?? null });
+        const argv = team.agentArgv(agent, { mode, name, parent, task, step: flags.step ?? null, plan, effort, model: flags.model ?? null, depth: guard.depth });
         r = team.hc(["run", "--bg", "--name", name, "--cwd", cwd, "--", ...argv, "--", first]);
       } else {
         // The template carries the generic brief (role, team, knowledge); this run's specifics go
@@ -844,23 +924,58 @@ async function main(argv) {
       if (!child) throw new Error(`Task ${id} has no child ${name}.`);
       const cwd = W.taskCwd(task, root);
       if (flags.drop) {
+        // The work is discarded, but never lost: its branch tip keeps a rollback ref.
+        const kept = W.saveRollbackRef({ task: id, child, cwd });
         const gone = W.removeChildWorktree({ child, cwd });
         T.updateTask(root, id, (t) => {
           const c = (t.children ?? []).find((x) => x.name === name);
-          if (c) Object.assign(c, { state: "dropped", droppedAt: now() });
+          if (c) Object.assign(c, { state: "dropped", droppedAt: now(), rollback: kept.ref ?? null });
         });
-        return out(flags, { ...child, state: "dropped", error: gone || null }, (x) => (gone ? `${x.error}: ${name} is dropped.` : `Dropped ${name}: its worktree and branch are gone.`));
+        return out(flags, { ...child, state: "dropped", rollback: kept.ref ?? null, error: gone || null }, (x) => (gone ? `${x.error}: ${name} is dropped${x.rollback ? ` (its tip is kept at ${x.rollback})` : ""}.` : `Dropped ${name}: its worktree and branch are gone${x.rollback ? `; its tip is kept at ${x.rollback}` : ""}.`));
       }
       const merged = W.mergeChild({ child, cwd });
       if (merged.refused) throw new Error(`Not merged: ${merged.refused}. The task's tree is unchanged.`);
       if (merged.message) return out(flags, { ...child, message: merged.message }, () => merged.message);
+      // Keep the child's tip before its branch goes, so a bad merge can always be undone.
+      const kept = W.saveRollbackRef({ task: id, child, cwd });
       T.updateTask(root, id, (t) => {
         const c = (t.children ?? []).find((x) => x.name === name);
-        if (c) Object.assign(c, { state: "merged", mergedAt: now(), stat: merged.stat });
+        if (c) Object.assign(c, { state: "merged", mergedAt: now(), stat: merged.stat, rollback: kept.ref ?? null });
       });
       T.post(root, id, { kind: "done", text: `Merged ${name}: ${merged.stat.files} files, +${merged.stat.added} −${merged.stat.removed}`, from: flags.from ?? actor(), step: child.step ?? null });
       const gone = W.removeChildWorktree({ child, cwd });
-      return out(flags, { ...child, state: "merged", stat: merged.stat, error: gone || null }, (x) => `Merged ${name}: ${merged.stat.files} files, +${merged.stat.added} −${merged.stat.removed}. ${gone ? gone : "Its worktree and branch are gone; the changes are staged in the task's tree."}`);
+      const keptLine = kept.ref ? ` Its tip is kept at ${kept.ref} for a rollback.` : "";
+      return out(flags, { ...child, state: "merged", stat: merged.stat, rollback: kept.ref ?? null, error: gone || null }, (x) => `Merged ${name}: ${merged.stat.files} files, +${merged.stat.added} −${merged.stat.removed}. ${gone ? gone : "Its worktree and branch are gone; the changes are staged in the task's tree."}${keptLine}`);
+    }
+
+    case "resilience": {
+      if (!sub || sub === "status") {
+        const state = resilienceStatus(root, flags);
+        return out(flags, state, (s) => {
+          const lines = [`Resilience: ${s.config.autonomy}${s.config.fallbacks.length ? `; fallbacks ${s.config.fallbacks.map((f) => `${f.harness}${f.model ? ` ${f.model}` : ""}`).join(" → ")}` : "; no fallbacks set"}.`];
+          lines.push(s.cooldowns.length ? s.cooldowns.map((c) => `Cooling down: ${c.key} (${c.kind}${c.reason ? `, ${c.reason}` : ""}) until ${c.until} — ${Math.ceil(c.remainingMs / 60000)} min left`).join("\n") : "Nothing is cooling down.");
+          if (s.activeFailovers.length) lines.push(...s.activeFailovers.map((f) => `Failover: ${f.agent ?? "an agent"} ${f.from} → ${f.to} (${f.reason})`));
+          if (s.task) lines.push(`Task ${s.task.id} (${s.task.status}): $${s.task.spendUsd.toFixed(2)} of $${s.task.maxTaskSpendUsd}, ${s.task.turns} turns on the current step${s.task.breaker ? `; breaker: ${s.task.breaker}` : ""}.`);
+          return lines.join("\n");
+        });
+      }
+      if (sub === "save") {
+        personOnly("Resilience settings");
+        const patch = JSON.parse(need(bodyText(flags, []), "bh resilience save --data <json>"));
+        const config = RZ.saveResilienceConfig(patch);
+        return out(flags, { ok: true, config }, (x) => `Saved: ${x.config.autonomy} mode, ${x.config.fallbacks.length} fallback${x.config.fallbacks.length === 1 ? "" : "s"}.`);
+      }
+      if (sub === "reset") {
+        const { cleared, failovers } = RZ.clearCooldowns(args[0] ?? null);
+        return out(flags, { ok: true, cleared }, (x) => (x.cleared ? `Cleared ${x.cleared} cooldown${x.cleared === 1 ? "" : "s"}${failovers ? ` and ${failovers} failover${failovers === 1 ? "" : "s"}` : ""}.` : "Nothing was cooling down for that key."));
+      }
+      if (sub === "pause") {
+        const task = guardTask(root, flags);
+        need(task, "bh resilience pause [--task <id>]");
+        const saved = T.updateTask(root, task.id, (t) => T.setStatus(t, "paused"));
+        return out(flags, { ok: true, id: saved.id, status: saved.status }, (x) => `${x.id} is ${x.status}.`);
+      }
+      throw new UsageError("bh resilience [status|save|reset|pause]");
     }
 
     case "classify": {
@@ -994,8 +1109,8 @@ async function main(argv) {
 
     case "agent": {
       const { runAgent } = await import("./lib/agent.mjs");
-      const word = need(sub, 'bh agent <agent> [--mode lead|child|panel|review] [--name N] [--parent T] [--task T] [--step N] [--plan P] [--model M] [--effort E] [-- "<first message>"]');
-      return runAgent({ word, mode: flags.mode ?? "lead", name: flags.name ?? null, parent: flags.parent ?? null, task: flags.task ?? null, step: flags.step ?? null, plan: flags.plan ?? null, model: flags.model ?? null, effort: flags.effort ?? null, first: args.join(" ") });
+      const word = need(sub, 'bh agent <agent> [--mode lead|child|panel|review] [--name N] [--parent T] [--task T] [--step N] [--plan P] [--model M] [--effort E] [--depth N] [-- "<first message>"]');
+      return runAgent({ word, mode: flags.mode ?? "lead", name: flags.name ?? null, parent: flags.parent ?? null, task: flags.task ?? null, step: flags.step ?? null, plan: flags.plan ?? null, model: flags.model ?? null, effort: flags.effort ?? null, depth: flags.depth ?? null, first: args.join(" ") });
     }
 
     case "access": {

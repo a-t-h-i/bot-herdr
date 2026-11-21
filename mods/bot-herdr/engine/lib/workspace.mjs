@@ -314,6 +314,24 @@ export function removeChildWorktree({ child, cwd, git = runGit }) {
   }
 }
 
+const refSafe = (text) => String(text ?? "").replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^[-.]+|[-.]+$/g, "");
+
+/**
+ * Keeps a child's branch tip under `refs/bot-herdr/rollback/<task>-<name>` before its worktree and
+ * branch are removed: a merge that turns out bad is always recoverable, even with no remote.
+ * Returns { ref, sha }, or { error } when git refused (the removal still goes ahead).
+ */
+export function saveRollbackRef({ task, child, cwd, git = runGit }) {
+  try {
+    const sha = git(cwd, ["rev-parse", child.branch]);
+    const ref = `refs/bot-herdr/rollback/${refSafe(task)}-${refSafe(child.name)}`;
+    git(cwd, ["update-ref", ref, sha]);
+    return { ref, sha };
+  } catch (e) {
+    return { error: e.message };
+  }
+}
+
 /** `+1 −1` style numbers from `git diff --shortstat`. */
 function statOf(text) {
   const m = /(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?/.exec(String(text ?? ""));

@@ -447,7 +447,7 @@ function asksPerson(name, input = {}) {
 function oneShot(argv, prompt, cwd, handle, init = {}) {
   const child = launch(argv, { cwd, env: init.env });
   const ms = init.idleMs ?? TURN_IDLE_MS;
-  const turn = { text: "", error: null, session: init.session ?? null, cancelled: false, asked: false };
+  const turn = { text: "", error: null, session: init.session ?? null, cancelled: false, asked: false, exitCode: null, meta: null };
   const err = collectErr(child);
   const idle = watchdog(ms, () => {
     turn.error = idleStopped(ms); // not cancelled: the reply must say why it stopped
@@ -476,6 +476,8 @@ function ended(child, turn, argv, err, idle) {
   return new Promise((resolve) => {
     child.on("error", (e) => resolve({ ...turn, error: `couldn't start ${argv[0]}: ${e.message}` }));
     child.on("close", (code) => {
+      // The harness's own exit code: a classifier reads it, so a crash is not guessed from stderr.
+      turn.exitCode = typeof code === "number" ? code : null;
       if (turn.cancelled || turn.asked) return resolve(turn);
       if (code !== 0 && !turn.text && !turn.error) turn.error = err().split("\n").slice(-6).join("\n") || `${argv[0]} exited with ${code}`;
       resolve(turn);
@@ -533,6 +535,7 @@ export class Acp {
     this.usage = null; // the turn's numbers from a usage_update, merged with the prompt response's usage
     this.cost = null; // the session's running cost: usage_update is cumulative, so the turn takes the rise
     this.costAtStart = null; // the session's cost when this turn began
+    this.retryMeta = null; // OpenCode's `_meta["opencode/retry"]`: what it said about a rate-limit retry
     this.on = () => {};
   }
 
@@ -615,6 +618,10 @@ export class Acp {
     this.idle?.pet(); // anything from the agent means the turn is alive
     if (m.method === "session/update") {
       const u = m.params?.update ?? {};
+      // A retry notice (OpenCode's rate-limit retry) says the harness is throttled right now;
+      // `null` means the retry started, so there is nothing to report any more.
+      const retry = u._meta?.["opencode/retry"] ?? m.params?._meta?.["opencode/retry"];
+      if (retry !== undefined) this.retryMeta = retry;
       if (u.sessionUpdate === "usage_update") this.usageUpdate(u);
       if (u.sessionUpdate === "agent_message_chunk" && u.content?.type === "text") this.said(u.content.text);
       if (u.sessionUpdate === "tool_call") {
@@ -669,6 +676,10 @@ export class Acp {
     this.askCall = null;
     this.idleLost = null;
     this.idleStop = null;
+    this.retryMeta = null;
+    // A retry notice is a failed turn's evidence: a completed turn carries none, so its earlier
+    // notice is never classified later as a limit that ended it.
+    const out = (r) => ({ ...r, exitCode: null, meta: r.error && this.retryMeta ? { retry: this.retryMeta } : null });
     this.idle = watchdog(idleMs, () => {
       this.idleLost = idleStopped(idleMs);
       if (this.session) this.send({ method: "session/cancel", params: { sessionId: this.session } });
@@ -679,21 +690,24 @@ export class Acp {
         const first = !this.child;
         if (first) await this.start();
         await this.pickModel(); // every turn: a model changed in Settings reaches a live session too
-        if (this.idleLost) return { text: this.text, error: this.idleLost, session: this.session };
+        if (this.idleLost) return out({ text: this.text, error: this.idleLost, session: this.session });
         const stopped = new Promise((resolve) => {
           this.idleStop = () => resolve({ stopped: true });
         });
         const r = await Promise.race([this.request("session/prompt", { sessionId: this.session, prompt: [{ type: "text", text: first ? `${brief}\n\n${prompt}` : prompt }] }), stopped]);
+        // Some agents put the retry notice on the failed prompt's own error response.
+        const retry = r?.error?._meta?.["opencode/retry"] ?? r?._meta?.["opencode/retry"];
+        if (retry) this.retryMeta = retry;
         const seen = turnUsage(this.usage, r?.result?.usage);
         if (seen) this.on({ kind: "usage", ...seen });
-        if (this.idleLost) return { text: this.text, error: this.idleLost, session: this.session };
-        if (this.asked) return { text: this.text, asked: true, error: null, session: this.session };
-        if (r.error) return { text: this.text, error: r.error.message ?? "the agent refused the prompt", session: this.session };
-        if (r.result?.stopReason === "cancelled") return { text: this.text, cancelled: true, session: this.session };
+        if (this.idleLost) return out({ text: this.text, error: this.idleLost, session: this.session });
+        if (this.asked) return out({ text: this.text, asked: true, error: null, session: this.session });
+        if (r.error) return out({ text: this.text, error: r.error.message ?? "the agent refused the prompt", session: this.session });
+        if (r.result?.stopReason === "cancelled") return out({ text: this.text, cancelled: true, session: this.session });
         if (this.text.trim()) this.on({ kind: "text", text: this.text });
-        return { text: this.text, error: null, session: this.session };
+        return out({ text: this.text, error: null, session: this.session });
       } catch (e) {
-        return { text: "", error: e.message, session: null };
+        return out({ text: "", error: e.message, session: null });
       } finally {
         this.idle?.done();
         this.idle = null;
@@ -726,6 +740,7 @@ export function turn(opts) {
   if (h === "pi" || h === "omp") return piTurn(opts);
   if (HEADLESS[h]?.acp) {
     opts.acp.current ??= new Acp(opts);
+    opts.acp.current.agent = opts.agent; // the model or effort changed since the session opened
     opts.acp.current.access = opts.access;
     opts.acp.current.allow = opts.allow ?? [];
     return opts.acp.current.turn(opts);

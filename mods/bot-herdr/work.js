@@ -36,6 +36,7 @@ import { OpenQuestions, publishCounts } from "./questions.js";
 import { awaited, seatStates, seatsOf, boardAge, boardRows, boardTone } from "./signals.js";
 import { stepAgents, usageText } from "./steps.js";
 import { skillsLine } from "./skillsview.js";
+import { ResilienceMonitor, renderStatusStrip, STRIP_HEIGHT, openResilienceSettings } from "./statusstrip.js";
 
 const TABS = [
   { id: "tasks", icon: "page-tasks", label: "Tasks" },
@@ -383,6 +384,11 @@ export class Work {
     cx.timer.every(QUESTIONS_MS, (cx) => {
       if (activePage() === (this.fixed ?? "work")) this.readQuestions(cx);
     });
+    this.resilience = new ResilienceMonitor({
+      isActive: () => activePage() === (this.fixed ?? "work") && this.tab === "tasks",
+      cwd: () => projectDir(),
+    });
+    this.resilience.start(cx);
     this.reload(cx);
     cx.timer.every(REFRESH_MS, (cx) => {
       if (activePage() === (this.fixed ?? "work")) this.reload(cx);
@@ -395,6 +401,7 @@ export class Work {
     if (this.busy) return;
     this.busy = true;
     const dir = projectDir();
+    if (this.tab === "tasks") this.resilience?.refresh(cx);
     cx.spawn(async (cx) => {
       try {
         this.switchTo(dir);
@@ -722,7 +729,12 @@ export class Work {
       cx.timer.after(1, (cx) => this.reload(cx));
     }
     const active = activePage() === (this.fixed ?? "work");
-    if (active && !this.wasActive) cx.timer.after(1, (cx) => this.readQuestions(cx));
+    if (active && !this.wasActive) {
+      cx.timer.after(1, (cx) => {
+        this.readQuestions(cx);
+        if (this.tab === "tasks") this.resilience.refresh(cx);
+      });
+    }
     this.wasActive = active;
     const want = shared(OPEN_TASK);
     if (want?.at > (this.openAt ?? 0)) {
@@ -828,24 +840,36 @@ export class Work {
 
   /** The Tasks page: the list and the chosen task side by side; under NARROW, one of them with a link back. */
   tasksView(c, width) {
+    const strip = this.resilience.model();
+    const stripEl = strip.visible ? renderStatusStrip(c, strip, {
+      idPrefix: "bh-tasks-strip",
+      onPause: (_e, cx) => this.resilience.pause(cx),
+      onReset: (_e, cx) => this.resilience.reset(cx),
+      onOpenSettings: () => openResilienceSettings(),
+    }) : null;
     if (this.tasks === null) return stateView(c, { id: "bh-tasks-loading", title: "Loading tasks…", loading: true });
-    if (!this.tasks.length) return this.hero(c, width, "page-tasks", "No tasks yet", "Type /task in the chat to start one.");
+    if (!this.tasks.length) {
+      const hero = this.hero(c, width, "page-tasks", "No tasks yet", "Type /task in the chat to start one.");
+      return stripEl ? v_flex().w(width).gap(SPACE[3]).child(stripEl).child(hero) : hero;
+    }
     const narrow = this.width < NARROW;
     const archived = this.tasks.filter((t) => t.archived);
     const current = this.tasks.filter((t) => !t.archived);
     const list = this.archived ? archived : current;
     if (!narrow && !this.stayClosed && !list.some((t) => t.id === this.opened)) this.opened = (list.find((t) => t.status === "active") ?? list[0])?.id ?? null;
     const open = list.find((t) => t.id === this.opened) ?? null;
-    const paneH = Math.max(320, this.height - 96);
+    const stripH = stripEl ? STRIP_HEIGHT + SPACE[3] : 0;
+    const paneH = Math.max(320, this.height - 96 - stripH);
     const listW = narrow ? width : Math.min(LIST_W, Math.floor(width * 0.45));
     const paneW = narrow ? width : Math.max(0, width - listW - HAIR);
-    return h_flex()
+    const split = h_flex()
       .w(width)
       .h(paneH)
       .items_start()
       .when(!narrow || !open, (el) => el.child(this.taskList(c, { list, current, archived, width: listW, height: paneH, narrow })))
       .when(!narrow, (el) => el.child(div().flex_none().w(HAIR).h(paneH).bg(c.edge)))
       .when(!narrow || Boolean(open), (el) => el.child(this.taskPane(c, open, { width: paneW, height: paneH, narrow })));
+    return stripEl ? v_flex().w(width).gap(SPACE[3]).child(stripEl).child(split) : split;
   }
 
   /** The list column: the "Tasks" heading with the Tasks / Archived switch on its right, then the groups. */

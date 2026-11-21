@@ -14,6 +14,7 @@
 - The Work page reads tasks (and their usage) from bh task list --all --json; only bh task show readers (the chat tracker) get taskDetail fields like steps[].events.
 - The mod runtime has no Intl (new Intl.NumberFormat fails herdr-app check): format numbers with Number#toLocaleString().
 - bhJson(args) appends --json itself; never pass it.
+- gpui-kit.d.ts supports role('switch'), role('status'), accessibility_label, aria_selected, aria_level, and aria_active_descendant (no aria_checked).
 
 ## Standards
 - When reusing the Composer for non-chat sends (e.g. plan comments), override send but reset input/files/pane state or the composer sticks (chosen by Design)

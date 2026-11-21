@@ -10,6 +10,7 @@
 import { spawnSync } from "node:child_process";
 import { basename, extname, join } from "node:path";
 import { ENGINE, listDir, now, readText, store, writeText } from "./core.mjs";
+import { PROTECTED_BUILTIN_SCRIPTS } from "./resilience.mjs";
 
 const BUILTIN = join(ENGINE, "scripts");
 export const RUNNERS = { ".mjs": ["node"], ".js": ["node"], ".cjs": ["node"], ".ts": ["node"], ".py": ["python3"], ".sh": ["bash"], ".ps1": ["powershell", "-NoProfile", "-File"], ".rb": ["ruby"] };
@@ -22,9 +23,12 @@ function header(path) {
 
 const nameOf = (file) => basename(file, extname(file));
 
-/** Every script: the project's first, then the built-ins it does not replace. */
+/** Every script: the project's first, then the built-ins it does not replace. A project script may
+ * never take the place of the built-in `bh check` ones: the check is the guardrail, not a choice. */
 export function scripts(root) {
-  const own = listDir(store(root, "scripts")).filter((d) => d.isFile() && RUNNERS[extname(d.name)]).map((d) => ({ name: nameOf(d.name), file: join(store(root, "scripts"), d.name), source: "project" }));
+  const own = listDir(store(root, "scripts"))
+    .filter((d) => d.isFile() && RUNNERS[extname(d.name)] && !PROTECTED_BUILTIN_SCRIPTS.has(nameOf(d.name).toLowerCase()))
+    .map((d) => ({ name: nameOf(d.name), file: join(store(root, "scripts"), d.name), source: "project" }));
   const taken = new Set(own.map((s) => s.name));
   const built = listDir(BUILTIN).filter((d) => d.isFile() && d.name.endsWith(".mjs") && !taken.has(nameOf(d.name))).map((d) => ({ name: nameOf(d.name), file: join(BUILTIN, d.name), source: "built-in" }));
   return [...own, ...built].map((s) => ({ ...s, ...header(s.file) }));
@@ -54,6 +58,7 @@ export function save(root, from, name = null) {
   const ext = extname(from);
   if (!RUNNERS[ext]) throw new Error(`Scripts can be: ${Object.keys(RUNNERS).join(" ")}.`);
   const base = (name ? nameOf(name) : nameOf(from)).toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+  if (PROTECTED_BUILTIN_SCRIPTS.has(base)) throw new Error(`${base} is a built-in check script: a project script may not replace it. Give this one another name.`);
   const target = join(store(root, "scripts"), `${base}${ext}`);
   const text = readText(from);
   if (!header(from).purpose) throw new Error(`Start the script with a "purpose:" comment line (and "usage:") so the others know what it does.`);
