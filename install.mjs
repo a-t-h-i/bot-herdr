@@ -9,12 +9,41 @@
 //   node install.mjs --skip-tools   don't download the bundled rg, fd and ast-grep
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { ensureTools } from "./mods/bot-herdr/engine/lib/install-tools.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * The `herdr-app` to run: HERDR_APP_BIN when set, then the first herdr-app on PATH, then the usual
+ * per-user install folder (a GUI app's installer does not always put it on the PATH of a shell).
+ */
+export function resolveHerdrAppBin() {
+  const override = String(process.env.HERDR_APP_BIN ?? "").trim();
+  if (override) return override;
+  const suffixes = process.platform === "win32" ? ["", ".exe", ".cmd", ".bat"] : [""];
+  const dirs = String(process.env.PATH ?? process.env.Path ?? "").split(delimiter).filter(Boolean);
+  for (const dir of dirs) {
+    for (const suffix of suffixes) {
+      const file = join(dir, `herdr-app${suffix}`);
+      if (existsSync(file)) return file;
+    }
+  }
+  const local = join(homedir(), ".local", "bin", "herdr-app");
+  return existsSync(local) ? local : "herdr-app";
+}
+
+const hasHomePage = (text) => String(text ?? "").includes('"id": "home"');
+
+/**
+ * Whether an installed layout predates the redesign: the repo layout has a "home" page and the
+ * installed one does not. Its own layout is kept before the repo's replaces it.
+ */
+export function shouldMigrateRedesignLayout(repoLayoutText, installedLayoutText) {
+  return hasHomePage(repoLayoutText) && !hasHomePage(installedLayoutText);
+}
 
 /** Finds a layout node by id anywhere in the layout tree. */
 function findNode(node, id) {
@@ -113,33 +142,43 @@ async function runInstall() {
   console.log(`themes   ${themeDir} ${themes.join(", ")}`);
 
   const layout = join(appHome, "layouts", "bot-herdr.json");
-  // A layout from before the pages (chat, terminals, tasks, plans, knowledge, metrics, settings)
-  // can't show them: replace it.
-  const old = existsSync(layout) && !readFileSync(layout, "utf8").includes('"id": "metrics"');
-  if (old) cpSync(layout, `${layout}.old`);
-  if (!existsSync(layout) || old || args.has("--force")) {
-    mkdirSync(dirname(layout), { recursive: true });
-    cpSync(join(here, "layouts", "bot-herdr.json"), layout);
-    console.log(`layout   ${layout}${old ? " (yours from before is kept as bot-herdr.json.old)" : ""}`);
+  const repoLayout = join(here, "layouts", "bot-herdr.json");
+  // A layout from before the redesign's "home" page is kept as .pre-redesign.old and replaced, so
+  // the pages the redesign adds actually appear.
+  const migrate = existsSync(layout) && shouldMigrateRedesignLayout(readFileSync(repoLayout, "utf8"), readFileSync(layout, "utf8"));
+  if (migrate) {
+    cpSync(layout, `${layout}.pre-redesign.old`);
+    cpSync(repoLayout, layout);
+    console.log(`layout   ${layout} (the redesigned one; yours from before is kept as bot-herdr.json.pre-redesign.old)`);
   } else {
-    // Notifications rise out of the chat's composer: the root names our mod as its toast.
-    try {
-      const kept = JSON.parse(readFileSync(layout, "utf8"));
-      let changed = false;
-      if (!kept.toast) {
-        kept.toast = "bot-herdr";
-        changed = true;
+    // A layout from before the pages (chat, terminals, tasks, plans, knowledge, metrics, settings)
+    // can't show them: replace it.
+    const old = existsSync(layout) && !readFileSync(layout, "utf8").includes('"id": "metrics"');
+    if (old) cpSync(layout, `${layout}.old`);
+    if (!existsSync(layout) || old || args.has("--force")) {
+      mkdirSync(dirname(layout), { recursive: true });
+      cpSync(repoLayout, layout);
+      console.log(`layout   ${layout}${old ? " (yours from before is kept as bot-herdr.json.old)" : ""}`);
+    } else {
+      // Notifications rise out of the chat's composer: the root names our mod as its toast.
+      try {
+        const kept = JSON.parse(readFileSync(layout, "utf8"));
+        let changed = false;
+        if (!kept.toast) {
+          kept.toast = "bot-herdr";
+          changed = true;
+        }
+        // The Files / Changes panel sits beside the pages, not inside the Terminals page, so the
+        // tab bar's Files and Changes buttons show it on every page (Chat too).
+        changed = panelBesidePages(kept) || changed;
+        changed = ensureIssuesPage(kept) || changed;
+        changed = ensureLearningPage(kept) || changed;
+        if (changed) writeFileSync(layout, `${JSON.stringify(kept, null, 2)}\n`);
+      } catch {
+        // not JSON we can read: leave it as it is
       }
-      // The Files / Changes panel sits beside the pages, not inside the Terminals page, so the
-      // tab bar's Files and Changes buttons show it on every page (Chat too).
-      changed = panelBesidePages(kept) || changed;
-      changed = ensureIssuesPage(kept) || changed;
-      changed = ensureLearningPage(kept) || changed;
-      if (changed) writeFileSync(layout, `${JSON.stringify(kept, null, 2)}\n`);
-    } catch {
-      // not JSON we can read: leave it as it is
+      console.log(`layout   kept your ${layout} (--force replaces it)`);
     }
-    console.log(`layout   kept your ${layout} (--force replaces it)`);
   }
 
   // Keys: add ours, never replace one you already bound.
@@ -206,11 +245,12 @@ async function runInstall() {
     }
   }
 
-  const check = spawnSync("herdr-app", ["check", mod], { stdio: "inherit" });
-  if (check.error) console.log("check    herdr-app isn't on PATH; run: herdr-app check " + mod);
+  const herdrApp = resolveHerdrAppBin();
+  const check = spawnSync(herdrApp, ["check", mod], { stdio: "inherit" });
+  if (check.error) console.log(`check    ${herdrApp} isn't runnable; run: herdr-app check ` + mod);
   else if (check.status !== 0) process.exit(check.status ?? 1);
 
-  if (args.has("--switch")) spawnSync("herdr-app", ["do", "layout.switch", "--name", "bot-herdr"], { stdio: "inherit" });
+  if (args.has("--switch")) spawnSync(herdrApp, ["do", "layout.switch", "--name", "bot-herdr"], { stdio: "inherit" });
   else console.log('switch   herdr-app do layout.switch --name bot-herdr   (or ctrl+shift+l)');
 }
 

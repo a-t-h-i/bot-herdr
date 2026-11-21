@@ -18,6 +18,17 @@ import * as IM from "./improve.mjs";
 
 export const GOAL_STATUSES = ["running", "waiting", "paused", "reached", "stopped"];
 export const DEFAULT_MAX_SPEND_USD = 15;
+
+/**
+ * A Goal's spend ceiling: an explicit 0 means uncapped, while an omitted, blank or invalid value
+ * keeps the default. 0 is a real ceiling value, so `Number(x) > 0 ? x : default` would lose it.
+ */
+export function spendCeiling(value, fallback = DEFAULT_MAX_SPEND_USD) {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === "string" && !value.trim()) return fallback;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
 const COMMAND_TIMEOUT_MS = 600_000;
 const SHELL_META = /[;&|<>`\r\n]|\$\(/;
 const EXTRA_TEST_SABOTAGE = /\b(?:test|it|describe)\.(?:skip|todo)\s*\(/;
@@ -211,7 +222,7 @@ export function freezeContract(root, task, criteria, { maxSpendUsd = DEFAULT_MAX
     base: task.base ?? null,
     criteria: cleanCriteria,
     scriptHashes: hashReferencedScripts(workDir, cleanCriteria, root),
-    maxSpendUsd: Number(maxSpendUsd) > 0 ? Number(maxSpendUsd) : DEFAULT_MAX_SPEND_USD,
+    maxSpendUsd: spendCeiling(maxSpendUsd),
     createdAt: now(),
     amendments: [],
   };
@@ -774,6 +785,12 @@ export function verifyGoal(root, taskId, {
   const passed = ordered.filter((r) => r.ok).map((r) => r.id);
   const failed = ordered.filter((r) => r.verdict === "FAIL").map((r) => r.id);
   const pendingQa = ordered.filter((r) => r.verdict === "PENDING").map((r) => r.id);
+  // A failure signature that repeats means the same wall, hit again: the ids and their first line
+  // of evidence are what a retry cap counts. Different evidence is a different signature.
+  const errorSig = failed.length
+    ? clip(ordered.filter((r) => r.verdict === "FAIL").map((r) => `${r.id}: ${firstLine(r.observed)}`).join(" | "), 400)
+    : null;
+  const sameErrorStreak = !errorSig ? 0 : errorSig === (task.goal.lastErrorSig ?? null) ? Number(task.goal.sameErrorStreak ?? 0) + 1 : 1;
   const allDetPassed = integrity.ok && detResults.filter((r) => r.required).every((r) => r.ok);
   const allRequiredPassed = integrity.ok && ordered.filter((r) => r.required).every((r) => r.ok);
 
@@ -865,6 +882,8 @@ export function verifyGoal(root, taskId, {
     improved,
     repeatedHash,
     oscillating,
+    sameErrorStreak,
+    lastErrorSig: errorSig,
     spendUsd,
     turns,
     hypothesis: clip(hypothesis, 220) || null,
@@ -873,6 +892,9 @@ export function verifyGoal(root, taskId, {
     ...(integrity.ok ? {} : { tamperViolations: integrity.violations }),
   };
   T.recordIteration(root, task.id, iterRow);
+
+  const maxStepRetries = Number(RZ.resilienceConfig()?.guardrails?.maxStepRetries ?? 3);
+  const retryCap = !allRequiredPassed && maxStepRetries > 0 && sameErrorStreak >= maxStepRetries;
 
   // Update task.goal atomically under task lock
   let updatedTask;
@@ -894,9 +916,18 @@ export function verifyGoal(root, taskId, {
     t.goal.bestCheckpoint = checkpointRef;
     t.goal.bestHead = bestHead;
     t.goal.noProgressStreak = noProgressStreak;
+    t.goal.sameErrorStreak = sameErrorStreak;
+    t.goal.lastErrorSig = errorSig;
     t.goal.seenFailedHashes = nextSeenFailed;
     t.goal.awaitingQa = Boolean(allDetPassed && pendingQa.length > 0);
-    if (allRequiredPassed) {
+    if (retryCap) {
+      // The same failure this many times in a row is a wall, not a next step: stop the loop and
+      // let the board say so, instead of burning rounds on identical attempts.
+      t.goal.status = "paused";
+      t.goal.reason = `retry_cap (${sameErrorStreak}/${maxStepRetries} consecutive identical failures)`;
+      t.goal.waitUntil = null;
+      T.setStatus(t, "paused");
+    } else if (allRequiredPassed) {
       t.goal.status = "reached";
       t.goal.reachedAt = verifiedAt;
       t.goal.reachedHead = finalTree.head;
@@ -922,6 +953,9 @@ export function verifyGoal(root, taskId, {
     const revertNote = reverted ? ` [reverted to ${checkpointRef}; archived at ${attemptRef}]` : "";
     T.post(root, task.id, { kind: "note", text: `Goal iter ${iteration} FAIL (${passed.length}/${ordered.length}): ${failSummary}${revertNote}`, from: "goal-verifier" });
   }
+  if (retryCap) {
+    T.post(root, task.id, { kind: "blocker", text: `Goal paused at the retry cap: ${sameErrorStreak}/${maxStepRetries} consecutive iterations failed the same way (${clip(errorSig, 240)}). Resume with \`bh goal resume ${task.id}\` once the blocker is cleared.`, from: "goal-verifier" });
+  }
 
   return {
     task: task.id,
@@ -940,6 +974,9 @@ export function verifyGoal(root, taskId, {
     attemptRef,
     repeatedHash,
     oscillating,
+    sameErrorStreak,
+    errorSig,
+    retryPaused: retryCap,
     tamperViolations: integrity.violations,
     head: finalTree.head,
     diff: finalTree.diff,
@@ -1146,6 +1183,9 @@ export function setGoalState(root, taskId, action, { reason = null, waitUntil = 
       t.goal.status = "running";
       t.goal.reason = null;
       t.goal.waitUntil = null;
+      // A resume is the user clearing the wall, so the retry cap starts a fresh count.
+      t.goal.sameErrorStreak = 0;
+      t.goal.lastErrorSig = null;
       T.setStatus(t, "active");
     } else {
       throw new Error(`Unknown goal state action: ${action}`);
@@ -1243,8 +1283,14 @@ export function goalStatus(root, taskId = null) {
 export function next(root, { taskId = null, lastTurn = null } = {}) {
   const task = taskId ? T.loadTask(root, taskId) : T.currentTask(root);
   if (!task || task.mode !== "goal" || !task.goal) return { continue: false, reason: "no_active_goal" };
-  if (task.status !== "active") return { continue: false, reason: `task_${task.status}` };
   const g = task.goal;
+  // Guardrails stop a loop that keeps failing the same way, whether or not the verify already
+  // paused the task: the reason names the cap so the user knows what to clear.
+  const maxStepRetries = Number(RZ.resilienceConfig()?.guardrails?.maxStepRetries ?? 3);
+  if (maxStepRetries > 0 && Number(g.sameErrorStreak ?? 0) >= maxStepRetries) {
+    return { continue: false, pause: true, reason: `retry_cap (${g.sameErrorStreak}/${maxStepRetries} consecutive identical failures)` };
+  }
+  if (task.status !== "active") return { continue: false, reason: `task_${task.status}` };
   if (g.status === "reached") return { continue: false, reason: "reached" };
   if (g.status === "paused" || g.status === "stopped") return { continue: false, reason: g.reason || g.status };
   if (g.pendingAmendment) return { continue: false, reason: "pending_amendment" };

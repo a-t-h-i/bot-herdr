@@ -8,5 +8,8 @@
   "scripts": {
     "install-mod": "node install.mjs",
     "test": "node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.0"
   }
 }

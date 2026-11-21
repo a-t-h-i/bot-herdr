@@ -62,9 +62,17 @@ Goals (autonomous verification loops)
   bh goal status [<task>] [--json]           criteria verdicts, budget, ratchet checkpoint, next round
   bh goal verify [<task>] [--hypothesis H]   verify frozen DONE criteria, apply monotonic ratchet
   bh goal log [<task>] [--limit N] [--json]  Gap Ledger iteration history
+  bh goal progress [<task>]                  how far the Goal has come (a placeholder: lands with the redesign)
   bh goal pause|resume|stop|recover [<task>] [--reason R]
   bh goal propose-amend <task> --criterion ID --action edit|drop|add [--text T] --reason R
   bh goal approve-amend|reject-amend <task>  (the user's to approve or reject)
+
+Redesign foundation (placeholders until the Design Language Redesign milestones land)
+  bh ui-audit                     the design-language audit (tokens, contrast, spacing)
+  bh home                         the Home page's data
+  bh thread                       a chat thread's stored conversation
+  bh approvals                    approval cards for commands agents may not run on their own
+  bh review                       review comments on a change
 
 GitHub issues (autonomous intake, triage/decline, bundling, screenshot proof & PR delivery)
   bh issues list [--state open|closed|all] [--label L] [--repo owner/repo]  cached issues, triage & local links (no network)
@@ -846,7 +854,7 @@ async function main(argv) {
           throw new Error(`Goals require git isolation (worktree or branch): ${isolation || "could not create git workspace"}.`);
         }
         if (asMode === "goal") {
-          const maxSpendUsd = Number(flags["max-spend"] ?? plan.goal?.maxSpendUsd ?? G.DEFAULT_MAX_SPEND_USD);
+          const maxSpendUsd = G.spendCeiling(flags["max-spend"] ?? plan.goal?.maxSpendUsd);
           const maxIterations = Number(flags["max-iterations"] ?? 0);
           G.initGoal(root, task, { criteria, maxSpendUsd, maxIterations });
         }
@@ -874,6 +882,10 @@ async function main(argv) {
 
     case "goal": {
       const taskArg = /^t-\d{8}-\w+$/.test(args[0] ?? "") ? args[0] : T.currentTask(root)?.id;
+      if (sub === "progress") {
+        const { runGoalProgressCli } = await import("./lib/goal-progress.mjs");
+        return runGoalProgressCli({ root, sub: args[0], args: args.slice(1), flags, out });
+      }
       if (sub === "status" || !sub) {
         need(taskArg, "bh goal status [<task>]");
         const st = G.goalStatus(root, taskArg);
@@ -1032,6 +1044,33 @@ async function main(argv) {
         return out(flags, delivery, (d) => `Opened PR #${d.prNumber}${d.prUrl ? ` (${d.prUrl})` : ""} for manual review & merge; closed ${d.closedIssues.map((n) => `#${n}`).join(", ") || "no issues"}.`);
       }
       throw new UsageError("bh issues list|fetch|show|triage|bundle|screenshot|finish");
+    }
+
+    // Redesign foundation (p-20261121-siir): additive commands whose modules land their behaviour;
+    // here they only have to exist, so the plan's scripts can be written against them now.
+    case "ui-audit": {
+      const { runUiAuditCli } = await import("./lib/ui-audit.mjs");
+      return runUiAuditCli({ root, sub, args, flags, out });
+    }
+
+    case "home": {
+      const { runHomeCli } = await import("./lib/home.mjs");
+      return runHomeCli({ root, sub, args, flags, out });
+    }
+
+    case "thread": {
+      const { runThreadCli } = await import("./lib/thread.mjs");
+      return runThreadCli({ root, sub, args, flags, out });
+    }
+
+    case "approvals": {
+      const { runApprovalsCli } = await import("./lib/approvals.mjs");
+      return runApprovalsCli({ root, sub, args, flags, out });
+    }
+
+    case "review": {
+      const { runReviewCli } = await import("./lib/review-comments.mjs");
+      return runReviewCli({ root, sub, args, flags, out });
     }
 
     case "knowledge": {

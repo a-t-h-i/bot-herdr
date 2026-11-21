@@ -25,6 +25,7 @@ import { join } from "node:path";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { HEADLESS, argvOf, effortsOf, headless, limitArgs } from "../../roster.js";
 import { BH, DATA, ensureDir } from "./core.mjs";
+import { maybeHoldPermission } from "./approvals.mjs";
 
 export { HEADLESS, headless };
 export const ACCESS = ["standard", "full"];
@@ -648,6 +649,17 @@ export class Acp {
       // ends only once the command has run and written the card (the tool_call_update above).
       const allow = acpAllowed(call.kind, this.access, { command: textCmd, allow: this.allow }) || asks;
       if (asks && call.toolCallId !== undefined) this.askCall = call.toolCallId;
+      // The redesign's approval cards can hold a refused call for the user; until they land the
+      // hook says it handled nothing and the reject below is unchanged.
+      if (!allow && this.access !== "full") {
+        let held = null;
+        try {
+          held = maybeHoldPermission({ req: m, call, options, command: textCmd, access: this.access, send: (msg) => this.send(msg), on: this.on });
+        } catch {
+          held = null; // a broken hook must never leave the request unanswered: fall through to reject
+        }
+        if (held?.handled) return;
+      }
       const pick = allow
         ? options.find((o) => o.kind === "allow_once") ?? options.find((o) => o.kind === "allow_always")
         : options.find((o) => o.kind === "reject_once") ?? options.find((o) => o.kind === "reject_always");
