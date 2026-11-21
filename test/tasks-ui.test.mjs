@@ -34,7 +34,7 @@ import { allowedActions } from "../mods/bot-herdr/engine/lib/tasks.mjs";
 const modSrc = (name) => readFileSync(fileURLToPath(new URL(`../mods/bot-herdr/${name}`, import.meta.url)), "utf8");
 
 test("constants: DETAIL_TABS, STATUS_CHIPS, BOARD_KINDS expose expected workbench keys", () => {
-  assert.deepEqual(DETAIL_TABS, ["steps", "board", "comments", "plan"]);
+  assert.deepEqual(DETAIL_TABS, ["steps", "iterations", "board", "comments", "plan"]);
   assert.deepEqual(STATUS_CHIPS, ["active", "blocked", "done", "archived"]);
   assert.deepEqual(BOARD_KINDS, ["all", "contract", "decision", "blocker", "question", "done", "note"]);
 });
@@ -64,6 +64,9 @@ test("taskSummaryFallback(): normalizes both lightweight --summary and full lega
     id: "t-20261121-abcd",
     title: "Fallback chains",
     status: "active",
+    mode: "task",
+    goal: null,
+    github: null,
     archived: false,
     track: "full",
     plan: "p-20261121-0001",
@@ -208,18 +211,18 @@ test("gateBadge(): formats latestGate or legacy gates[] into label and tone", ()
 test("allowedActionsFallback(): prefers engine allowedActions and matches the engine across every state", () => {
   const fromEngine = allowedActionsFallback({
     status: "active",
-    allowedActions: { pause: true, resume: false, done: false, archive: false, unarchive: false, delete: false },
+    allowedActions: { pause: true, resume: false, done: false, verify: false, archive: false, unarchive: false, delete: false },
   });
-  assert.deepEqual(fromEngine, { pause: true, resume: false, done: false, archive: false, unarchive: false, delete: false });
+  assert.deepEqual(fromEngine, { pause: true, resume: false, done: false, verify: false, archive: false, unarchive: false, delete: false });
 
   assert.deepEqual(allowedActionsFallback({ status: "active", archived: false }), {
-    pause: true, resume: false, done: true, archive: false, unarchive: false, delete: false,
+    pause: true, resume: false, done: true, verify: false, archive: false, unarchive: false, delete: false,
   });
   assert.deepEqual(allowedActionsFallback({ status: "paused", archived: false }), {
-    pause: false, resume: true, done: true, archive: true, unarchive: false, delete: true,
+    pause: false, resume: true, done: true, verify: false, archive: true, unarchive: false, delete: true,
   });
   assert.deepEqual(allowedActionsFallback({ status: "done", archived: true }), {
-    pause: false, resume: false, done: false, archive: false, unarchive: true, delete: true,
+    pause: false, resume: false, done: false, verify: false, archive: false, unarchive: true, delete: true,
   });
 });
 
@@ -296,6 +299,8 @@ test("detailTabCounts() & filterBoard(): summarizes detail tabs and filters boar
 
   assert.deepEqual(detailTabCounts(detail), {
     stepsText: "3/6",
+    isGoal: false,
+    iterationsCount: 0,
     boardCount: 4,
     commentsCount: 3,
     openCommentsCount: 2,

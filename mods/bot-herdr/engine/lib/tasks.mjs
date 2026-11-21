@@ -145,10 +145,34 @@ export function taskSummary(root, task) {
   const open = openComments(task).length;
   const gate = (task.gates ?? []).at(-1) ?? null;
   const { spendUsd, workedMs } = totalsOf(root, task);
+  const mode = task.mode === "goal" ? "goal" : "task";
+  const criteria = task.goal?.criteria ?? [];
+  const goalDone = criteria.filter((c) => c.verdict === "PASS").length;
+  const goalSummary = mode === "goal" && task.goal
+    ? {
+        status: task.goal.status ?? "running",
+        done: goalDone,
+        total: criteria.length,
+        iteration: Number(task.goal.iteration ?? 0),
+        maxSpendUsd: Number(task.goal.maxSpendUsd ?? 0) || null,
+        pendingAmendment: Boolean(task.goal.pendingAmendment),
+      }
+    : null;
+  const githubSummary = task.github
+    ? {
+        repo: task.github.repo ?? null,
+        issues: (task.github.issues ?? []).map((i) => (typeof i === "object" ? i.number : i)).filter(Boolean),
+        prNumber: task.github.prNumber ?? null,
+        prUrl: task.github.prUrl ?? null,
+      }
+    : null;
   return {
     id: task.id,
     title: task.title,
     status: task.status,
+    mode,
+    goal: goalSummary,
+    github: githubSummary,
     archived: Boolean(task.archived),
     track: task.track,
     plan: task.plan ?? null,
@@ -158,8 +182,21 @@ export function taskSummary(root, task) {
     total: steps.length,
     blocked,
     openComments: open,
-    needsYou: Boolean(task.status === "paused" || blocked > 0 || open > 0 || gate?.verdict === "CHANGES_REQUIRED" || gate?.verdict === "BLOCKED"),
-    running: Boolean(task.status === "active" && (steps.some((s) => s.status === "active") || children.some((c) => c.state === "open"))),
+    needsYou: Boolean(
+      task.status === "paused"
+      || blocked > 0
+      || open > 0
+      || gate?.verdict === "CHANGES_REQUIRED"
+      || gate?.verdict === "BLOCKED"
+      || Boolean(task.goal?.pendingAmendment)
+      || (mode === "goal" && task.goal?.status === "paused")
+    ),
+    running: Boolean(
+      task.status === "active"
+      && (steps.some((s) => s.status === "active")
+        || children.some((c) => c.state === "open")
+        || (mode === "goal" && task.goal?.status === "running"))
+    ),
     activeAgents: activeAgents(steps, children),
     spendUsd,
     workedMs,
@@ -176,7 +213,10 @@ export function listTaskSummaries(root, { all = false } = {}) {
 export const allowedActions = (task) => ({
   pause: task.status === "active",
   resume: task.status === "paused" || task.status === "backlog",
-  done: task.status === "active" || task.status === "paused",
+  done: task.mode === "goal"
+    ? Boolean((task.status === "active" || task.status === "paused") && task.goal?.status === "reached")
+    : task.status === "active" || task.status === "paused",
+  verify: Boolean(task.mode === "goal" && task.status !== "done" && task.status !== "abandoned"),
   archive: !task.archived && task.status !== "active",
   unarchive: Boolean(task.archived),
   delete: task.status !== "active",
@@ -188,12 +228,15 @@ export function currentTask(root) {
   return tasks.find((t) => t.status === "active") ?? tasks[0] ?? null;
 }
 
-export function newTask(root, { request, title, plan = null, track = "full", by = null, steps = [] }) {
+export function newTask(root, { request, title, plan = null, track = "full", by = null, steps = [], mode = "task", goal = null, github = null }) {
   const task = {
     id: newId("t"),
     title: title?.trim() || titleFrom(request),
     request: String(request ?? "").trim(),
     status: "active",
+    mode: mode === "goal" ? "goal" : "task",
+    goal: goal ?? null,
+    ...(github ? { github } : {}),
     track,
     plan,
     by,
@@ -219,9 +262,9 @@ export function setSteps(task, titles) {
   return task;
 }
 
-/** The `## Steps` list of a plan (numbered lines), as plain step titles. */
+/** The `## Steps` list of a plan (numbered lines), as plain step titles (ignoring untrusted issue blocks). */
 export function stepsFromMarkdown(md) {
-  const text = String(md ?? "");
+  const text = String(md ?? "").replace(/<untrusted-github-issue\b[^>]*>[\s\S]*?<\/untrusted-github-issue>/gi, "");
   const at = text.search(/^#{2,3}\s+Steps\s*$/im);
   const from = at >= 0 ? text.slice(at).split("\n").slice(1) : text.split("\n");
   const steps = [];
@@ -422,6 +465,35 @@ export function checks(root, id) {
   return readJsonl(join(dir(root, id), "checks.jsonl"));
 }
 
+/** Append one Goal iteration (Gap Ledger) row under the file lock. */
+export function recordIteration(root, id, row) {
+  const path = join(dir(root, id), "iterations.jsonl");
+  return withLock(path, () => {
+    appendJsonl(path, row);
+    return row;
+  });
+}
+
+/** Goal iteration rows for a task, oldest first (`limit` returns the most recent N). */
+export function iterations(root, id, { limit = 0 } = {}) {
+  const all = readJsonl(join(dir(root, id), "iterations.jsonl"));
+  return limit > 0 ? all.slice(-limit) : all;
+}
+
+/** Append one Goal criterion verification receipt under the file lock. */
+export function recordCriterion(root, id, row) {
+  const path = join(dir(root, id), "criteria.jsonl");
+  return withLock(path, () => {
+    appendJsonl(path, row);
+    return row;
+  });
+}
+
+/** Goal criterion receipts for a task, oldest first. */
+export function criterionReceipts(root, id) {
+  return readJsonl(join(dir(root, id), "criteria.jsonl"));
+}
+
 /** One turn's usage, kept on the task: what it cost and how long it ran. */
 export function recordUsage(root, id, record) {
   const path = join(dir(root, id), "usage.jsonl");
@@ -490,15 +562,29 @@ export function taskDetail(root, task, entries = []) {
     const ms = usage.length ? stepTime(usage, s.n) : (s.workedMs ?? 0);
     return { ...s, events: stepEvents(s, entries, receipts, task.children ?? []), agentName: s.agent ?? open(s.n), timeMs: ms, elapsedMs: ms, usage: usageTotals(usage.filter((r) => r.step === s.n)) };
   });
-  return { ...task, steps, done: steps.filter((s) => s.status === "done" || s.status === "skipped").length, total: steps.length, usage: usageTotals(usage), timeMs: worked(root, task), checks: receipts, allowedActions: allowedActions(task) };
+  const mode = task.mode === "goal" ? "goal" : "task";
+  return {
+    ...task,
+    mode,
+    goal: task.goal ?? null,
+    github: task.github ?? null,
+    iterations: mode === "goal" ? iterations(root, task.id, { limit: 20 }) : [],
+    steps,
+    done: steps.filter((s) => s.status === "done" || s.status === "skipped").length,
+    total: steps.length,
+    usage: usageTotals(usage),
+    timeMs: worked(root, task),
+    checks: receipts,
+    allowedActions: allowedActions(task),
+  };
 }
 
 /** A gate verdict on the task, and a `done` board entry for it; round defaults to one past the last. */
-export function recordGate(root, id, { verdict, round = null, file, summary, from = null, head = null }) {
+export function recordGate(root, id, { verdict, round = null, file, summary, from = null, head = null, diff = null }) {
   if (!["PASS", "CHANGES_REQUIRED", "BLOCKED"].includes(verdict)) throw new Error("A gate verdict is PASS, CHANGES_REQUIRED or BLOCKED.");
   let gate;
   updateTask(root, id, (t) => {
-    gate = { round: round ?? ((t.gates ?? []).at(-1)?.round ?? 0) + 1, verdict, file, summary, from, at: now(), head };
+    gate = { round: round ?? ((t.gates ?? []).at(-1)?.round ?? 0) + 1, verdict, file, summary, from, at: now(), head, ...(diff ? { diff } : {}) };
     t.gates = [...(t.gates ?? []), gate];
   });
   post(root, id, { kind: "done", text: summary, from, file });
@@ -508,13 +594,15 @@ export function recordGate(root, id, { verdict, round = null, file, summary, fro
 /** One line per task for `bh task list`. */
 export function taskLine(t) {
   const done = t.steps.filter((s) => s.status === "done" || s.status === "skipped").length;
-  return `${t.id}  ${t.status.padEnd(9)} ${t.steps.length ? `${done}/${t.steps.length} steps  ` : ""}${t.title}`;
+  const goalTag = t.mode === "goal" && t.goal ? `[goal ${t.goal.criteria?.filter((c) => c.verdict === "PASS").length ?? 0}/${t.goal.criteria?.length ?? 0}] ` : "";
+  return `${t.id}  ${t.status.padEnd(9)} ${goalTag}${t.steps.length ? `${done}/${t.steps.length} steps  ` : ""}${t.title}`;
 }
 
 /** One line per task for `bh task list --summary`: how far it got, and whether it wants the user. */
 export function summaryLine(s) {
   const marks = [s.running ? "running" : "", s.needsYou ? "needs you" : ""].filter(Boolean).join(", ");
-  return `${s.id}  ${s.status.padEnd(9)} ${s.total ? `${s.done}/${s.total} steps  ` : ""}${s.title}${marks ? `  (${marks})` : ""}`;
+  const goalTag = s.mode === "goal" && s.goal ? `[goal ${s.goal.done}/${s.goal.total} iter ${s.goal.iteration}] ` : "";
+  return `${s.id}  ${s.status.padEnd(9)} ${goalTag}${s.total ? `${s.done}/${s.total} steps  ` : ""}${s.title}${marks ? `  (${marks})` : ""}`;
 }
 
 /** One step as `bh task show` prints it, with its report under it. */

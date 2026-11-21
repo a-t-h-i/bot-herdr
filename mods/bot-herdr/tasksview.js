@@ -2,9 +2,19 @@
 // Zero gpui-kit, gpui-base, herdr, or Intl imports so `node --test` imports and verifies
 // every state transition, filter, grouping, progress model, and terminal lookup directly.
 
-export const DETAIL_TABS = ["steps", "board", "comments", "plan"];
+export const DETAIL_TABS = ["steps", "iterations", "board", "comments", "plan"];
 export const STATUS_CHIPS = ["active", "blocked", "done", "archived"];
 export const BOARD_KINDS = ["all", "contract", "decision", "blocker", "question", "done", "note"];
+export const SETTINGS_GRID_BREAKPOINT = 860;
+export const GOAL_START_PRESETS = [
+  { id: "standard", label: "Start as goal — Standard", hint: "$15 spend cap · relentless verify", maxSpendUsd: 15 },
+  { id: "deep", label: "Start as goal — Deep", hint: "$40 spend cap · extended research", maxSpendUsd: 40 },
+];
+
+/** Responsive column count for Settings → General and Settings → Resilience card grids. */
+export function settingsGridColumns(width) {
+  return Number(width) >= SETTINGS_GRID_BREAKPOINT ? 2 : 1;
+}
 
 const OPEN_STATUSES = ["active", "paused", "backlog"];
 const DONE_STATUSES = ["done", "abandoned"];
@@ -43,10 +53,33 @@ export function taskSummaryFallback(t) {
     ? t.workedMs
     : (Number.isFinite(t?.timeMs) ? t.timeMs : steps.reduce((sum, s) => sum + (Number(s?.timeMs ?? s?.workedMs) || 0), 0));
   const latestGate = normalizeGate(t);
+  const mode = t?.mode === "goal" ? "goal" : "task";
+  const rawCriteria = Array.isArray(t?.goal?.criteria) ? t.goal.criteria : [];
+  const goal = mode === "goal" && t?.goal
+    ? {
+        status: String(t.goal.status ?? "running"),
+        done: Number.isFinite(t.goal.done) ? t.goal.done : rawCriteria.filter((c) => c?.verdict === "PASS").length,
+        total: Number.isFinite(t.goal.total) ? t.goal.total : rawCriteria.length,
+        iteration: Number(t.goal.iteration ?? 0) || 0,
+        maxSpendUsd: Number(t.goal.maxSpendUsd ?? 0) || null,
+        pendingAmendment: Boolean(t.goal.pendingAmendment),
+      }
+    : null;
+  const github = t?.github
+    ? {
+        repo: t.github.repo ?? null,
+        issues: Array.isArray(t.github.issues) ? t.github.issues.map((i) => (typeof i === "object" ? i.number : i)).filter(Boolean) : [],
+        prNumber: t.github.prNumber ?? null,
+        prUrl: t.github.prUrl ?? null,
+      }
+    : null;
   return {
     id: String(t?.id ?? ""),
     title: String(t?.title || t?.id || ""),
     status,
+    mode,
+    goal,
+    github,
     archived: Boolean(t?.archived),
     track: t?.track ?? null,
     plan: t?.plan ?? null,
@@ -58,8 +91,10 @@ export function taskSummaryFallback(t) {
     openComments,
     needsYou: typeof t?.needsYou === "boolean"
       ? t.needsYou
-      : Boolean(status === "paused" || blocked > 0 || openComments > 0 || latestGate?.verdict === "CHANGES_REQUIRED" || latestGate?.verdict === "BLOCKED"),
-    running: typeof t?.running === "boolean" ? t.running : Boolean(status === "active" && (steps.some((s) => s?.status === "active") || !steps.length)),
+      : Boolean(status === "paused" || blocked > 0 || openComments > 0 || latestGate?.verdict === "CHANGES_REQUIRED" || latestGate?.verdict === "BLOCKED" || Boolean(goal?.pendingAmendment) || goal?.status === "paused"),
+    running: typeof t?.running === "boolean"
+      ? t.running
+      : Boolean(status === "active" && (steps.some((s) => s?.status === "active") || !steps.length || goal?.status === "running")),
     activeAgents,
     spendUsd: Number.isFinite(t?.spendUsd) ? t.spendUsd : (Number(t?.usage?.costUsd) || 0),
     workedMs,
@@ -152,6 +187,7 @@ export function allowedActionsFallback(task) {
       pause: Boolean(a.pause),
       resume: Boolean(a.resume),
       done: Boolean(a.done),
+      verify: Boolean(a.verify),
       archive: Boolean(a.archive),
       unarchive: Boolean(a.unarchive),
       delete: Boolean(a.delete),
@@ -159,14 +195,57 @@ export function allowedActionsFallback(task) {
   }
   const status = String(task?.status ?? "backlog");
   const archived = Boolean(task?.archived);
+  const isGoal = task?.mode === "goal";
   return {
     pause: status === "active",
     resume: status === "paused" || status === "backlog",
-    done: status === "active" || status === "paused",
+    done: isGoal
+      ? Boolean((status === "active" || status === "paused") && task?.goal?.status === "reached")
+      : status === "active" || status === "paused",
+    verify: Boolean(isGoal && status !== "done" && status !== "abandoned"),
     archive: !archived && status !== "active",
     unarchive: archived,
     delete: status !== "active",
   };
+}
+
+/** Goal progress view-model for inline row badges and the collapsible pinned DONE criteria strip. */
+export function goalProgressModel(task) {
+  if (task?.mode !== "goal" || !task?.goal) return null;
+  const g = task.goal;
+  const criteria = Array.isArray(g.criteria) ? g.criteria : [];
+  const done = Number.isFinite(g.done) ? g.done : criteria.filter((c) => c?.verdict === "PASS").length;
+  const total = Number.isFinite(g.total) ? g.total : criteria.length;
+  const pct = total > 0 ? Math.max(0, Math.min(100, Math.round((done / total) * 100))) : 0;
+  const status = String(g.status ?? "running");
+  let tone = "accent";
+  if (status === "reached" || (total > 0 && done >= total)) tone = "success";
+  else if (status === "paused" || g.pendingAmendment) tone = "warning";
+  else if (status === "waiting") tone = "info";
+  else if (status === "stopped") tone = "muted";
+  const iteration = Number(g.iteration ?? 0) || 0;
+  return {
+    isGoal: true,
+    status,
+    done,
+    total,
+    pct,
+    iteration,
+    maxSpendUsd: Number(g.maxSpendUsd ?? 0) || null,
+    awaitingQa: Boolean(g.awaitingQa),
+    pendingAmendment: g.pendingAmendment ?? null,
+    tone,
+    label: `${done}/${total} DONE${iteration > 0 ? ` · iter ${iteration}` : ""}`,
+  };
+}
+
+/** Display badge metadata for a single DONE criterion verdict. */
+export function goalCriterionBadge(c) {
+  const v = String(c?.verdict ?? "").toUpperCase();
+  if (v === "PASS") return { icon: "✓", tone: "success", label: "PASS" };
+  if (v === "PENDING") return { icon: "…", tone: "info", label: "PENDING" };
+  if (v === "FAIL") return { icon: "✗", tone: "danger", label: "FAIL" };
+  return { icon: "○", tone: "muted", label: "UNCHECKED" };
 }
 
 /** The status chip a task belongs under: `archived`, `done` (done or abandoned), else `active`. */
@@ -249,8 +328,14 @@ export function detailTabCounts(detail) {
   const done = Number.isFinite(detail?.done) ? detail.done : steps.filter((s) => s?.status === "done" || s?.status === "skipped").length;
   const total = Number.isFinite(detail?.total) ? detail.total : steps.length;
   const comments = Array.isArray(detail?.comments) ? detail.comments : [];
+  const isGoal = detail?.mode === "goal";
+  const iterationsCount = Array.isArray(detail?.iterations)
+    ? detail.iterations.length
+    : Number(detail?.goal?.iteration ?? 0) || 0;
   return {
     stepsText: `${done}/${total}`,
+    isGoal,
+    iterationsCount,
     boardCount: Array.isArray(detail?.board) ? detail.board.length : 0,
     commentsCount: comments.length,
     openCommentsCount: comments.filter((c) => c?.open !== false).length,

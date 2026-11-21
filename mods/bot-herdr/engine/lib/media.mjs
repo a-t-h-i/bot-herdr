@@ -161,6 +161,55 @@ export function preview(file) {
 }
 
 /**
+ * Captures a verification screenshot from a URL, an HTML file, or an existing image file, stores
+ * it at `outFile`, and registers a herdr preview copy under `DATA/previews/`. Degrades gracefully
+ * when no headless browser is installed.
+ */
+export function captureScreenshot({ url = null, htmlFile = null, file = null, outFile, width = WIDTH, height = HEIGHT, browser = null } = {}) {
+  if (file) {
+    if (!IMAGE.test(file) || !existsSync(file)) return { ok: false, error: `Not a valid image file: ${file}` };
+    const dest = outFile || file;
+    if (dest !== file) {
+      ensureDir(join(dest, ".."));
+      copyFileSync(file, dest);
+    }
+    const prev = preview(dest);
+    if (prev.error) return { ok: false, error: prev.error };
+    return { ok: true, file: dest, image: prev.image };
+  }
+  const target = url ? String(url).trim() : htmlFile ? String(htmlFile).trim() : "";
+  if (!target) return { ok: false, error: "Provide --url, --html, or --file for screenshot capture." };
+  if (url && !/^https?:\/\/|^file:\/\//i.test(target)) return { ok: false, error: `Unsupported screenshot URL scheme: ${target}` };
+  if (htmlFile && !existsSync(htmlFile)) return { ok: false, error: `HTML file not found: ${htmlFile}` };
+  const exe = browser ?? findBrowser();
+  if (!exe) {
+    return { ok: false, degraded: true, error: "No Chrome, Edge, Chromium or Brave found for headless screenshot capture. Install one, set BH_BROWSER, or pass --file <existing-image>." };
+  }
+  ensureDir(join(outFile, ".."));
+  const profile = mkdtempSync(join(tmpdir(), "bh-shot-"));
+  try {
+    const isRoot = process.platform === "linux" && process.getuid?.() === 0;
+    const targetUrl = url ? target : pathToFileURL(htmlFile).href;
+    const args = [
+      "--headless=new", "--disable-gpu", "--hide-scrollbars", "--no-first-run", "--no-default-browser-check",
+      "--disable-extensions", "--mute-audio", "--force-device-scale-factor=1", `--user-data-dir=${profile}`,
+      `--window-size=${width},${height}`, `--screenshot=${outFile}`, "--virtual-time-budget=3000",
+      ...(isRoot ? ["--no-sandbox"] : []),
+      targetUrl,
+    ];
+    const r = spawnSync(exe, args, { timeout: 45000, stdio: ["ignore", "ignore", "pipe"], encoding: "utf8", windowsHide: true });
+    if (!existsSync(outFile)) {
+      return { ok: false, error: `Screenshot failed${r.error ? `: ${r.error.message}` : r.stderr ? `: ${String(r.stderr).trim().split("\n").pop()}` : "."}` };
+    }
+    const prev = preview(outFile);
+    if (prev.error) return { ok: false, error: prev.error };
+    return { ok: true, file: outFile, image: prev.image };
+  } finally {
+    rmSync(profile, { recursive: true, force: true });
+  }
+}
+
+/**
  * What the clipboard holds that isn't text: an image (saved as a PNG under pasted/) or files
  * copied in the file manager. Returns { files: [paths] }, empty when it holds neither.
  */

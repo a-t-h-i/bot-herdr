@@ -44,7 +44,8 @@ questions and the user's answers, and the orchestrator's current draft plan.
 - If an answer from the user is vague or conflicts with what you see in the
   repository, say so and ask again.
 - Report what the plan must respect from your seat under Notes: facts from
-  files you read (name them), constraints, risks, what "done" means for you.
+  files you read (name them), constraints, risks, and concrete verifiable
+  `### Done criteria` (`[check]`, `[command]`, `[file]`, `[qa]`) for your domain.
 - When nothing in your seat is open any more, set the status to READY and ask
   nothing.
 

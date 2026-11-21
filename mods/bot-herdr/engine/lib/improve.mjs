@@ -8,11 +8,12 @@
 // .bot-herdr/improve/experiments.jsonl (append-only), state.json
 
 import { spawnSync } from "node:child_process";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { resolveLocalBin, testCommand } from "../scripts/lib/common.mjs";
-import { BH, appendJsonl, newId, now, readJson, readJsonl, store, withLock, writeJson } from "./core.mjs";
+import { BH, DATA, appendJsonl, newId, now, readJson, readJsonl, store, withLock, writeJson } from "./core.mjs";
 import * as K from "./knowledge.mjs";
+import * as S from "./scripts.mjs";
 import * as T from "./tasks.mjs";
 import { runGit } from "./workspace.mjs";
 
@@ -148,6 +149,73 @@ function knowledgeFinding(root) {
   };
 }
 
+function normalizeStepKey(text) {
+  return String(text ?? "")
+    .toLowerCase()
+    .replace(/`[^`]+`/g, (m) => m.slice(1, -1))
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function suggestedScriptName(key) {
+  return key.split(/\s+/).filter((w) => w.length > 2).slice(0, 4).join("_").slice(0, 40) || "repeat_step";
+}
+
+function scriptPromotionFinding(root, rows) {
+  const existing = new Set(S.scripts(root).map((s) => s.name.toLowerCase()));
+  const counts = new Map();
+  for (const r of rows) {
+    const seenInTask = new Set();
+    for (const step of r.task.steps ?? []) {
+      const key = normalizeStepKey(step.title);
+      if (key.length < 12 || seenInTask.has(key)) continue;
+      seenInTask.add(key);
+      const cur = counts.get(key) ?? { key, count: 0, sample: step.title, tasks: [] };
+      cur.count++;
+      cur.tasks.push(r.task.id);
+      counts.set(key, cur);
+    }
+  }
+  const candidates = [...counts.values()]
+    .filter((c) => c.count >= 2 && !existing.has(suggestedScriptName(c.key)))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5)
+    .map((c) => ({ ...c, suggestedName: suggestedScriptName(c.key) }));
+  if (!candidates.length) return null;
+  return {
+    kind: "script_promotion",
+    severity: candidates.some((c) => c.count >= 3) ? "high" : "medium",
+    count: candidates.length,
+    summary: `${candidates.length} repeating task step${candidates.length === 1 ? "" : "s"} can be promoted into reusable shared scripts`,
+    recommendation: "Turn repeating steps into shared scripts (`bh scripts save <file> --name <snake_case>`) so agents invoke them with `bh scripts run` instead of repeating manual work, and replace verbose knowledge prose with a concise script pointer.",
+    candidates,
+    evidence: candidates.map((c) => `"${c.sample}" repeated ${c.count}× (${c.tasks.join(", ")}) → suggested: ${c.suggestedName}`),
+  };
+}
+
+function activeGoalProtectedScripts(root) {
+  const paths = new Set();
+  for (const t of T.listTasks(root)) {
+    if (t.mode !== "goal" || (t.status !== "active" && t.status !== "paused")) continue;
+    const contract = readJson(join(DATA, "goals", `${t.id}.json`), null);
+    for (const rel of Object.keys(contract?.scriptHashes ?? {})) paths.add(String(rel).replace(/\\/g, "/"));
+  }
+  return paths;
+}
+
+function staleScriptsFinding(root) {
+  const audit = S.auditScripts(root, { protectedPaths: activeGoalProtectedScripts(root) });
+  if (!audit.candidates.length) return null;
+  return {
+    kind: "stale_scripts",
+    severity: audit.candidates.some((c) => c.status === "broken") ? "medium" : "low",
+    count: audit.candidates.length,
+    summary: `${audit.candidates.length} project script${audit.candidates.length === 1 ? "" : "s"} look stale, unused, or broken`,
+    recommendation: "Run `bh scripts prune` (or `bh improve prune --dry-run` first) to archive obsolete scripts to `.bot-herdr/scripts/archive/` and strip dead script references from knowledge.",
+    evidence: audit.candidates.slice(0, 5).map((c) => `${c.name} [${c.status}]: ${c.reasons.join("; ")}`),
+  };
+}
+
 const RATCHET = {
   kind: "ratchet",
   severity: "low",
@@ -160,10 +228,29 @@ const RATCHET = {
 export function analyze(root, { window = 10 } = {}) {
   const rows = windowTasks(root, { window });
   const metrics = metricsOf(rows);
-  const found = [qaFinding(rows, metrics), checkFinding(rows, metrics), blockerFinding(rows, metrics), costFinding(rows, metrics), knowledgeFinding(root)]
+  const found = [
+    qaFinding(rows, metrics),
+    checkFinding(rows, metrics),
+    blockerFinding(rows, metrics),
+    costFinding(rows, metrics),
+    knowledgeFinding(root),
+    scriptPromotionFinding(root, rows),
+    staleScriptsFinding(root),
+  ]
     .filter(Boolean)
     .sort((a, b) => SEVERITY[b.severity] - SEVERITY[a.severity] || b.count - a.count);
   return { window, metrics, findings: [...found, { ...RATCHET, count: found.length }] };
+}
+
+/**
+ * Continuous hygiene pass: folds & prunes stale knowledge entries, archives stale/unused/broken
+ * project scripts (never built-ins or active Goal scripts), and cleans dead script refs from knowledge.
+ */
+export function pruneAll(root, { staleDays = 30, dryRun = false, protectedPaths = new Set(), nowMs = Date.now() } = {}) {
+  const scripts = S.pruneScripts(root, { staleDays, dryRun, protectedPaths, nowMs });
+  const archivedNames = scripts.archived.map((a) => a.name);
+  const knowledge = K.foldAll(root, { dryRun, pruneStale: true, extraArchivedScripts: archivedNames });
+  return { dryRun: Boolean(dryRun), knowledge, scripts };
 }
 
 // ── Safety invariants: a hard boundary an improvement can never talk its way past ────────
@@ -185,7 +272,7 @@ export const PROTECTED_FILE_PATTERNS = Object.freeze([
   frozenRule("protected_builtin_scripts", /^\.bot-herdr\/scripts\/(check_changed|run_changed_tests)\.[^/]+$/),
   frozenRule("protected_builtin_scripts", /^mods\/bot-herdr\/engine\/lib\/scripts\.mjs$/),
   frozenRule("protected_builtin_scripts", /^mods\/bot-herdr\/engine\/scripts\/lib\/common\.mjs$/),
-  frozenRule("protected_self_guard", /^mods\/bot-herdr\/engine\/lib\/(improve|workspace)\.mjs$/),
+  frozenRule("protected_self_guard", /^mods\/bot-herdr\/engine\/lib\/(improve|workspace|goal)\.mjs$/),
   frozenRule("protected_self_guard", /^install\.mjs$/),
   frozenRule("protected_person_only", /^mods\/bot-herdr\/engine\/bh\.mjs$/),
   frozenRule("protected_access_control", /^mods\/bot-herdr\/engine\/lib\/(core|runner|resilience|agent)\.mjs$/),
@@ -411,7 +498,26 @@ function alive(pid) {
   }
 }
 
+/** Any live Goal loop driver claim in this project (blocks bh improve apply/rollback while running). */
+function activeGoalDriver(root) {
+  const dir = store(root, "goals");
+  if (!existsSync(dir)) return null;
+  let files = [];
+  try {
+    files = readdirSync(dir).filter((f) => f.endsWith(".claim.json"));
+  } catch {
+    return null;
+  }
+  for (const name of files) {
+    const claim = readJson(join(dir, name), null);
+    if (claim?.pid && alive(claim.pid)) return claim;
+  }
+  return null;
+}
+
 function exclusive(root, fn) {
+  const goal = activeGoalDriver(root);
+  if (goal) throw new Error(`Goal ${goal.taskId} is actively running (pid ${goal.pid}, since ${goal.at}); pause or finish the Goal before running bh improve apply/rollback.`);
   const file = claimFile(root);
   const token = newId("run");
   withLock(store(root, "improve", "apply"), () => {

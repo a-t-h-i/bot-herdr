@@ -63,7 +63,7 @@ writeFileSync(holderScript, [
 ].join("\n"));
 
 /** One summary row's fields, exactly: nothing heavy may ride along on the 4 s poll. */
-const SUMMARY_KEYS = ["activeAgents", "archived", "blocked", "created", "done", "id", "latestGate", "needsYou", "openComments", "plan", "running", "spendUsd", "status", "title", "total", "track", "updated", "workedMs"];
+const SUMMARY_KEYS = ["activeAgents", "archived", "blocked", "created", "done", "github", "goal", "id", "latestGate", "mode", "needsYou", "openComments", "plan", "running", "spendUsd", "status", "title", "total", "track", "updated", "workedMs"];
 
 test("bh task list --summary: light rows with progress, agents, cost, time and the last gate", async () => {
   const T = await lib("lib/tasks.mjs");
@@ -161,7 +161,7 @@ test("bh task show --json: board, step events, checks, gates and the actions eac
   T.recordGate(PROJECT, active.id, { verdict: "PASS", round: 1, file: "reports/pass.md", summary: "fine", from: "qa" });
 
   const shown = json(["task", "show", active.id]);
-  assert.deepEqual(shown.allowedActions, { pause: true, resume: false, done: true, archive: false, unarchive: false, delete: false });
+  assert.deepEqual(shown.allowedActions, { pause: true, resume: false, done: true, verify: false, archive: false, unarchive: false, delete: false });
   assert.deepEqual(shown.board.map((e) => `${e.kind}:${e.text}`), ["contract:Steps carry their events", "done:fine"]);
   assert.equal(shown.checks.length, 1);
   assert.deepEqual([shown.checks[0].command, shown.checks[0].exit, shown.checks[0].counts.pass], ["bh check", 0, 2]);
@@ -173,11 +173,11 @@ test("bh task show --json: board, step events, checks, gates and the actions eac
   assert.equal(shown.steps[0].agentName, "dev");
 
   const paused = json(["task", "show", make("Show a paused task", "paused").id]);
-  assert.deepEqual(paused.allowedActions, { pause: false, resume: true, done: true, archive: true, unarchive: false, delete: true });
+  assert.deepEqual(paused.allowedActions, { pause: false, resume: true, done: true, verify: false, archive: true, unarchive: false, delete: true });
   const done = json(["task", "show", make("Show a done task", "done").id]);
-  assert.deepEqual(done.allowedActions, { pause: false, resume: false, done: false, archive: true, unarchive: false, delete: true });
+  assert.deepEqual(done.allowedActions, { pause: false, resume: false, done: false, verify: false, archive: true, unarchive: false, delete: true });
   const archived = json(["task", "show", make("Show an archived task", "done", true).id]);
-  assert.deepEqual(archived.allowedActions, { pause: false, resume: false, done: false, archive: false, unarchive: true, delete: true });
+  assert.deepEqual(archived.allowedActions, { pause: false, resume: false, done: false, verify: false, archive: false, unarchive: true, delete: true });
   assert.deepEqual(archived.checks, [], "a task with no check run still carries the field");
 });
 

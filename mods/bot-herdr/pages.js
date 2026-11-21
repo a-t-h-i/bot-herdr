@@ -59,6 +59,14 @@ export function sendFromChat(text) {
 /** Asks the Orchestrator to make an agreed plan a task and start it (Plans page and plan sheet). */
 export const startPlanTask = (p) => sendFromChat(`The plan ${p.id} ("${p.title}") is agreed: make it a task (bh plan task ${p.id}) and start it.`);
 
+/** Asks the Orchestrator to start an agreed Ready plan as a relentless Goal loop with a spend ceiling. */
+export const startPlanGoal = (p, { maxSpendUsd = 15 } = {}) =>
+  sendFromChat(`The plan ${p.id} ("${p.title}") is agreed as a Goal: start it with \`bh plan task ${p.id} --as goal --max-spend ${maxSpendUsd}\` and run the verification loop until all DONE criteria pass.`);
+
+/** Wakes the Orchestrator when the user clicks Resume on a paused Goal in the Tasks workbench. */
+export const wakeGoal = (t) =>
+  sendFromChat(`Resume goal ${t.id} ("${t.title ?? t.id}"): check \`bh goal status ${t.id}\` and continue the verification loop.`);
+
 /** We are about to move herdr's focus (a new tab, another space): keep the Chat page up. */
 export function hold() {
   setShared(HOLD, Date.now());

@@ -16,9 +16,9 @@ import { settings, shared, terminals } from "herdr";
 import { SIZE, ICON, TYPE, LINE, SPACE, CONTROL, CHIP, GLYPH, MARK, DOT, PIP, HAIR, MOTION, mix, agentHue, agentInk, agentInkOn, isLight, clickable, pressable, focusable } from "./look.js";
 import { actionButton } from "./button.js";
 import { segmented, stateView, pill } from "./switch.js";
-import { commentRow, openFirst, openPlan, sectionLabel, COMMENT_LINKS, arm, armed } from "./plandoc.js";
+import { commentRow, openFirst, openPlan, sectionLabel, COMMENT_LINKS, arm, armed, startMenuTrigger, startMenuPanel, issueChips } from "./plandoc.js";
 import { colors } from "./theme.js";
-import { activePage, openTerminal, sendFromChat, showPage, startPlanTask, OPEN_TASK } from "./pages.js";
+import { activePage, openTerminal, sendFromChat, showPage, startPlanTask, wakeGoal, OPEN_TASK } from "./pages.js";
 import { ROSTER_KEY, roster, slug } from "./roster.js";
 import { bh, bhJson, enc, projectDir } from "./bh.js";
 import { outline, notesOn } from "./doc.js";
@@ -44,6 +44,8 @@ import {
   filterTasks,
   groupTasks,
   progressModel,
+  goalProgressModel,
+  goalCriterionBadge,
   gateBadge,
   allowedActionsFallback,
   stepActions,
@@ -362,6 +364,10 @@ export class Work {
     this.pendingDetailId = null;
     this.detailReqSeq = 0;
     this.plans = null;
+    this.planStartOpen = false;
+    this.goalStripCollapsed = false;
+    this.goalVerifying = false;
+    this.expandedCriteria = new Set();
     this.kinds = null; // knowledge files: [{ agent, entries, chars, over }]
     this.archived = false;
     this.taskChip = "active"; // active | blocked | done | archived
@@ -1212,9 +1218,11 @@ export class Work {
     const on = this.opened === t.id;
     const finished = t.status === "done" || t.status === "abandoned";
     const tone = t.status === "abandoned" ? c.faint : finished ? c.muted : c.ink;
-    const prog = progressModel(t);
+    const goalProg = goalProgressModel(t);
+    const prog = goalProg ?? progressModel(t);
     const cost = formatUsd(t.spendUsd);
     const worked = formatWorked(t.workedMs);
+    const prNum = t.github?.prNumber ?? null;
     return clickable(
       v_flex()
         .flex_none()
@@ -1227,13 +1235,15 @@ export class Work {
         .opacity(this.rowsIn === false ? 0 : 1)
         .transition("opacity", { ...MOTION.row, delay: Math.min(i, 8) * MOTION.stagger })
         .on_click((_e, cx) => this.openTask(t.id, cx))
-        .child(h_flex().gap(SPACE[3]).items_center()
+        .child(h_flex().gap(SPACE[2]).items_center()
           .child(statusMark(c, t.blocked > 0 && t.status === "active" ? "blocked" : t.status, GLYPH.lg))
-          .child(div().flex_1().min_w(0).truncate().text_size(TYPE.md).font_medium().text_color(tone).child(t.title || t.id)))
+          .child(div().flex_1().min_w(0).truncate().text_size(TYPE.md).font_medium().text_color(tone).child(t.title || t.id))
+          .when(Boolean(goalProg), (el) => el.child(pill(c, "Goal", toneColor(c, goalProg.tone))))
+          .when(Boolean(prNum), (el) => el.child(pill(c, `PR #${prNum}`, c.info))))
         .child(h_flex().pl(GLYPH.lg + SPACE[3]).gap(SPACE[2]).items_center().text_size(TYPE.xs).text_color(c.muted)
           .when(prog.total > 0, (el) => el.child(progressBar(c, prog)))
           .when(t.blocked > 0, (el) => el.child(div().flex_none().font_medium().text_color(c.warning).child("blocked")))
-          .when(!t.blocked && t.needsYou, (el) => el.child(div().flex_none().font_medium().text_color(c.accent).child("needs you")))
+          .when(!t.blocked && t.needsYou, (el) => el.child(div().flex_none().font_medium().text_color(c.accent).child(goalProg?.pendingAmendment ? "amendment" : "needs you")))
           .child(div().flex_none().child(prog.total > 0 ? prog.label : age(t.updated ?? t.created)))
           .when(Boolean(cost), (el) => el.child(div().flex_none().child(`· ${cost}`)))
           .when(Boolean(worked), (el) => el.child(div().flex_none().child(`· ${worked}`)))),
@@ -1243,7 +1253,7 @@ export class Work {
     );
   }
 
-  /** Right detail pane: fixed header + detail tabs, ONE scrollable tab body, and foldable composer at foot. */
+  /** Right detail pane: fixed header + collapsible Goal DONE strip + detail tabs + ONE scrollable tab body + foldable composer. */
   taskPane(c, open, { width, height, narrow }) {
     if (!open) return this.pickPrompt(c, width, height);
     const detail = this.taskDetailId === open.id && this.taskDetail ? this.taskDetail : open;
@@ -1262,6 +1272,7 @@ export class Work {
         cx.notify();
       }))))
       .child(this.taskDetailHead(c, detail))
+      .when(detail.mode === "goal" && Boolean(detail.goal), (el) => el.child(this.goalCriteriaStrip(c, detail)))
       .child(this.taskDetailTabs(c, detail))
       .child(v_flex()
         .id("bh-task-scroll")
@@ -1289,10 +1300,14 @@ export class Work {
       .child(div().max_w(320).text_center().text_size(TYPE.md).text_color(c.muted).child("Choose a task to see its steps, board and comments."));
   }
 
-  /** Fixed detail header: title + allowed actions, meta line with status/QA gate/branch/usage, collapsible Details. */
+  /** Fixed detail header: title + allowed actions, meta line with status/Goal/PR/QA gate/branch/usage, collapsible Details. */
   taskDetailHead(c, t) {
     const open = this.descOpen?.has(`details:${t.id}`);
     const gate = gateBadge(t);
+    const goalProg = goalProgressModel(t);
+    const issues = issueChips(c, t.github?.issues);
+    const prNum = t.github?.prNumber ?? null;
+    const prUrl = t.github?.prUrl ?? null;
     const usage = usageText(t.usage);
     const worked = formatWorked(t.timeMs ?? t.workedMs);
     const metrics = usage || [formatUsd(t.spendUsd), worked].filter(Boolean).join(" · ");
@@ -1309,7 +1324,15 @@ export class Work {
         .child(this.taskActions(c, t)))
       .child(h_flex().flex_wrap().gap(SPACE[2]).items_center().text_size(TYPE.sm).text_color(c.muted)
         .child(pill(c, t.status ?? "backlog", statusTone(c, t.status), { pulse: t.status === "active" }))
+        .when(Boolean(goalProg), (el) => el.child(pill(c, `Goal · ${goalProg.status}`, toneColor(c, goalProg.tone))))
         .when(Boolean(gate), (el) => el.child(pill(c, gate.label, toneColor(c, gate.tone))))
+        .when(Boolean(issues), (el) => el.child(issues))
+        .when(Boolean(prNum), (el) => el.child(prUrl
+          ? clickable(pill(c, `PR #${prNum}`, c.info).on_click((_e, cx) => {
+            cx.stop_propagation();
+            openLink(prUrl);
+          }), c, `bh-task-pr-${t.id}`)
+          : pill(c, `PR #${prNum}`, c.info)))
         .when(Boolean(t.track), (el) => el.child(div().child(`${t.track} track`)))
         .when(Boolean(t.git?.branch), (el) => el.child(div().child(`· branch ${t.git.branch}`)))
         .when(Boolean(metrics), (el) => el.child(div().child(`· ${metrics}`)))
@@ -1332,18 +1355,45 @@ export class Work {
       .when(acts.delete, (el) => el.child(this.taskDelete(c, t)));
   }
 
-  /** Pause: `bh task status <id> paused --if-updated <updated>`. */
+  /** Pause: pauses a task, or for a Goal runs `bh goal pause` so goal.status stays in sync. */
   pauseButton(c, t) {
-    return actionButton(c, `bh-pause-${t.id}`, "Pause", (_e, cx) => this.actTask(["task", "status", t.id, "paused"], cx, (r, cx) => {
-      if (r.code === 0) this.taskComposer.say(`Paused ${t.title ?? t.id}`, cx);
-    }, t.updated), { icon: "pause" });
+    return actionButton(c, `bh-pause-${t.id}`, "Pause", (_e, cx) => {
+      if (t.mode === "goal") {
+        this.run(["goal", "pause", t.id, "--json"], cx, (r, cx) => {
+          if (r.code !== 0) {
+            this.taskActionError = firstLine(r) || "Couldn't pause goal.";
+            return;
+          }
+          this.taskActionError = null;
+          this.taskComposer.say(`Paused Goal ${t.title ?? t.id}`, cx);
+        });
+        return;
+      }
+      this.actTask(["task", "status", t.id, "paused"], cx, (r, cx) => {
+        if (r.code === 0) this.taskComposer.say(`Paused ${t.title ?? t.id}`, cx);
+      }, t.updated);
+    }, { icon: "pause" });
   }
 
-  /** Resume: `bh task status <id> active --if-updated <updated>`. */
+  /** Resume: resumes a task, or for a Goal runs `bh goal resume` and wakes the Orchestrator. */
   resumeButton(c, t) {
-    return actionButton(c, `bh-resume-${t.id}`, "Resume", (_e, cx) => this.actTask(["task", "status", t.id, "active"], cx, (r, cx) => {
-      if (r.code === 0) this.taskComposer.say(`Resumed ${t.title ?? t.id}`, cx);
-    }, t.updated), { icon: "play" });
+    return actionButton(c, `bh-resume-${t.id}`, "Resume", (_e, cx) => {
+      if (t.mode === "goal") {
+        this.run(["goal", "resume", t.id, "--json"], cx, (r, cx) => {
+          if (r.code !== 0) {
+            this.taskActionError = firstLine(r) || "Couldn't resume goal.";
+            return;
+          }
+          this.taskActionError = null;
+          this.taskComposer.say(`Resumed Goal ${t.title ?? t.id}`, cx);
+          wakeGoal(t);
+        });
+        return;
+      }
+      this.actTask(["task", "status", t.id, "active"], cx, (r, cx) => {
+        if (r.code === 0) this.taskComposer.say(`Resumed ${t.title ?? t.id}`, cx);
+      }, t.updated);
+    }, { icon: "play" });
   }
 
   /** Mark done: `bh task status <id> done --if-updated <updated>`. */
@@ -1463,12 +1513,138 @@ export class Work {
       .when(long, (el) => el.child(textLink(c, `bh-task-req-more-${t.id}`, open ? "Show less" : "Show more", (_e, cx) => this.toggleDesc(key, cx), c.accent)));
   }
 
-  /** Detail tabs (`Steps`, `Board`, `Comments`, `Full plan`) + Expand/Collapse all on Steps tab. */
+  /** Runs `bh goal verify <id>` on demand from the pinned DONE criteria strip. */
+  verifyGoalNow(t, cx) {
+    if (this.goalVerifying) return;
+    this.goalVerifying = true;
+    cx.notify();
+    this.run(["goal", "verify", t.id, "--json"], cx, (r, cx) => {
+      this.goalVerifying = false;
+      this.taskActionError = null;
+      if (r.code === 0) this.taskComposer.say(`All DONE criteria verified for ${t.title ?? t.id}`, cx);
+      else this.taskComposer.say(`Goal verify finished with failing checks on ${t.title ?? t.id}`, cx, "warning");
+      this.loadTaskDetail(t.id, this.dir ?? projectDir(), cx);
+    });
+  }
+
+  /** Approves or rejects an agent-proposed DONE criterion amendment (human action in UI). */
+  resolveAmendment(t, approve, cx) {
+    const cmd = approve ? "approve-amend" : "reject-amend";
+    this.run(["goal", cmd, t.id, "--json"], cx, (r, cx) => {
+      if (r.code !== 0) {
+        this.taskActionError = firstLine(r) || `Couldn't ${approve ? "approve" : "reject"} amendment.`;
+        return;
+      }
+      this.taskActionError = null;
+      this.taskComposer.say(approve ? "Amendment approved; Goal resumed." : "Amendment rejected; original DONE contract kept and Goal resumed.", cx);
+      wakeGoal(t);
+      this.loadTaskDetail(t.id, this.dir ?? projectDir(), cx);
+    });
+  }
+
+  /** Collapsible pinned DONE criteria strip inside a Goal's own detail pane (zero global banners). */
+  goalCriteriaStrip(c, t) {
+    const g = t.goal;
+    const prog = goalProgressModel(t);
+    const criteria = Array.isArray(g?.criteria) ? g.criteria : [];
+    const spend = formatUsd(t.spendUsd ?? t.usage?.costUsd) || "$0.00";
+    const cap = g?.maxSpendUsd ? `$${g.maxSpendUsd}` : "∞";
+    const amd = g?.pendingAmendment ?? null;
+    const collapsed = this.goalStripCollapsed;
+    return v_flex()
+      .id(`bh-goal-strip-${t.id}`)
+      .flex_none()
+      .mt(SPACE[3])
+      .p(SPACE[3])
+      .gap(SPACE[2])
+      .rounded(SIZE.control)
+      .bg(c.fill)
+      .border_1()
+      .border_color(amd ? alpha(c.warning, 0.55) : c.edge)
+      .child(h_flex().gap(SPACE[2]).items_center().justify_between()
+        .child(h_flex().flex_1().min_w(0).gap(SPACE[2]).items_center()
+          .child(div().text_size(TYPE.sm).font_semibold().text_color(c.ink).child(`DONE Criteria · ${prog?.done ?? 0}/${prog?.total ?? criteria.length}`))
+          .child(div().text_size(TYPE.xs).text_color(c.muted).child(`iter ${g?.iteration ?? 0} · ${spend}/${cap}`)))
+        .child(h_flex().flex_none().gap(SPACE[2]).items_center()
+          .when(t.status !== "done" && t.status !== "abandoned", (el) => el.child(actionButton(
+            c,
+            `bh-goal-verify-${t.id}`,
+            this.goalVerifying ? "Verifying…" : "Verify now",
+            (_e, cx) => this.verifyGoalNow(t, cx),
+            { icon: "refresh-cw", tone: "secondary", disabled: this.goalVerifying },
+          )))
+          .child(textLink(c, `bh-goal-strip-toggle-${t.id}`, collapsed ? "Show ▾" : "Hide ▴", (_e, cx) => {
+            this.goalStripCollapsed = !this.goalStripCollapsed;
+            cx.notify();
+          }, c.muted))))
+      .when(Boolean(amd), (el) => el.child(
+        v_flex()
+          .p(SPACE[2])
+          .gap(SPACE[2])
+          .rounded(SIZE.nested)
+          .bg(alpha(c.warning, 0.1))
+          .border_1()
+          .border_color(alpha(c.warning, 0.35))
+          .child(div().text_size(TYPE.xs).font_semibold().text_color(c.warning)
+            .child(`Proposed amendment (${amd.action}${amd.criterionId ? ` ${amd.criterionId}` : ""}): ${amd.text || "(drop)"}`))
+          .child(div().text_size(TYPE.xs).text_color(c.muted).child(`Reason: ${amd.reason || "—"}`))
+          .child(h_flex().gap(SPACE[2]).items_center()
+            .child(actionButton(c, `bh-goal-amd-approve-${t.id}`, "Approve", (_e, cx) => this.resolveAmendment(t, true, cx), { tone: "primary" }))
+            .child(actionButton(c, `bh-goal-amd-reject-${t.id}`, "Reject", (_e, cx) => this.resolveAmendment(t, false, cx), { tone: "danger" }))),
+      ))
+      .when(!collapsed && criteria.length > 0, (el) => el.child(
+        v_flex().gap(SPACE[1]).children(criteria.map((cr) => {
+          const b = goalCriterionBadge(cr);
+          const key = `${t.id}:${cr.id}`;
+          const expanded = this.expandedCriteria.has(key);
+          const hasLog = Boolean(cr.evidence);
+          return v_flex()
+            .gap(1)
+            .child(clickable(
+              h_flex()
+                .px(SPACE[2])
+                .py(SPACE[1])
+                .gap(SPACE[2])
+                .items_center()
+                .rounded(SIZE.nested)
+                .hover((s) => s.bg(c.hover))
+                .on_click((_e, cx) => {
+                  if (!hasLog) return;
+                  if (this.expandedCriteria.has(key)) this.expandedCriteria.delete(key);
+                  else this.expandedCriteria.add(key);
+                  cx.notify();
+                })
+                .child(div().flex_none().w(14).text_size(TYPE.xs).font_semibold().text_color(toneColor(c, b.tone)).child(b.icon))
+                .child(div().flex_none().px(SPACE[1]).rounded(SIZE.nested).bg(c.well).text_size(TYPE.xs).text_color(c.muted).child(cr.kind))
+                .child(div().flex_1().min_w(0).truncate().text_size(TYPE.sm).text_color(c.ink).child(cr.text))
+                .when(hasLog, (el2) => el2.child(div().flex_none().text_size(TYPE.xs).text_color(c.faint).child(expanded ? "▴" : "▾"))),
+              c,
+              `bh-goal-cr-${t.id}-${cr.id}`,
+            ))
+            .when(expanded && hasLog, (el2) => el2.child(
+              div()
+                .ml(SPACE[5])
+                .px(SPACE[2])
+                .py(SPACE[1])
+                .rounded(SIZE.nested)
+                .bg(c.well)
+                .text_size(TYPE.xs)
+                .text_color(b.tone === "danger" ? c.danger : c.muted)
+                .child(cr.evidence),
+            ));
+        })),
+      ));
+  }
+
+  /** Detail tabs (`Steps`, `Iterations` for Goals, `Board`, `Comments`, `Full plan`) + Expand/Collapse all on Steps tab. */
   taskDetailTabs(c, t) {
     const counts = detailTabCounts(t);
-    const activeTab = this.detailTab === "plan" && !counts.hasPlan ? "steps" : this.detailTab;
+    const activeTab = (this.detailTab === "plan" && !counts.hasPlan) || (this.detailTab === "iterations" && !counts.isGoal)
+      ? "steps"
+      : this.detailTab;
     const items = [
       { id: "steps", label: "Steps", count: counts.stepsText, on: activeTab === "steps" },
+      ...(counts.isGoal ? [{ id: "iterations", label: "Iterations", count: counts.iterationsCount || null, on: activeTab === "iterations" }] : []),
       { id: "board", label: "Board", count: counts.boardCount || null, on: activeTab === "board" },
       { id: "comments", label: "Comments", count: counts.openCommentsCount || counts.commentsCount || null, on: activeTab === "comments" },
       ...(counts.hasPlan ? [{ id: "plan", label: "Full plan", on: activeTab === "plan" }] : []),
@@ -1503,10 +1679,46 @@ export class Work {
     if (loadingDetail && this.detailTab !== "plan") {
       return stateView(c, { id: "bh-task-detail-loading", title: "Loading task details…", loading: true });
     }
+    if (this.detailTab === "iterations" && t.mode === "goal") return this.taskIterationsTab(c, t);
     if (this.detailTab === "board") return this.taskBoardTab(c, t);
     if (this.detailTab === "comments") return this.taskCommentsTab(c, t);
     if (this.detailTab === "plan" && t.plan) return this.taskPlanTab(c, t);
     return this.taskStepsTab(c, t);
+  }
+
+  /** Iterations tab: Gap Ledger history for Goal runs (newest first, showing ratchet reverts & lessons). */
+  taskIterationsTab(c, t) {
+    const rows = Array.isArray(t.iterations) ? [...t.iterations].reverse() : [];
+    if (!rows.length) return mutedLine(c, "No verification iterations yet. Click Verify now or let the Goal loop run.");
+    return v_flex()
+      .gap(SPACE[2])
+      .children(rows.map((r) => {
+        const pass = r.verdict === "PASS";
+        const spend = formatUsd(r.spendUsd) || "$0.00";
+        const passed = Array.isArray(r.passed) ? r.passed : [];
+        const failed = Array.isArray(r.failed) ? r.failed : [];
+        return v_flex()
+          .id(`bh-goal-iter-${t.id}-${r.n}`)
+          .p(SPACE[3])
+          .gap(SPACE[2])
+          .rounded(SIZE.control)
+          .bg(c.fill)
+          .border_1()
+          .border_color(r.reverted ? alpha(c.warning, 0.45) : c.edge)
+          .child(h_flex().gap(SPACE[2]).items_center().justify_between()
+            .child(h_flex().gap(SPACE[2]).items_center()
+              .child(div().text_size(TYPE.sm).font_semibold().text_color(c.ink).child(`Iteration #${r.n}`))
+              .child(pill(c, r.verdict || "FAIL", pass ? c.success : c.danger))
+              .when(Boolean(r.improved), (el) => el.child(pill(c, "Ratchet ↑", c.success)))
+              .when(Boolean(r.reverted), (el) => el.child(pill(c, "Reverted to best", c.warning)))
+              .when(Boolean(r.oscillating), (el) => el.child(pill(c, "Oscillating", c.warning))))
+            .child(div().text_size(TYPE.xs).text_color(c.faint).child(`${spend}${r.at ? ` · ${boardAge(r.at)}` : ""}`)))
+          .child(div().text_size(TYPE.xs).text_color(c.muted)
+            .child(`Passed: ${passed.join(", ") || "none"} · Failed: ${failed.join(", ") || "none"}`))
+          .when(Boolean(r.hypothesis), (el) => el.child(div().text_size(TYPE.xs).text_color(c.muted).child(`Hypothesis: ${r.hypothesis}`)))
+          .when(Boolean(r.lesson), (el) => el.child(div().text_size(TYPE.xs).text_color(r.reverted ? c.warning : c.ink).child(`Lesson: ${r.lesson}`)))
+          .when(Boolean(r.bannedApproach), (el) => el.child(div().text_size(TYPE.xs).text_color(c.danger).child(`Banned approach: ${r.bannedApproach}`)));
+      }));
   }
 
   /** Steps tab: interactive expandable step cards with live terminals, timeline events, and transitions. */
@@ -1874,6 +2086,10 @@ export class Work {
 
   /** A press on the conversation folds the box to its slim bar; a click on the bar or typing grows it back, draft intact. */
   foldPlanBox(cx) {
+    if (this.planStartOpen) {
+      this.planStartOpen = false;
+      cx.notify();
+    }
     if (this.commenting) return; // an open comment box takes the press
     this.planComposer.expanded = false;
     this.handle.focus(); // the text box is not drawn while folded: typing comes here
@@ -1962,13 +2178,33 @@ export class Work {
         .child(this.planComposer.render(this.cx, w, this.height)));
   }
 
-  /** The plan's title in the heading size, with its status pill on the same line. */
+  /** The plan's title in the heading size, with bundled issue chips, status pill, and Compact Start ▾ menu. */
   planTitle(c, p) {
     const status = p.status ?? "grilling";
-    return h_flex().flex_none().gap(SPACE[3]).items_center()
-      .child(div().flex_1().min_w(0).truncate().text_size(TYPE.lg).font_semibold().child(p.title || p.idea || p.id))
-      .child(pill(c, PLAN_STATUS[status]?.label ?? status, planTone(c, status), { pulse: status === "grilling" }))
-      .when(status === "ready" && !p.task, (el) => el.child(actionButton(c, "bh-plan-start-" + p.id, "Start task", () => startPlanTask(p), { tone: "primary", icon: "play" })));
+    const ready = status === "ready" && !p.task;
+    const chips = issueChips(c, p.issues);
+    return v_flex()
+      .flex_none()
+      .gap(SPACE[2])
+      .child(h_flex().flex_none().gap(SPACE[3]).items_center()
+        .child(div().flex_1().min_w(0).truncate().text_size(TYPE.lg).font_semibold().child(p.title || p.idea || p.id))
+        .when(Boolean(chips), (el) => el.child(chips))
+        .child(pill(c, PLAN_STATUS[status]?.label ?? status, planTone(c, status), { pulse: status === "grilling" }))
+        .when(ready, (el) => el.child(startMenuTrigger(c, {
+          open: this.planStartOpen,
+          idPrefix: `bh-plan-start-${p.id}`,
+          onToggle: (cx) => {
+            this.planStartOpen = !this.planStartOpen;
+            cx.notify();
+          },
+        }))))
+      .when(ready && this.planStartOpen, (el) => el.child(startMenuPanel(c, p, {
+        idPrefix: `bh-plan-start-${p.id}`,
+        onClose: (cx) => {
+          this.planStartOpen = false;
+          cx.notify();
+        },
+      })));
   }
 
   /** The tab on the box's top edge that opens the plan as a sheet: it tucks into the box, then the sheet slides in. */

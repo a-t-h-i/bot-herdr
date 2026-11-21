@@ -5,13 +5,100 @@
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, TextareaState, Textarea, TextView } from "gpui-base";
 import { props, settings, closeOverlay, openOverlay } from "herdr";
-import { SIZE, ICON, TYPE, LINE, SPACE, PIP, DOT, CHIP, HAIR, GLYPH, SCRIM, MOTION, isLight, clickable } from "./look.js";
+import { SIZE, ICON, TYPE, LINE, SPACE, CONTROL, PIP, DOT, CHIP, HAIR, GLYPH, SCRIM, MOTION, isLight, clickable } from "./look.js";
 import { actionButton } from "./button.js";
 import { alpha } from "./working.js";
 import { colors } from "./theme.js";
 import { blocks } from "./doc.js";
 import { bh, enc, projectDir } from "./bh.js";
-import { sendFromChat, startPlanTask } from "./pages.js";
+import { sendFromChat, startPlanGoal, startPlanTask } from "./pages.js";
+import { GOAL_START_PRESETS } from "./tasksview.js";
+
+/** Compact `#12` chips for bundled GitHub issues on a plan or task. */
+export function issueChips(c, issues) {
+  const list = Array.isArray(issues) ? issues : [];
+  if (!list.length) return null;
+  return h_flex()
+    .flex_none()
+    .flex_wrap()
+    .gap(SPACE[1])
+    .items_center()
+    .children(list.slice(0, 6).map((item) => {
+      const n = typeof item === "object" ? item.number : item;
+      return div()
+        .px(SPACE[2])
+        .py(1)
+        .rounded_full()
+        .bg(alpha(c.info, 0.14))
+        .text_size(TYPE.xs)
+        .font_medium()
+        .text_color(c.info)
+        .child(`#${n}`);
+    }));
+}
+
+/** Trigger button for the Compact `Start ▾` menu on Ready plans. */
+export function startMenuTrigger(c, { open, onToggle, idPrefix = "bh-plan-start" }) {
+  return actionButton(c, `${idPrefix}-btn`, open ? "Start ▴" : "Start ▾", (e, cx) => {
+    cx.stop_propagation();
+    onToggle(cx);
+  }, { tone: "primary", icon: "play" });
+}
+
+/**
+ * Compact Start menu panel rendered cleanly in flow (zero GPUI z-order or overflow clipping):
+ * offers Goal Standard ($15), Goal Deep ($40), and Simple task.
+ */
+export function startMenuPanel(c, p, { onClose, idPrefix = "bh-plan-start" }) {
+  const criteriaCount = Array.isArray(p?.goal?.criteria) ? p.goal.criteria.length : 0;
+  const hasCriteria = criteriaCount > 0;
+  const menuRow = (id, title, hint, onClick, { disabled = false, badge = null } = {}) => {
+    const row = v_flex()
+      .px(SPACE[3])
+      .py(SPACE[2])
+      .gap(1)
+      .rounded(SIZE.nested)
+      .when(disabled, (el) => el.opacity(0.45))
+      .when(!disabled, (el) => el.hover((s) => s.bg(c.hover)).on_click((e, cx) => {
+        cx.stop_propagation();
+        onClose(cx);
+        onClick(e, cx);
+      }))
+      .child(h_flex().gap(SPACE[2]).items_center().justify_between()
+        .child(div().text_size(TYPE.sm).font_medium().text_color(c.ink).child(title))
+        .when(Boolean(badge), (el) => el.child(div().px(SPACE[2]).rounded_full().bg(alpha(c.accent, 0.14)).text_size(TYPE.xs).font_medium().text_color(c.accent).child(badge))))
+      .child(div().text_size(TYPE.xs).text_color(c.muted).child(hint));
+    return disabled ? row : clickable(row, c, id);
+  };
+  return h_flex()
+    .flex_none()
+    .justify_end()
+    .child(v_flex()
+      .id(`${idPrefix}-menu`)
+      .w(288)
+      .p(SPACE[2])
+      .gap(SPACE[1])
+      .rounded(SIZE.control)
+      .bg(c.fill)
+      .border_1()
+      .border_color(alpha(c.accent, 0.4))
+      .shadow_md()
+      .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+      .children(GOAL_START_PRESETS.map((preset) => menuRow(
+        `${idPrefix}-goal-${preset.id}`,
+        preset.label,
+        hasCriteria ? `${preset.hint} · ${criteriaCount} criteria` : "Add ### Done criteria to start as a Goal",
+        () => startPlanGoal(p, { maxSpendUsd: preset.maxSpendUsd }),
+        { disabled: !hasCriteria, badge: `$${preset.maxSpendUsd}` },
+      )))
+      .child(div().h(HAIR).my(SPACE[1]).bg(c.edge))
+      .child(menuRow(
+        `${idPrefix}-simple`,
+        "Start as simple task",
+        "Single-pass task from the plan's steps",
+        () => startPlanTask(p),
+      )));
+}
 
 /** How long a two-step action (Discard, Delete) waits for its second click. */
 export const CONFIRM_MS = 5000;
@@ -108,6 +195,7 @@ export class PlanDoc {
     this.commenting = null; // { line, edit: comment id | null }
     this.focusing = false; // the comment's text area has the keyboard: its edge is the accent
     this.armed = null; // Discard, once clicked, waits for a second click
+    this.startOpen = false; // Compact Start ▾ menu popover
     this.problem = null;
     this.hoverLine = null; // the draft line under the pointer
     this.in = false; // the sheet has slid in (the first frame draws it off the right edge)
@@ -185,6 +273,10 @@ export class PlanDoc {
   /** A click on the page behind the sheet: an empty comment box goes first, then the sheet; a box
    *  with text stays, so a stray click never throws away what was typed. */
   scrimClick(cx) {
+    if (this.startOpen) {
+      this.startOpen = false;
+      return cx.notify();
+    }
     if (!this.commenting) return this.closeSelf(cx);
     if (!this.inline.value().trim()) this.cancelComment(cx);
   }
@@ -220,7 +312,10 @@ export class PlanDoc {
 
   onKey(e, cx) {
     if (e.key !== "escape") return;
-    if (this.commenting) this.cancelComment(cx);
+    if (this.startOpen) {
+      this.startOpen = false;
+      cx.notify();
+    } else if (this.commenting) this.cancelComment(cx);
     else this.closeSelf(cx);
     cx.stop_propagation();
   }
@@ -283,6 +378,7 @@ export class PlanDoc {
   }
 
   sheet(c, p) {
+    const ready = p.status === "ready" && !p.task;
     return v_flex()
       .size_full()
       .bg(c.fill)
@@ -292,11 +388,19 @@ export class PlanDoc {
       .shadow_md()
       .overflow_hidden()
       .child(this.sheetHead(c, p))
+      .when(ready && this.startOpen, (el) => el.child(div().flex_none().px(SPACE[4]).pt(SPACE[2]).child(startMenuPanel(c, p, {
+        idPrefix: `bh-plan-sheet-start-${p.id}`,
+        onClose: (cx) => {
+          this.startOpen = false;
+          cx.notify();
+        },
+      }))))
       .child(this.sheetBody(c, p));
   }
 
   /** The title is the sheet's own: "Draft plan", its round, and the actions on the right. */
   sheetHead(c, p) {
+    const chips = issueChips(c, p.issues);
     return h_flex()
       .flex_none()
       .flex_wrap()
@@ -306,7 +410,9 @@ export class PlanDoc {
       .border_b(1)
       .border_color(c.edge)
       .child(v_flex().flex_1().min_w(160).gap(SPACE[1])
-        .child(div().text_size(TYPE.lg).font_semibold().child("Draft plan"))
+        .child(h_flex().gap(SPACE[2]).items_center()
+          .child(div().text_size(TYPE.lg).font_semibold().child("Draft plan"))
+          .when(Boolean(chips), (el) => el.child(chips)))
         .child(div().text_size(TYPE.sm).text_color(c.muted).child(`round ${p.round ?? 0} · choose a line to comment on it`)))
       .child(this.headActions(c, p));
   }
@@ -320,7 +426,14 @@ export class PlanDoc {
       .gap(SPACE[2])
       .items_center()
       .justify_end()
-      .when(ready, (el) => el.child(actionButton(c, "bh-plan-start", "Start task", () => startPlanTask(p), { tone: "primary", icon: "play" })))
+      .when(ready, (el) => el.child(startMenuTrigger(c, {
+        open: this.startOpen,
+        idPrefix: `bh-plan-sheet-start-${p.id}`,
+        onToggle: (cx) => {
+          this.startOpen = !this.startOpen;
+          cx.notify();
+        },
+      })))
       .child(actionButton(c, "bh-plan-arch", archived ? "Unarchive" : "Archive", (_e, cx) => this.act(["plan", archived ? "unarchive" : "archive", p.id], cx), { icon: "archive" }))
       .child(this.discardButton(c, p))
       .child(actionButton(c, "bh-plan-doc-close", "Close", (_e, cx) => this.closeSelf(cx), { hint: "Esc" }));
@@ -360,7 +473,17 @@ export class PlanDoc {
   lines(c, p) {
     const parts = blocks(p.markdown);
     const count = String(p.markdown).split("\n").length;
-    return v_flex().gap(SPACE[1]).children(parts.map((b, i) => this.lineBlock(c, p, b, parts[i + 1]?.line ?? count + 1)));
+    let inDone = false;
+    const tagged = parts.map((b) => {
+      const txt = String(b.text ?? "").trim();
+      if (/^#{2,3}\s+(?:Done|Acceptance)\s+criteria\s*$/i.test(txt)) {
+        inDone = true;
+        return { ...b, doneSection: true };
+      }
+      if (/^#{1,3}\s+/.test(txt)) inDone = false;
+      return { ...b, doneSection: inDone };
+    });
+    return v_flex().gap(SPACE[1]).children(tagged.map((b, i) => this.lineBlock(c, p, b, tagged[i + 1]?.line ?? count + 1)));
   }
 
   /** One block of the draft: hovered or chosen it takes the hover fill, and its comments and the box sit under it. */
@@ -378,6 +501,7 @@ export class PlanDoc {
   /** The block itself, clickable: hovered or chosen it takes the hover fill, with its comment glyph in the right margin. */
   lineRow(c, p, b, on, live) {
     const hovered = this.hoverLine === b.line;
+    const isDone = Boolean(b.doneSection);
     return clickable(
       h_flex()
         .px(SPACE[3])
@@ -385,6 +509,7 @@ export class PlanDoc {
         .gap(SPACE[3])
         .items_start()
         .rounded(SIZE.nested)
+        .when(isDone && !on && !hovered, (el) => el.bg(alpha(c.accent, 0.05)).border_l(2).border_color(alpha(c.accent, 0.45)))
         .when(on || hovered, (el) => el.bg(c.hover))
         .on_hover((over, cx) => this.hoverChanged(b.line, over, cx))
         .on_click((_e, cx) => this.startInline(b.line, cx))

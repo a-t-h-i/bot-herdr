@@ -5,6 +5,7 @@
 //
 // .bot-herdr/knowledge/<agent>.md, notes.json, archive/
 
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { listDir, now, readJson, readText, store, writeJson, writeText } from "./core.mjs";
 
@@ -156,23 +157,97 @@ function trimSection(section, budget, isNoted) {
   return { section: joinUnits(head, units), dropped };
 }
 
+const FILE_EXT = /\.(?:[cm]?[jt]sx?|py|sh|ps1|rb|go|rs|json|md|ya?ml|toml|css|html|sql)$/i;
+const OBSOLETE_TAG = /\[(?:obsolete|deprecated|superseded)\]/i;
+
+/** Concrete backticked repo-relative file paths cited inside a knowledge bullet. */
+export function extractRepoPaths(text) {
+  const paths = [];
+  const re = /`([^`\s]+)`/g;
+  for (const m of String(text ?? "").matchAll(re)) {
+    let raw = m[1].replace(/:\d+(?:-\d+)?$/, "").replace(/^(\.\/)+/, "");
+    if (!raw || raw.startsWith("/") || raw.startsWith("http") || raw.includes("://") || /[*?<>[\]{}$]/.test(raw)) continue;
+    if (!raw.includes("/") || !FILE_EXT.test(raw)) continue;
+    if (raw.startsWith("..")) continue;
+    paths.push(raw);
+  }
+  return [...new Set(paths)];
+}
+
+/** Names of scripts currently archived under `.bot-herdr/scripts/archive/` that are no longer active. */
+function archivedScriptNames(root) {
+  const active = new Set(
+    listDir(store(root, "scripts"))
+      .filter((d) => d.isFile())
+      .map((d) => d.name.replace(/\.[^.]+$/, "").toLowerCase())
+  );
+  const archived = new Set();
+  for (const d of listDir(store(root, "scripts", "archive"))) {
+    if (!d.isFile()) continue;
+    const base = d.name.replace(/-\d{4}-\d{2}-\d{2}T.*$/, "").replace(/\.[^.]+$/, "").toLowerCase();
+    if (base && !active.has(base)) archived.add(base);
+  }
+  return archived;
+}
+
+/** Whether a bullet cites only deleted repo paths or an archived/superseded script. */
+function isStaleBullet(root, text, archivedScripts, hasGit) {
+  if (OBSOLETE_TAG.test(text)) return true;
+  if (archivedScripts.size) {
+    for (const m of String(text).matchAll(/\bbh\s+scripts?\s+run\s+([a-z0-9_-]+)/gi)) {
+      if (archivedScripts.has(m[1].toLowerCase())) return true;
+    }
+    for (const m of String(text).matchAll(/\.bot-herdr\/scripts\/([a-z0-9_-]+)\.[a-z0-9]+/gi)) {
+      if (archivedScripts.has(m[1].toLowerCase())) return true;
+    }
+  }
+  const cited = extractRepoPaths(text);
+  if (!cited.length) return false;
+  // Only prune dead repo paths when either this is a real git repo or the cited top-level dir exists.
+  const checkable = cited.filter((p) => hasGit || p.startsWith(".bot-herdr/scripts/") || existsSync(join(root, p.split("/")[0])));
+  if (!checkable.length) return false;
+  return checkable.every((p) => !existsSync(join(root, p)));
+}
+
+/** Drops stale (dead-path, obsolete-tagged, or archived-script) bullets while preserving user-noted ones. */
+function pruneStaleSection(root, section, isNoted, archivedScripts, hasGit) {
+  const [head, ...rest] = section.split("\n");
+  const units = unitsOf(rest);
+  const kept = units.filter((unit) => {
+    if (!unit.bullet) return true;
+    const txt = unitText(unit);
+    if (isNoted(txt)) return true;
+    return !isStaleBullet(root, txt, archivedScripts, hasGit);
+  });
+  return { section: joinUnits(head, kept), dropped: units.length - kept.length };
+}
+
 /**
- * Shortens one agent's knowledge to the caps: duplicate bullets go first, then the oldest History
- * entries (newest kept), and the oldest Facts only when the file is still over its hard cap. A
- * bullet a user noted is never dropped: their note is an instruction, not a hint. The version
- * before is archived by `write`. `dryRun` says what it would do and changes nothing.
+ * Shortens one agent's knowledge to the caps: duplicate bullets and stale dead-path/superseded
+ * bullets go first, then the oldest History entries (newest kept), and the oldest Facts only when
+ * the file is still over its hard cap. A bullet a user noted is never dropped: their note is an
+ * instruction, not a hint. The version before is archived by `write`. `dryRun` says what it would
+ * do and changes nothing.
  */
-export function fold(root, agent, { maxChars = FOLD.maxChars, briefTarget = FOLD.briefTarget, dryRun = false, compactForBrief = false } = {}) {
+export function fold(root, agent, { maxChars = FOLD.maxChars, briefTarget = FOLD.briefTarget, dryRun = false, compactForBrief = false, pruneStale = true, extraArchivedScripts = [] } = {}) {
   const before = read(root, agent);
-  if (!before.trim()) return { agent, beforeChars: before.length, afterChars: before.length, removedEntries: 0, archived: false, changed: false };
+  if (!before.trim()) return { agent, beforeChars: before.length, afterChars: before.length, removedEntries: 0, prunedStale: 0, archived: false, changed: false };
   const noted = notes(root, agent).map((n) => String(n.entry ?? "")).filter(Boolean);
   const isNoted = (line) => noted.some((entry) => line.includes(entry));
   const [head, raw] = sectionsOf(before);
+  const archivedScripts = archivedScriptNames(root);
+  for (const s of extraArchivedScripts ?? []) archivedScripts.add(String(s).toLowerCase());
+  const hasGit = existsSync(join(root, ".git"));
   let removedEntries = 0;
+  let prunedStale = 0;
   const sections = raw.map((section) => {
     const folded = dedupeSection(section);
     removedEntries += folded.dropped;
-    return folded.section;
+    if (!pruneStale) return folded.section;
+    const pruned = pruneStaleSection(root, folded.section, isNoted, archivedScripts, hasGit);
+    removedEntries += pruned.dropped;
+    prunedStale += pruned.dropped;
+    return pruned.section;
   });
   const doc = () => [head, ...sections].filter((part) => part.trim()).join("\n").trimEnd() + "\n";
   const at = (name) => sections.findIndex((section) => sectionName(section) === name);
@@ -197,7 +272,13 @@ export function fold(root, agent, { maxChars = FOLD.maxChars, briefTarget = FOLD
   }
   const next = removedEntries ? doc() : before;
   if (removedEntries && !dryRun) write(root, agent, next);
-  return { agent, beforeChars: before.length, afterChars: next.length, removedEntries, archived: Boolean(removedEntries && !dryRun && before.trim()), changed: next !== before };
+  return { agent, beforeChars: before.length, afterChars: next.length, removedEntries, prunedStale, archived: Boolean(removedEntries && !dryRun && before.trim()), changed: next !== before };
+}
+
+/** Strips references to newly archived scripts across all agent knowledge files (preserving user notes). */
+export function pruneDeadScriptRefs(root, scriptNames, { dryRun = false } = {}) {
+  if (!scriptNames?.length) return [];
+  return foldAll(root, { dryRun, pruneStale: true, extraArchivedScripts: scriptNames });
 }
 
 /** Every agent's file, folded: what `bh improve fold` runs when it is given no agent. */

@@ -52,7 +52,7 @@ export function listPlans(root, { all = false } = {}) {
 }
 
 /** A new plan; `skills` is the classifier's picks per panel seat (contract #9 a). */
-export function newPlan(root, { idea, title, skills = {} }) {
+export function newPlan(root, { idea, title, skills = {}, issues = null, repo = null }) {
   return savePlan(root, {
     id: newId("p"),
     title: title?.trim() || titleFrom(idea),
@@ -62,19 +62,103 @@ export function newPlan(root, { idea, title, skills = {} }) {
     task: null,
     created: now(),
     skills,
+    goal: null,
+    ...(issues ? { issues } : {}),
+    ...(repo ? { repo } : {}),
     markdown: "",
     comments: [],
   });
 }
 
-/** A new draft: the round moves on, and the title and status follow the draft's own sections. */
+const CRITERIA_KINDS = new Set(["check", "command", "file", "qa"]);
+
+/** Parses one criterion line (`[check|command|file|qa] text`, or plain text as `qa`). */
+export function parseCriterionLine(raw) {
+  let body = String(raw ?? "").trim();
+  if (!body) return null;
+  let required = true;
+  if (/^\(optional\)\s+/i.test(body)) {
+    required = false;
+    body = body.replace(/^\(optional\)\s+/i, "").trim();
+  } else if (/\s+\(optional\)$/i.test(body)) {
+    required = false;
+    body = body.replace(/\s+\(optional\)$/i, "").trim();
+  }
+  let kind = "qa";
+  let text = body;
+  const tag = /^\[(check|command|file|qa)\]\s+(.+)$/i.exec(body);
+  if (tag) {
+    kind = tag[1].toLowerCase();
+    text = tag[2].trim();
+  }
+  if (!CRITERIA_KINDS.has(kind) || !text) return null;
+  const item = { kind, text, required };
+  if (kind === "command") {
+    const split = /^(.*?)(?:\s*(?:→|->)\s*(.+))?$/.exec(text);
+    const cmdRaw = String(split?.[1] ?? text).trim();
+    const backtick = /^`([^`]+)`(?:\s|$)/.exec(cmdRaw);
+    item.command = (backtick ? backtick[1] : cmdRaw.replace(/^`|`$/g, "")).trim();
+    item.expect = String(split?.[2] ?? "exit 0").trim() || "exit 0";
+  } else if (kind === "file") {
+    const backtick = /`([^`]+)`/.exec(text);
+    const plain = /^([^\s]+)(?:\s|$)/.exec(text);
+    item.path = String(backtick?.[1] ?? plain?.[1] ?? "").replace(/[,;:]+$/, "").trim();
+  }
+  return item;
+}
+
+const UNTRUSTED_ISSUE_BLOCK = /<untrusted-github-issue\b[^>]*>[\s\S]*?<\/untrusted-github-issue>/gi;
+const stripUntrusted = (md) => String(md ?? "").replace(UNTRUSTED_ISSUE_BLOCK, "");
+
+/**
+ * Extracts verifiable DONE criteria from `### Done criteria` / `## DONE Criteria` (falling back
+ * to `## Acceptance criteria`). Strips `<untrusted-github-issue>` blocks first so external issue
+ * text can never inject criteria. Preserves stable `c<n>` IDs across edits.
+ */
+export function criteriaFromMarkdown(md, existing = []) {
+  const text = stripUntrusted(md);
+  let at = text.search(/^#{2,3}\s+Done\s+criteria\s*$/im);
+  if (at < 0) at = text.search(/^#{2,3}\s+Acceptance\s+criteria\s*$/im);
+  if (at < 0) return [];
+  const lines = text.slice(at).split("\n").slice(1);
+  const parsed = [];
+  for (const line of lines) {
+    if (/^#{1,3}\s/.test(line)) break;
+    const m = /^\s*(?:[-*]|\d+[.)])\s+(.+?)\s*$/.exec(line);
+    if (!m) continue;
+    const item = parseCriterionLine(m[1]);
+    if (item) parsed.push(item);
+  }
+  const prev = Array.isArray(existing) ? existing : [];
+  let maxId = prev.reduce((m, c) => Math.max(m, Number(/^c(\d+)$/.exec(String(c?.id ?? ""))?.[1] ?? 0)), 0);
+  const used = new Set();
+  return parsed.map((item) => {
+    const match = prev.find((p) => p && p.kind === item.kind && p.text === item.text && !used.has(p.id));
+    let id = match?.id ?? null;
+    if (!id) {
+      maxId += 1;
+      id = `c${maxId}`;
+    }
+    used.add(id);
+    return { id, ...item };
+  });
+}
+
+/** A new draft: the round moves on, and the title, status and DONE criteria follow the draft's sections. */
 export function writeDraft(plan, markdown, { status, title } = {}) {
   plan.markdown = String(markdown ?? "").trim() + "\n";
   plan.round = (plan.round ?? 0) + 1;
-  const declared = /^##\s+Status\s*\n+\s*(GRILLING|READY)/im.exec(plan.markdown)?.[1]?.toLowerCase();
+  const trusted = stripUntrusted(plan.markdown);
+  const declared = /^##\s+Status\s*\n+\s*(GRILLING|READY)/im.exec(trusted)?.[1]?.toLowerCase();
   plan.status = status ?? declared ?? plan.status ?? "grilling";
-  const named = /^##\s+Title\s*\n+\s*(.+)$/im.exec(plan.markdown)?.[1]?.trim();
+  const named = /^##\s+Title\s*\n+\s*(.+)$/im.exec(trusted)?.[1]?.trim();
   if (title || named) plan.title = title || named;
+  const criteria = criteriaFromMarkdown(plan.markdown, plan.goal?.criteria ?? []);
+  if (criteria.length) {
+    plan.goal = { criteria, maxSpendUsd: Number(plan.goal?.maxSpendUsd) > 0 ? Number(plan.goal.maxSpendUsd) : 15 };
+  } else if (plan.goal) {
+    plan.goal = { ...plan.goal, criteria: [] };
+  }
   return plan;
 }
 

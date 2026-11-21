@@ -29,6 +29,7 @@ import { SEARCH_OVER, filterTools, newestActive, pickedFor, supportedNames } fro
 import {
   normalizeStatus, providerRows, addFallbackStep, removeFallbackStep, moveFallbackStep, parseBudgetNumber, harnessLabel,
 } from "./resilienceview.js";
+import { settingsGridColumns } from "./tasksview.js";
 import { OPEN_RESILIENCE } from "./statusstrip.js";
 
 const GAP = 14; // between cards
@@ -736,10 +737,8 @@ export class Settings {
                   this.sync();
                   cx.notify();
                 }))))
-              // Access and the classifier together: side by side when there's room, else stacked.
-              .when(section === "general", (el) => el.child(v_flex().w(Math.min(640, content)).gap(GAP)
-                .child(this.accessCard(c))
-                .child(this.classifierCard(c))))
+              // Access and the classifier together: 2-column grid when wide (>= 860px), stacked when narrow.
+              .when(section === "general", (el) => el.child(this.generalSection(c, content)))
               .when(section === "resilience", (el) => el.child(this.resilienceSection(c, content)))
               .when(section === "harnesses", (el) => el.child(this.harnesses(c))),
           ),
@@ -1097,20 +1096,56 @@ export class Settings {
   }
 
   /** The Resilience tab: provider health & cooldowns, ordered fallback chain, and guardrail budgets. */
+  /** General tab: responsive 2-column grid (>= 860px) placing Access and Classifier cards side-by-side. */
+  generalSection(c, content) {
+    if (settingsGridColumns(content) === 2) {
+      return h_flex()
+        .id("bh-general-grid")
+        .w(content)
+        .gap(GAP)
+        .items_start()
+        .child(v_flex().flex_1().min_w(0).gap(GAP).child(this.accessCard(c)))
+        .child(v_flex().flex_1().min_w(0).gap(GAP).child(this.classifierCard(c)));
+    }
+    return v_flex()
+      .id("bh-general-grid")
+      .w(content)
+      .gap(GAP)
+      .child(this.accessCard(c))
+      .child(this.classifierCard(c));
+  }
+
   resilienceSection(c, content) {
     if (!this.resilience && this.resilienceLoading) {
       return stateView(c, { id: "bh-res-loading", title: "Loading resilience…", loading: true });
     }
     const r = this.resilience ?? normalizeStatus(null);
+    const notice = this.resilienceUnavailable
+      ? div().text_size(TYPE.xs).text_color(c.muted).child("Live resilience status unavailable; showing defaults.")
+      : null;
+    const grid = settingsGridColumns(content) === 2
+      ? h_flex()
+        .id("bh-resilience-grid")
+        .w(content)
+        .gap(GAP)
+        .items_start()
+        .child(v_flex().flex_1().min_w(0).gap(GAP)
+          .child(this.providerHealthCard(c, r))
+          .child(this.fallbackChainCard(c, r)))
+        .child(v_flex().flex_1().min_w(0).gap(GAP)
+          .child(this.guardrailsCard(c, r)))
+      : v_flex()
+        .id("bh-resilience-grid")
+        .w(content)
+        .gap(GAP)
+        .child(this.providerHealthCard(c, r))
+        .child(this.fallbackChainCard(c, r))
+        .child(this.guardrailsCard(c, r));
     return v_flex()
-      .w(Math.min(720, content))
+      .w(content)
       .gap(GAP)
-      .when(this.resilienceUnavailable, (el) => el.child(
-        div().text_size(TYPE.xs).text_color(c.muted).child("Live resilience status unavailable; showing defaults."),
-      ))
-      .child(this.providerHealthCard(c, r))
-      .child(this.fallbackChainCard(c, r))
-      .child(this.guardrailsCard(c, r));
+      .when(Boolean(notice), (el) => el.child(notice))
+      .child(grid);
   }
 
   providerHealthCard(c, r) {

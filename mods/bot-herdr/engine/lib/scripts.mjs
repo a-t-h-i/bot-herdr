@@ -8,8 +8,9 @@
 //   // usage: …
 
 import { spawnSync } from "node:child_process";
-import { basename, extname, join } from "node:path";
-import { ENGINE, listDir, now, readText, store, writeText } from "./core.mjs";
+import { rmSync, statSync } from "node:fs";
+import { basename, extname, join, relative, sep } from "node:path";
+import { ENGINE, appendJsonl, listDir, now, readJsonl, readText, store, withLock, writeText } from "./core.mjs";
 import { PROTECTED_BUILTIN_SCRIPTS } from "./resilience.mjs";
 
 const BUILTIN = join(ENGINE, "scripts");
@@ -40,17 +41,42 @@ export function find(root, name) {
   return s;
 }
 
+export const usageFile = (root) => join(store(root, "scripts"), "usage.jsonl");
+
+/** Records one script invocation in `.bot-herdr/scripts/usage.jsonl` (best-effort, locked). */
+export function recordUsage(root, { name, source, exit, ms, task = null }) {
+  const path = usageFile(root);
+  const entry = { at: now(), name, source, task: task ?? (process.env.BH_TASK || null), exit: Number(exit ?? 0), ms: Math.max(0, Math.round(Number(ms) || 0)) };
+  try {
+    return withLock(path, () => {
+      appendJsonl(path, entry);
+      return entry;
+    });
+  } catch {
+    return entry;
+  }
+}
+
+export function scriptUsage(root) {
+  return readJsonl(usageFile(root));
+}
+
 /** Runs a script in the project. Returns the exit code, or `{ code, out, err }` when `capture` is asked. */
-export function run(root, name, args = [], { capture = false } = {}) {
+export function run(root, name, args = [], { capture = false, task = null } = {}) {
   const s = find(root, name);
   const runner = [...RUNNERS[extname(s.file)]];
   if (process.platform === "win32" && runner[0] === "python3") runner[0] = "python";
+  const started = Date.now();
   if (capture) {
     const r = spawnSync(runner[0], [...runner.slice(1), s.file, ...args], { cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
-    return { code: r.status ?? 1, out: r.stdout ?? "", err: r.stderr ?? (r.error ? String(r.error.message) : "") };
+    const code = r.status ?? 1;
+    recordUsage(root, { name: s.name, source: s.source, exit: code, ms: Date.now() - started, task });
+    return { code, out: r.stdout ?? "", err: r.stderr ?? (r.error ? String(r.error.message) : "") };
   }
   const r = spawnSync(runner[0], [...runner.slice(1), s.file, ...args], { cwd: root, stdio: "inherit" });
-  return r.status ?? 1;
+  const code = r.status ?? 1;
+  recordUsage(root, { name: s.name, source: s.source, exit: code, ms: Date.now() - started, task });
+  return code;
 }
 
 /** Saves a script into the project (snake_case name, its language's extension). The one before goes to archive/. */
@@ -83,4 +109,123 @@ export function keywordPick(list, step, max = 5) {
 
 export function scriptLine(s) {
   return `${s.name}${s.source === "project" ? " (project)" : ""}: ${s.purpose || "no purpose line"}${s.usage ? `\n    usage: ${s.usage.replace("{script}", s.name)}` : ""}`;
+}
+
+// ── Relevance-based script auditing & pruning (archive, never destroy) ───────────────────
+
+const DAY_MS = 86_400_000;
+
+function planReferencedScripts(root) {
+  const refs = new Set();
+  for (const d of listDir(store(root, "plans"))) {
+    if (!d.isDirectory()) continue;
+    const md = readText(join(store(root, "plans"), d.name, "plan.md"));
+    for (const m of md.matchAll(/\bbh\s+scripts?\s+run\s+([a-z0-9_-]+)/gi)) refs.add(m[1].toLowerCase());
+    for (const m of md.matchAll(/\.bot-herdr\/scripts\/([a-z0-9_-]+)\.[a-z0-9]+/gi)) refs.add(m[1].toLowerCase());
+  }
+  return refs;
+}
+
+/**
+ * Audits project scripts in `.bot-herdr/scripts/` for relevance using usage telemetry, exit health,
+ * and active Goal/plan references. Built-in scripts and active Goal scripts are never prune candidates.
+ */
+export function auditScripts(root, { staleDays = 30, protectedPaths = new Set(), nowMs = Date.now() } = {}) {
+  const days = Math.max(1, Number(staleDays) || 30);
+  const projectScripts = scripts(root).filter((s) => s.source === "project");
+  const usage = scriptUsage(root);
+  const byName = new Map();
+  for (const u of usage) {
+    const list = byName.get(u.name) ?? [];
+    list.push(u);
+    byName.set(u.name, list);
+  }
+  const planRefs = planReferencedScripts(root);
+  const protectedNorm = new Set([...(protectedPaths ?? [])].map((p) => String(p).replace(/\\/g, "/").toLowerCase()));
+
+  const audited = projectScripts.map((s) => {
+    const rel = relative(root, s.file).split(sep).join("/").toLowerCase();
+    const isProtected = protectedNorm.has(rel) || planRefs.has(s.name.toLowerCase()) || PROTECTED_BUILTIN_SCRIPTS.has(s.name.toLowerCase());
+    const runs = byName.get(s.name) ?? [];
+    const lastUsed = runs.at(-1)?.at ?? null;
+    let mtimeMs = nowMs;
+    try {
+      mtimeMs = statSync(s.file).mtimeMs;
+    } catch {}
+    const lastActivityMs = lastUsed ? Date.parse(lastUsed) : mtimeMs;
+    const ageDays = Math.max(0, Math.floor((nowMs - (Number.isFinite(lastActivityMs) ? lastActivityMs : nowMs)) / DAY_MS));
+    const recent = runs.slice(-5);
+    const recentFails = recent.filter((r) => Number(r.exit) !== 0).length;
+    const recentFailRate = recent.length ? Number((recentFails / recent.length).toFixed(2)) : 0;
+
+    const reasons = [];
+    let status = "active";
+    if (isProtected) {
+      status = "protected";
+      reasons.push("referenced by an active Goal or plan");
+    } else if (recent.length >= 3 && recentFailRate >= 0.8) {
+      status = "broken";
+      reasons.push(`${recentFails}/${recent.length} recent runs failed`);
+    } else if (runs.length === 0 && ageDays >= days) {
+      status = "unused";
+      reasons.push(`never run (${ageDays}d old)`);
+    } else if (runs.length > 0 && ageDays >= days) {
+      status = "stale";
+      reasons.push(`unused for ${ageDays}d (last used ${lastUsed})`);
+    }
+
+    return {
+      name: s.name,
+      file: s.file,
+      purpose: s.purpose,
+      runs: runs.length,
+      lastUsedAt: lastUsed,
+      ageDays,
+      recentFailRate,
+      protected: isProtected,
+      status,
+      pruneCandidate: !isProtected && (status === "stale" || status === "unused" || status === "broken"),
+      reasons,
+    };
+  });
+
+  return { staleDays: days, scripts: audited, candidates: audited.filter((a) => a.pruneCandidate) };
+}
+
+/**
+ * Archives stale/unused/broken (or explicitly named) project scripts to `.bot-herdr/scripts/archive/`.
+ * Never prunes built-in scripts or scripts protected by an active Goal or plan.
+ */
+export function pruneScripts(root, { staleDays = 30, names = null, dryRun = false, protectedPaths = new Set(), nowMs = Date.now() } = {}) {
+  const audit = auditScripts(root, { staleDays, protectedPaths, nowMs });
+  const wanted = Array.isArray(names) && names.length ? new Set(names.map((n) => String(n).toLowerCase())) : null;
+  const archived = [];
+  const skipped = [];
+
+  for (const item of audit.scripts) {
+    const selected = wanted ? wanted.has(item.name.toLowerCase()) : item.pruneCandidate;
+    if (!selected) continue;
+    if (item.protected) {
+      skipped.push({ name: item.name, reason: "protected by active Goal/plan or built-in" });
+      continue;
+    }
+    const ext = extname(item.file);
+    const archivePath = join(store(root, "scripts"), "archive", `${item.name}-${now().replace(/[:.]/g, "-")}${ext}`);
+    if (!dryRun) {
+      const content = readText(item.file);
+      writeText(archivePath, content);
+      rmSync(item.file, { force: true });
+    }
+    archived.push({ name: item.name, from: item.file, archivePath, status: item.status, reasons: item.reasons });
+  }
+
+  // Explicitly requested built-in names must always report skipped, never deleted
+  if (wanted) {
+    const builtins = scripts(root).filter((s) => s.source === "built-in");
+    for (const b of builtins) {
+      if (wanted.has(b.name.toLowerCase())) skipped.push({ name: b.name, reason: "built-in script cannot be pruned" });
+    }
+  }
+
+  return { dryRun: Boolean(dryRun), archived, skipped };
 }

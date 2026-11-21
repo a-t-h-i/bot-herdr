@@ -23,6 +23,7 @@ import { HEADLESS, agentUser, asRoot, compactSession, headless, interactive, lau
 import { classifyFailure } from "./failures.mjs";
 import { cooldownKey, dirtyTreeHandoff, fallbackPlan, isCooledDown, pickFallback, readCooldowns, recordCooldown, recordFailover, resilienceConfig } from "./resilience.mjs";
 import * as Q from "./ask.mjs";
+import * as G from "./goal.mjs";
 
 export { accessOf };
 
@@ -368,6 +369,10 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
    * became a task ("planned", which starts now), followed by its steps, one line each.
    */
   function handoff(marker) {
+    if (marker.kind === "goal" && marker.task) {
+      const gh = G.goalHandoff(root, marker.task);
+      if (gh) return gh;
+    }
     const t = marker.task ? load(T.loadTask, marker.task) : null;
     const p = marker.kind === "planned" && marker.plan ? load(P.loadPlan, marker.plan) : null;
     const first = marker.kind === "planned"
@@ -607,13 +612,17 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
       save();
       recordUsage(usage, Date.now() - started);
       if (r.text && r.text !== shown) say(`\n${stripUnsafeEscapes(r.text.trim())}\n`);
-      if (!exhausted) return finish(r, text, notes);
+      if (!exhausted) {
+        finish(r, text, notes);
+        return { asked: Boolean(r.asked), cancelled: Boolean(r.cancelled), error: r.error ?? null, held: false, resetAt: null };
+      }
 
       recordCooldown({ harness: agent.harness, model: agent.model, kind: failure.kind, reason: failure.reason, until: failure.resetAt });
       const plan = hops >= maxHops ? null : pickFallback({ agent, current: here(), config, known, cooldowns: readCooldowns(), visited });
       if (!plan) {
         const skipped = hops >= maxHops ? [] : (fallbackPlan({ agent, current: here(), config, known, cooldowns: readCooldowns(), visited })?.skipped ?? []);
-        return finish(held(r, failure, skipped), text, notes);
+        finish(held(r, failure, skipped), text, notes);
+        return { asked: false, cancelled: false, error: null, held: true, resetAt: failure.resetAt ?? null };
       }
       hops++;
       retrySession = plan.sameHarness ? r.session ?? retrySession : null;
@@ -692,16 +701,122 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
 
   let busy = false;
   let turns = 0;
+  let goalWaitTimer = null;
+  let goalClaim = null;
+
+  function clearGoalWait() {
+    if (goalWaitTimer) {
+      clearTimeout(goalWaitTimer);
+      goalWaitTimer = null;
+    }
+  }
+
+  function releaseGoalDriver() {
+    if (!goalClaim) return;
+    try {
+      G.releaseGoalClaim(root, goalClaim.taskId, goalClaim.token);
+    } catch {}
+    goalClaim = null;
+  }
+
+  function scheduleGoalWait(taskId, waitUntil, reason) {
+    try {
+      G.setGoalState(root, taskId, "waiting", { waitUntil: waitUntil ?? null, reason: reason || "quota_wait" });
+    } catch {}
+    clearGoalWait();
+    const untilMs = waitUntil ? Date.parse(waitUntil) : 0;
+    const delayMs = untilMs > Date.now() ? Math.min(Math.max(5_000, untilMs - Date.now()), 30 * 60_000) : 5 * 60_000;
+    goalWaitTimer = setTimeout(() => {
+      goalWaitTimer = null;
+      try {
+        const check = G.next(root, { taskId });
+        if (check.wait) {
+          scheduleGoalWait(taskId, check.waitUntil, check.reason);
+          return;
+        }
+        if (check.continue && check.prompt) {
+          try {
+            G.setGoalState(root, taskId, "resume");
+          } catch {}
+          try {
+            writeJson(pendingCompact, { at: now(), project: root, kind: "goal", task: taskId, iteration: check.iteration, reason: `goal ${taskId} resumed after wait` });
+          } catch {}
+          enqueue(check.prompt);
+        }
+      } catch {}
+    }, delayMs);
+    goalWaitTimer.unref?.();
+    say(`${DIM}Goal ${taskId} waiting (${reason || "quota_wait"}); will check again in ${Math.round(delayMs / 1000)}s.${OFF}`);
+  }
+
+  function ensureGoalClaim(taskId) {
+    if (!taskId) return true;
+    if (goalClaim && goalClaim.taskId === taskId) return true;
+    releaseGoalDriver();
+    try {
+      goalClaim = G.acquireGoalClaim(root, taskId);
+      return true;
+    } catch (e) {
+      say(`${DIM}Goal ${taskId}: ${e.message}${OFF}`);
+      return false;
+    }
+  }
+
+  function maybeContinueGoal(lastTurn) {
+    if (mode !== "lead" || !agent.lead) return;
+    let currentGoal;
+    try {
+      const cur = T.currentTask(root);
+      currentGoal = cur?.mode === "goal" ? cur : null;
+    } catch {
+      return;
+    }
+    if (!currentGoal) return;
+    const stepPlan = G.next(root, { taskId: currentGoal.id, lastTurn });
+    if (stepPlan.wait) {
+      scheduleGoalWait(currentGoal.id, stepPlan.waitUntil, stepPlan.reason);
+      return;
+    }
+    if (stepPlan.pause) {
+      try {
+        G.setGoalState(root, currentGoal.id, "pause", { reason: stepPlan.reason });
+      } catch {}
+      say(`${DIM}Goal ${currentGoal.id} paused: ${stepPlan.reason}.${OFF}`);
+      return;
+    }
+    if (!stepPlan.continue || !stepPlan.prompt) return;
+    if (!ensureGoalClaim(stepPlan.task)) return;
+    // Continuously prune bloated knowledge between Goal rounds (best-effort)
+    try {
+      const bloated = knowledge.list(root).some((k) => k.chars > 7500);
+      if (bloated && typeof knowledge.foldAll === "function") knowledge.foldAll(root);
+    } catch {}
+    // Write compaction marker so the next round starts fresh with structured Goal Handoff
+    try {
+      writeJson(pendingCompact, { at: now(), project: root, kind: "goal", task: stepPlan.task, iteration: stepPlan.iteration, reason: `goal ${stepPlan.task} round ${stepPlan.iteration}` });
+    } catch {}
+    queue.push(stepPlan.prompt);
+  }
+
   async function drain() {
     if (busy) return;
     busy = true;
+    clearGoalWait();
     try {
+      if (mode === "lead" && agent.lead) {
+        try {
+          const cur = T.currentTask(root);
+          if (cur?.mode === "goal" && cur.status === "active" && cur.goal?.status === "running") ensureGoalClaim(cur.id);
+        } catch {}
+      }
       while (queue.length) {
         const next = queue.shift();
         if (!next.startsWith("/") && turns++) say(`${DIM}${"─".repeat(24)}${OFF}`);
-        await handle(next);
+        const outcome = await handle(next);
+        if (!next.startsWith("/") && queue.length === 0) maybeContinueGoal(outcome);
       }
     } finally {
+      releaseGoalDriver();
       busy = false;
       prompt();
     }
@@ -709,12 +824,14 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
 
   function enqueue(text) {
     if (!text.trim()) return prompt();
+    clearGoalWait();
     queue.push(text.replace(/^\s*\n/, "").trimEnd()); // a template's empty body leaves blank lines in front
     if (busy) say(`${DIM}(Queued: it goes after this turn.)${OFF}`);
     drain();
   }
 
   function cancel() {
+    clearGoalWait();
     if (running) {
       running.cancel();
       return true;
@@ -724,6 +841,7 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
 
   function quit() {
     cancel();
+    releaseGoalDriver();
     acp.current?.close();
     keysOff();
     status("idle");

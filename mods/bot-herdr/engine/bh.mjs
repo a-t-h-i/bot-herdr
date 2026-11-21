@@ -21,6 +21,8 @@ import { listHarnesses, listTools } from "./lib/tools.mjs";
 import * as W from "./lib/workspace.mjs";
 import * as RZ from "./lib/resilience.mjs";
 import * as IM from "./lib/improve.mjs";
+import * as G from "./lib/goal.mjs";
+import * as GH from "./lib/github.mjs";
 import * as C from "./classifier/index.mjs";
 import { fileKind } from "./classifier/qa-risk.mjs";
 import { tail, testCommand, testCounts, listProjectFiles } from "./scripts/lib/common.mjs";
@@ -50,8 +52,26 @@ Plans
   bh plan write <id> --file draft.md [--status grilling|ready]
   bh plan comment <id> [--line N] "<text>"  [--edit <cid> "<text>" | --delete <cid>]
   bh plan resolve <id> [--comment <cid>]
-  bh plan task <id>               (a task from the plan's steps)     bh plan archive <id>   bh plan delete <id>
+  bh plan task <id> [--as task|goal] [--max-spend USD] [--branch|--worktree]
+                                  start a Ready plan as a simple task or a relentless Goal loop
+  bh plan archive <id>            bh plan delete <id>
   bh plan seat <id> <seat> --off|--on   (the user leaves a panel seat out, or brings it back)
+
+Goals (autonomous verification loops)
+  bh goal status [<task>] [--json]           criteria verdicts, budget, ratchet checkpoint, next round
+  bh goal verify [<task>] [--hypothesis H]   verify frozen DONE criteria, apply monotonic ratchet
+  bh goal log [<task>] [--limit N] [--json]  Gap Ledger iteration history
+  bh goal pause|resume|stop|recover [<task>] [--reason R]
+  bh goal propose-amend <task> --criterion ID --action edit|drop|add [--text T] --reason R
+  bh goal approve-amend|reject-amend <task>  (the user's to approve or reject)
+
+GitHub issues (autonomous intake, triage/decline, bundling, screenshot proof & PR delivery)
+  bh issues fetch [--state open|closed|all] [--label L] [--limit N] [--repo owner/repo]
+  bh issues show <number> [--refresh]        fenced untrusted issue details & triage status
+  bh issues triage <n> --decision accept|decline --reason R [--risk low|medium|high] [--effort s|m|l|xl] [--post-comment] [--close]
+  bh issues bundle <n1> [n2 …] [--title T] [--ready] [--max-spend USD]
+  bh issues screenshot [--url U | --html F | --file IMG] [--task T]
+  bh issues finish <task> [--screenshot P] [--draft-pr] [--no-close] [--base B]  (opens PR for manual merge; never auto-merges)
 
 Knowledge (one file per agent)
   bh knowledge [<agent>]          bh knowledge list       bh knowledge search "<words>"
@@ -63,11 +83,13 @@ Knowledge (one file per agent)
 Scripts
   bh scripts                      bh scripts show <name>        bh scripts run <name> [args…]
   bh scripts pick "<step>"        bh scripts save <file> [--name snake_case]
+  bh scripts audit [--days N]     bh scripts prune [--days N] [--name X] [--dry-run]
   bh check [--base <ref>]         lint, typecheck and tests for what changed
 
 Self-improvement (eval-gated; \`bh improve resume\` is the user's)
   bh improve analyze [--window N]            what the task telemetry says to fix, and the deterministic fix
   bh improve fold [agent] [--dry-run]        dedupe and trim knowledge under the caps (the old version is archived)
+  bh improve prune [--days N] [--dry-run]    fold stale knowledge + archive stale/unused/broken project scripts
   bh improve check-diff [--base R] [--target R]   the safety invariants a change must pass
   bh improve apply --branch bh/improve-X [--title T] [--no-install]   gate it, merge it, install it
   bh improve verify [--id ID] [--no-rollback]      roll back when the next window's metrics regress
@@ -467,7 +489,11 @@ async function main(argv) {
   const [cmd = "help", sub, ...more] = argv;
   const root = projectRoot();
   const c = C.makeClassifier();
-  const { flags, rest } = parseArgs(argv.slice(1), ["option", "kinds", "skill"], [...BOOLEANS, "refresh", "peek", "board", "shared", "drop", "list", "summary", "dry-run", "no-install", "no-rollback"]);
+  const { flags, rest } = parseArgs(
+    argv.slice(1),
+    ["option", "kinds", "skill", "issue"],
+    [...BOOLEANS, "refresh", "peek", "board", "shared", "drop", "list", "summary", "dry-run", "no-install", "no-rollback", "branch", "worktree", "no-git", "no-revert", "goal", "ready", "post-comment", "close", "draft-pr", "no-close"]
+  );
   const args = rest.slice(1);
 
   switch (cmd) {
@@ -531,8 +557,19 @@ async function main(argv) {
       }
       if (sub === "status") {
         const status = need(rest2[0], "bh task status <id> <status>");
-        const task = T.updateTask(root, id, (t) => T.setStatus(t, status), ifUpdated(flags));
-        if (task.status === "done") compactPending(root, { kind: "done", reason: `task ${task.id} done`, task: task.id });
+        const task = T.updateTask(root, id, (t) => {
+          if (status === "done" && t.mode === "goal") {
+            const check = G.assertGoalDone(root, t);
+            if (!check.ok) throw new Error(check.reason);
+          }
+          return T.setStatus(t, status);
+        }, ifUpdated(flags));
+        if (task.status === "done") {
+          compactPending(root, { kind: "done", reason: `task ${task.id} done`, task: task.id });
+          try {
+            K.foldAll(root);
+          } catch {}
+        }
         return out(flags, task, (t) => `${t.id} is ${t.status}.`);
       }
       if (sub === "comment") {
@@ -583,14 +620,39 @@ async function main(argv) {
       const summary = need(args.join(" "), 'bh gate <task> --verdict V --file <report> "<summary>"');
       const file = need(typeof flags.file === "string" ? flags.file : "", "bh gate <task> --file <report>");
       const task = T.loadTask(root, id);
-      const head = git(W.taskCwd(task, root), ["rev-parse", "HEAD"]).out.trim() || null;
-      const gate = T.recordGate(root, id, { verdict, round: flags.round ? Number(flags.round) : null, file, summary, from: flags.from ?? actor(), head });
+      const cwd = W.taskCwd(task, root);
+      const from = flags.from ?? actor();
+      if (task.mode === "goal" && verdict === "PASS") {
+        const missing = W.missingWorktree(task);
+        if (missing) throw new Error(missing);
+        if (process.env.BH_AGENT && !G.isIndependentQaName(process.env.BH_AGENT)) {
+          throw new Error(`Goal ${id}: only an independent QA reviewer may record a PASS gate (agent ${process.env.BH_AGENT} refused).`);
+        }
+        if (from && !G.isIndependentQaName(from)) {
+          throw new Error(`Goal ${id}: only an independent QA reviewer may record a PASS gate (not ${from}).`);
+        }
+        const loaded = G.loadFrozenContract(task.id);
+        if (!loaded.ok) throw new Error(loaded.reason);
+        const tree = G.goalChangeHash(cwd);
+        const det = loaded.contract.criteria.filter((c) => c.kind !== "qa" && c.required !== false);
+        const receipts = T.criterionReceipts(root, task.id);
+        const allDetPass = det.every((c) =>
+          [...receipts].reverse().some((r) =>
+            r.criterion === c.id && r.ok === true && r.verdict === "PASS" && r.diff === tree.diff && (!tree.head || r.head === tree.head)
+          )
+        );
+        if (det.length && !allDetPass) {
+          throw new Error(`Goal ${id}: frozen deterministic DONE criteria must all have fresh PASS receipts on the current tree before recording a QA PASS gate.`);
+        }
+      }
+      const tree = task.mode === "goal" ? G.goalChangeHash(cwd) : { head: git(cwd, ["rev-parse", "HEAD"]).out.trim() || null, diff: null };
+      const gate = T.recordGate(root, id, { verdict, round: flags.round ? Number(flags.round) : null, file, summary, from, head: tree.head || null, diff: tree.diff || null });
       // The QA rounds are a guardrail: past the limit, a person decides how to go on.
       const maxQaRounds = RZ.resilienceConfig().guardrails.maxQaRounds;
       let escalated = null;
       if (maxQaRounds > 0 && gate.round > maxQaRounds) {
         escalated = `QA round ${gate.round} is past the ${maxQaRounds} rounds the guardrails allow: this needs the user's decision.`;
-        T.post(root, id, { kind: "note", text: escalated, from: flags.from ?? actor(), to: null });
+        T.post(root, id, { kind: "note", text: escalated, from, to: null });
       }
       return out(flags, { ...gate, escalated }, (g) => `Gate round ${g.round}: ${g.verdict} — ${g.summary}${escalated ? `\n${escalated}` : ""}`);
     }
@@ -687,18 +749,42 @@ async function main(argv) {
         return out(flags, plan, () => "Comments marked addressed.");
       }
       if (sub === "task") {
+        const asMode = String(flags.as ?? (flags.goal ? "goal" : "task")).toLowerCase();
+        if (asMode !== "task" && asMode !== "goal") throw new UsageError("bh plan task <id> [--as task|goal] [--max-spend USD]");
+        const criteria = plan.goal?.criteria?.length ? plan.goal.criteria : P.criteriaFromMarkdown(plan.markdown);
+        if (asMode === "goal") {
+          if (plan.status !== "ready") throw new Error(`Plan ${plan.id} is ${plan.status}: finish planning (status ready) before starting as a Goal.`);
+          if (!criteria.length) throw new Error(`Plan ${plan.id} has no DONE criteria: add \`### Done criteria\` or start it as a simple task.`);
+          if (flags["no-git"]) throw new Error("Goals require git isolation (--worktree or --branch); --no-git is not allowed.");
+        }
         const steps = T.stepsFromMarkdown(plan.markdown);
-        const task = T.newTask(root, { request: `${plan.idea}\n\nThe agreed plan: bh plan show ${plan.id}`, title: plan.title, plan: plan.id, track: "planned", by: myAddress(), steps });
+        const github = plan.issues?.length ? { repo: plan.repo ?? null, issues: plan.issues, prUrl: null, prNumber: null, closedIssues: [], screenshot: null } : null;
+        const task = T.newTask(root, { request: `${plan.idea}\n\nThe agreed plan: bh plan show ${plan.id}`, title: plan.title, plan: plan.id, track: "planned", by: myAddress(), steps, mode: asMode, github });
         // The plan's picks come with it; an agent the plan did not cover starts from its pins.
         task.skills = plannedSkills(plan, team.team().agents);
         task.base = git(root, ["rev-parse", "HEAD"]).out.trim() || null;
-        const isolation = isolate(root, task, flags);
+        const isoFlags = asMode === "goal" && !flags.branch && !flags.worktree ? { ...flags, worktree: true } : flags;
+        const isolation = isolate(root, task, isoFlags);
+        if (asMode === "goal" && !task.git?.branch) {
+          T.setStatus(task, "abandoned");
+          T.saveTask(root, task);
+          T.deleteTask(root, task.id);
+          throw new Error(`Goals require git isolation (worktree or branch): ${isolation || "could not create git workspace"}.`);
+        }
+        if (asMode === "goal") {
+          const maxSpendUsd = Number(flags["max-spend"] ?? plan.goal?.maxSpendUsd ?? G.DEFAULT_MAX_SPEND_USD);
+          const maxIterations = Number(flags["max-iterations"] ?? 0);
+          G.initGoal(root, task, { criteria, maxSpendUsd, maxIterations });
+        }
         T.saveTask(root, task);
         plan.status = "task";
         plan.task = task.id;
         P.savePlan(root, plan);
-        compactPending(root, { kind: "planned", plan: plan.id, reason: `plan ${plan.id} became task ${task.id}`, task: task.id });
-        return out(flags, { ...task, isolation }, (t) => [`${t.id}: ${t.title} (${t.steps.length} steps from the plan)`, W.gitLine(t.git) || isolation].filter(Boolean).join("\n"));
+        compactPending(root, { kind: "planned", plan: plan.id, reason: `plan ${plan.id} became ${asMode} ${task.id}`, task: task.id });
+        return out(flags, { ...task, isolation }, (t) => [
+          `${t.id}: ${t.title} (${asMode === "goal" ? `goal · ${t.goal.criteria.length} DONE criteria · $${t.goal.maxSpendUsd} ceiling` : `${t.steps.length} steps from the plan`})`,
+          W.gitLine(t.git) || isolation,
+        ].filter(Boolean).join("\n"));
       }
       if (sub === "archive" || sub === "unarchive") {
         plan.status = sub === "archive" ? "archived" : "grilling";
@@ -710,6 +796,157 @@ async function main(argv) {
         return out(flags, gone, (g) => `Discarded ${g.deleted}.`);
       }
       throw new UsageError("bh plan new|list|show|write|comment|resolve|task|archive|delete");
+    }
+
+    case "goal": {
+      const taskArg = /^t-\d{8}-\w+$/.test(args[0] ?? "") ? args[0] : T.currentTask(root)?.id;
+      if (sub === "status" || !sub) {
+        need(taskArg, "bh goal status [<task>]");
+        const st = G.goalStatus(root, taskArg);
+        if (!st) throw new Error(`Task ${taskArg} is not a Goal.`);
+        return out(flags, st, (s) => [
+          `${s.task} [goal · ${s.status}] iter ${s.iteration} · $${s.budget.spendUsd.toFixed(2)}/$${s.budget.maxSpendUsd.toFixed(2)} · best ${s.bestScore}/${s.criteria.length}${s.bestCheckpoint ? ` (${s.bestCheckpoint})` : ""}`,
+          ...s.criteria.map((c) => `  ${c.verdict === "PASS" ? "✓" : c.verdict === "PENDING" ? "…" : "✗"} ${c.id} [${c.kind}] ${c.text}${c.evidence ? ` — ${c.evidence}` : ""}`),
+          ...(s.pendingAmendment ? [`  Pending amendment (${s.pendingAmendment.action} ${s.pendingAmendment.criterionId ?? ""}): ${s.pendingAmendment.text || "(drop)"} — ${s.pendingAmendment.reason}`] : []),
+          ...(s.waiting ? [`  Waiting (${s.waiting.reason})${s.waiting.until ? ` until ${s.waiting.until}` : ""}`] : []),
+        ].join("\n"));
+      }
+      if (sub === "verify") {
+        need(taskArg, "bh goal verify [<task>]");
+        const res = G.verifyGoal(root, taskArg, {
+          hypothesis: typeof flags.hypothesis === "string" ? flags.hypothesis : "",
+          noRevert: Boolean(flags["no-revert"]),
+        });
+        process.exitCode = res.verdict === "PASS" ? 0 : 1;
+        return out(flags, res, (r) => [
+          `Goal ${r.task} iter ${r.iteration}: ${r.verdict} (${r.passed.length}/${r.criteria.length} passed${r.pendingQa.length ? `, ${r.pendingQa.length} awaiting QA` : ""})${r.reverted ? ` — REVERTED to ${r.checkpointRef} (archived ${r.attemptRef})` : ""}`,
+          ...r.criteria.map((c) => `  ${c.verdict === "PASS" ? "✓" : c.verdict === "PENDING" ? "…" : "✗"} ${c.id} [${c.kind}] ${c.observed}`),
+        ].join("\n"));
+      }
+      if (sub === "log") {
+        need(taskArg, "bh goal log [<task>] [--limit N]");
+        const rows = T.iterations(root, taskArg, { limit: Number(flags.limit ?? 20) });
+        return out(flags, rows, (l) => l.map(G.iterationLine).join("\n") || "No goal iterations yet.");
+      }
+      if (sub === "pause" || sub === "stop" || sub === "resume") {
+        need(taskArg, `bh goal ${sub} [<task>]`);
+        const t = G.setGoalState(root, taskArg, sub, { reason: typeof flags.reason === "string" ? flags.reason : null });
+        if (sub === "resume") compactPending(root, { kind: "goal", task: t.id, iteration: t.goal.iteration, reason: `goal ${t.id} resumed` });
+        return out(flags, t.goal, () => `Goal ${t.id} is ${t.goal.status} (task ${t.status}).`);
+      }
+      if (sub === "recover") {
+        need(taskArg, "bh goal recover [<task>]");
+        const r = G.recoverGoal(root, taskArg);
+        if (!r.ok) process.exitCode = 1;
+        return out(flags, r, (x) => (x.ok ? `Recovered Goal ${taskArg}: iter ${x.verified.iteration} ${x.verified.verdict}${x.clearedStaleClaim ? " (cleared stale claim)" : ""}${x.orphanedChildren.length ? ` (orphaned children: ${x.orphanedChildren.join(", ")})` : ""}.` : `Goal ${taskArg} recovery blocked: ${x.reason}`));
+      }
+      if (sub === "propose-amend") {
+        const id = need(taskArg, "bh goal propose-amend <task> --criterion ID --action edit|drop|add [--text T] --reason R");
+        const amd = G.proposeAmend(root, id, {
+          criterionId: typeof flags.criterion === "string" ? flags.criterion : null,
+          action: need(flags.action, "--action edit|drop|add"),
+          text: typeof flags.text === "string" ? flags.text : "",
+          kind: typeof flags.kind === "string" ? flags.kind : null,
+          reason: need(flags.reason, "--reason"),
+          by: flags.from ?? actor(),
+        });
+        return out(flags, amd, (a) => `Proposed amendment ${a.id} (${a.action} ${a.criterionId ?? ""}); Goal ${id} paused for user approval.`);
+      }
+      if (sub === "approve-amend") {
+        personOnly("Approving a DONE criterion amendment");
+        const id = need(taskArg, "bh goal approve-amend <task>");
+        const res = G.approveAmend(root, id, { parseCriterion: P.parseCriterionLine });
+        compactPending(root, { kind: "goal", task: id, reason: `goal ${id} amendment approved` });
+        return out(flags, res, () => `Approved amendment on Goal ${id}; frozen DONE contract updated and Goal resumed.`);
+      }
+      if (sub === "reject-amend") {
+        personOnly("Rejecting a DONE criterion amendment");
+        const id = need(taskArg, "bh goal reject-amend <task>");
+        const res = G.rejectAmend(root, id, { reason: typeof flags.reason === "string" ? flags.reason : "" });
+        return out(flags, res, () => `Rejected amendment on Goal ${id}; original DONE contract remains frozen.`);
+      }
+      throw new UsageError("bh goal status|verify|log|pause|resume|stop|recover|propose-amend|approve-amend|reject-amend");
+    }
+
+    case "issues":
+    case "issue": {
+      if (sub === "fetch" || !sub) {
+        const res = await GH.fetchIssues(root, {
+          state: typeof flags.state === "string" ? flags.state : "open",
+          label: typeof flags.label === "string" ? flags.label : null,
+          limit: Number(flags.limit ?? 30) || 30,
+          repo: typeof flags.repo === "string" ? flags.repo : null,
+        });
+        return out(flags, res, (r) => [
+          `${r.repo} (${r.transport}) — ${r.issues.length} ${r.state} issue${r.issues.length === 1 ? "" : "s"}:`,
+          ...r.issues.map((i) => `  #${i.number}  ${i.triage ? `[${i.triage.decision}] ` : ""}${i.title}${i.labels.length ? ` (${i.labels.join(", ")})` : ""}`),
+        ].join("\n"));
+      }
+      if (sub === "show") {
+        const num = need(args[0], "bh issues show <number>");
+        const res = await GH.showIssue(root, num, {
+          repo: typeof flags.repo === "string" ? flags.repo : null,
+          refresh: Boolean(flags.refresh),
+        });
+        return out(flags, res, (i) => [
+          `#${i.number} [${i.state}] ${i.title}${i.url ? ` — ${i.url}` : ""}`,
+          ...(i.triage ? [`Triage: ${i.triage.decision} (risk=${i.triage.risk}, effort=${i.triage.effort}) — ${i.triage.reason}`] : []),
+          "",
+          i.fencedBody,
+          ...(i.fencedComments.length ? ["", "### Comments", ...i.fencedComments] : []),
+        ].join("\n"));
+      }
+      if (sub === "triage") {
+        const num = need(args[0], "bh issues triage <number> --decision accept|decline --reason R");
+        const rec = await GH.triageIssue(root, num, {
+          decision: need(flags.decision, "--decision accept|decline"),
+          reason: need(flags.reason, "--reason"),
+          risk: typeof flags.risk === "string" ? flags.risk : "medium",
+          effort: typeof flags.effort === "string" ? flags.effort : "m",
+          postComment: Boolean(flags["post-comment"]),
+          close: Boolean(flags.close),
+          by: flags.from ?? actor(),
+          repo: typeof flags.repo === "string" ? flags.repo : null,
+        });
+        return out(flags, rec, (r) => `Issue #${r.number}: ${r.decision} (risk=${r.risk}, effort=${r.effort}) — ${r.reason}${r.postedComment ? " [comment posted]" : ""}${r.closed ? " [closed]" : ""}`);
+      }
+      if (sub === "bundle") {
+        const nums = args.map((x) => Number(x)).filter((n) => Number.isInteger(n) && n > 0);
+        need(nums.length || "", "bh issues bundle <n1> [n2 …] [--title T] [--ready|--goal] [--max-spend USD]");
+        const plan = await GH.bundleIssues(root, nums, {
+          title: typeof flags.title === "string" ? flags.title : null,
+          ready: Boolean(flags.ready || flags.goal),
+          maxSpendUsd: Number(flags["max-spend"] ?? G.DEFAULT_MAX_SPEND_USD),
+          repo: typeof flags.repo === "string" ? flags.repo : null,
+        });
+        return out(flags, plan, (p) => `Bundled ${(p.issues ?? []).map((i) => `#${i.number}`).join(", ")} into plan ${p.id} (${p.status}): ${p.title}`);
+      }
+      if (sub === "screenshot") {
+        const taskId = typeof flags.task === "string" ? flags.task : null;
+        const shot = GH.captureTaskScreenshot(root, {
+          taskId,
+          url: typeof flags.url === "string" ? flags.url : null,
+          htmlFile: typeof flags.html === "string" ? flags.html : null,
+          file: typeof flags.file === "string" ? flags.file : null,
+          outFile: typeof flags.out === "string" ? flags.out : null,
+        });
+        if (!shot.ok) process.exitCode = 1;
+        return out(flags, shot, (s) => (s.ok ? `Screenshot saved: ${s.file} (preview: ${s.image})` : `Screenshot failed: ${s.error}`));
+      }
+      if (sub === "finish") {
+        const taskId = /^t-\d{8}-\w+$/.test(args[0] ?? "") ? args[0] : T.currentTask(root)?.id;
+        need(taskId, "bh issues finish <taskId> [--screenshot P] [--draft-pr] [--no-close] [--base B]");
+        const delivery = await GH.finishIssuesTask(root, taskId, {
+          screenshot: typeof flags.screenshot === "string" ? flags.screenshot : null,
+          draft: Boolean(flags["draft-pr"]),
+          closeIssues: !flags["no-close"],
+          base: typeof flags.base === "string" ? flags.base : null,
+          repo: typeof flags.repo === "string" ? flags.repo : null,
+          issueNumbers: Array.isArray(flags.issue) ? flags.issue : null,
+        });
+        return out(flags, delivery, (d) => `Opened PR #${d.prNumber}${d.prUrl ? ` (${d.prUrl})` : ""} for manual review & merge; closed ${d.closedIssues.map((n) => `#${n}`).join(", ") || "no issues"}.`);
+      }
+      throw new UsageError("bh issues fetch|show|triage|bundle|screenshot|finish");
     }
 
     case "knowledge": {
@@ -779,7 +1016,28 @@ async function main(argv) {
         const picked = (await C.pickScripts(c, step, all)) ?? S.keywordPick(all, step);
         return out(flags, picked, (l) => l.map(S.scriptLine).join("\n").replaceAll("node {script}", "bh scripts run") || "No script fits; do it by hand.");
       }
-      throw new UsageError("bh scripts [list|show|run|save|pick]");
+      if (sub === "audit") {
+        const res = S.auditScripts(root, { staleDays: Number(flags.days ?? 30) || 30, protectedPaths: G.activeGoalScriptPaths(root) });
+        return out(flags, res, (a) => a.scripts.map((s) => `${s.name} [${s.status}] runs=${s.runs} age=${s.ageDays}d${s.reasons.length ? ` — ${s.reasons.join("; ")}` : ""}`).join("\n") || "No project scripts to audit.");
+      }
+      if (sub === "prune") {
+        const names = flags.name ? [String(flags.name)] : args.length ? args : null;
+        const res = S.pruneScripts(root, {
+          staleDays: Number(flags.days ?? 30) || 30,
+          names,
+          dryRun: flags["dry-run"] === true,
+          protectedPaths: G.activeGoalScriptPaths(root),
+        });
+        if (!res.dryRun && res.archived.length) K.pruneDeadScriptRefs(root, res.archived.map((a) => a.name));
+        return out(flags, res, (r) => {
+          const lines = [
+            ...r.archived.map((a) => `${r.dryRun ? "Would archive" : "Archived"} ${a.name} (${a.status}) → ${a.archivePath}`),
+            ...r.skipped.map((s) => `Skipped ${s.name}: ${s.reason}`),
+          ];
+          return lines.join("\n") || "No stale or broken project scripts to prune.";
+        });
+      }
+      throw new UsageError("bh scripts [list|show|run|save|pick|audit|prune]");
     }
 
     case "check": {
@@ -1041,6 +1299,18 @@ async function main(argv) {
         const opts = { dryRun: flags["dry-run"] === true };
         const folded = args[0] ? [K.fold(root, args[0], opts)] : K.foldAll(root, opts);
         return out(flags, folded, (list) => list.map(foldLine).join("\n") || "No knowledge files to fold.");
+      }
+      if (sub === "prune") {
+        const res = IM.pruneAll(root, {
+          staleDays: Number(flags.days ?? 30) || 30,
+          dryRun: flags["dry-run"] === true,
+          protectedPaths: G.activeGoalScriptPaths(root),
+        });
+        return out(flags, res, (r) => [
+          ...r.knowledge.map(foldLine),
+          ...r.scripts.archived.map((a) => `${r.dryRun ? "Would archive" : "Archived"} script ${a.name} (${a.status}) → ${a.archivePath}`),
+          ...r.scripts.skipped.map((s) => `Skipped script ${s.name}: ${s.reason}`),
+        ].join("\n") || "Everything is already clean.");
       }
       if (sub === "check-diff") {
         const verdict = IM.verifyBranchSafety(root, flags.base ?? "main", flags.target ?? "HEAD");

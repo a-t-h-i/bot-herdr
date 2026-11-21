@@ -19,4 +19,4 @@ Run the tests you added or changed, and the nearest existing ones, with their ow
 
 ## In a review
 
-Work to `reviewer.md`: it says what to inspect, how deep, which receipts to trust, and to finish with `bh gate`.
+Work to `reviewer.md`: it says what to inspect, how deep, which receipts to trust, and to finish with `bh gate`. For a Goal task, grade every subjective `[qa]` DONE criterion with cited `file:line` or receipt evidence only after all deterministic criteria pass on the current tree.
