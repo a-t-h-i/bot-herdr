@@ -8,16 +8,16 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { resolveHerdrAppBin } from "../../../../install.mjs";
 import { palette } from "../../look.js";
 import { AUDIT_PAGES, WRAPPER_MAIN, fixtureSource } from "./ui-audit-fixtures.mjs";
 import { PRESET_NAMES, a11yCapabilities, a11yMarkdown, auditThemes, featurePresence, fixCounters, flattenThemeFile, parseSpec, structuralCounters } from "./ui-audit-spec.mjs";
+import { shotsStage } from "./ui-audit-shots.mjs";
 
 const CHECK_TIMEOUT_MS = 180000;
 const BASELINE = "mods/bot-herdr/engine/ui-audit-baseline.json";
 const DEFAULT_THEME = "graphite";
-const KEY_THEME_NAMES = ["graphite", "paper"];
 
 /** `bh ui-audit [--json] [--page P] [--theme T] [--shots DIR] [--baseline write] [--a11y FILE]`. */
 export function runUiAuditCli({ root, flags, out }) {
@@ -287,58 +287,6 @@ function a11yStage(root, flags) {
 
 const herdrAppHome = () => process.env.HERDR_APP_HOME || join(homedir(), ".config", "herdr-app");
 
-/** Tries the four key-theme screenshots in a temp app home; a missing window is a recorded skip. */
-function shotsStage({ root, herdrApp, flags, presets, contrast }) {
-  if (typeof flags.shots !== "string") return { skipped: "pass --shots DIR to capture PNGs" };
-  const dir = resolve(flags.shots);
-  mkdirSync(dir, { recursive: true });
-  const key = keyThemes(presets, contrast);
-  const captured = [];
-  for (const theme of key) {
-    const shot = captureTheme({ root, herdrApp, dir, theme });
-    if (shot.captured) captured.push(shot.captured);
-    else return { dir, captured, skipped: `herdr-app shot needs an open window: ${shot.reason}`, themes: key.map((t) => t.name) };
-  }
-  return { dir, captured, themes: key.map((t) => t.name) };
-}
-
-/** One theme's shot in its own throwaway app home, so the live window is never touched. */
-function captureTheme({ root, herdrApp, dir, theme }) {
-  const file = join(dir, `${theme.name}.png`);
-  const home = join(dir, `.home-${theme.name}`);
-  rmSync(home, { recursive: true, force: true });
-  mkdirSync(home, { recursive: true });
-  stageShotHome(root, home, theme);
-  try {
-    runSync(herdrApp, ["shot", file], { env: { ...process.env, HERDR_APP_HOME: home }, cwd: home });
-    return { captured: { theme: theme.name, file } };
-  } catch (err) {
-    return { reason: firstLine(String(err?.stderr || err?.stdout || err?.message || err)) };
-  } finally {
-    rmSync(home, { recursive: true, force: true });
-  }
-}
-
-/** The layout, themes and mod a shot needs in its temp home, set to the theme it captures. */
-function stageShotHome(root, home, theme) {
-  copyTree(join(root, "mods"), join(home, "mods"));
-  copyTree(join(root, "themes"), join(home, "themes"));
-  mkdirSync(join(home, "layouts"), { recursive: true });
-  writeFileSync(join(home, "layouts/bot-herdr.json"), readFileSync(join(root, "layouts/bot-herdr.json")));
-  writeFileSync(join(home, "settings.json"), `${JSON.stringify({ theme: theme.name, dark: !theme.light, zoom: 1 })}\n`);
-}
-
-/** The default dark and light presets plus the two with the weakest text/accent contrast. */
-function keyThemes(presets, contrast) {
-  const ratioOf = (theme) => {
-    const worst = theme.failures.filter((f) => f.check.startsWith("text:") || f.check === "focusRing");
-    return worst.length ? Math.min(...worst.map((f) => f.ratio)) : 99;
-  };
-  const edge = [...contrast].filter((t) => !KEY_THEME_NAMES.includes(t.name)).sort((a, b) => ratioOf(a) - ratioOf(b)).slice(0, 2);
-  const named = (name) => presets.find((p) => p.name === name) ?? presets.find((p) => p.light === (name === "paper")) ?? presets[0];
-  return [named("graphite"), named("paper"), ...edge.map((t) => presets.find((p) => p.name === t.name))].filter(Boolean);
-}
-
 /** Every target the result misses, as one list a person can act on. */
 function collectFailures({ counts, hexes, contrast, structural, pages, features, baseline, theme, expectedThemes = 0 }) {
   return [
@@ -414,6 +362,7 @@ function reportText(result) {
     `Features: ${result.features.filter((f) => f.present).length}/${result.features.length} P1 present`,
     `Baseline: ${result.baseline.written ? "written" : result.baseline.compared ? "compared" : "not recorded"}`,
   ];
+  if (result.shots.files?.length) lines.push(`Shots: ${result.shots.files.length} PNGs (${result.shots.themes.length} themes) in ${result.shots.dir}`);
   if (result.shots.skipped) lines.push(`Shots: skipped — ${result.shots.skipped}`);
   if (failures) lines.push("", "Findings:", ...result.failures.slice(0, 40).map((f) => `  - ${f.message}`));
   if (failures > 40) lines.push(`  … and ${failures - 40} more`);

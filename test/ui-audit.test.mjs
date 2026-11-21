@@ -4,7 +4,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -26,6 +27,8 @@ import {
   visibleElements,
   a11yCapabilities,
 } from "../mods/bot-herdr/engine/lib/ui-audit-spec.mjs";
+import { AUDIT_PAGES } from "../mods/bot-herdr/engine/lib/ui-audit-fixtures.mjs";
+import { captureShots, shotPlan } from "../mods/bot-herdr/engine/lib/ui-audit-shots.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const spec = (...lines) => parseSpec(lines.join("\n"));
@@ -207,4 +210,64 @@ test("structural counters measure keyboard and label coverage per page", () => {
   assert.equal(rows.perPage.p.accessibleLabel, 1);
   assert.equal(rows.perPage.p.accentButtons, 1);
   assert.equal(rows.accentButtonsPerView, 1);
+});
+
+const SHOT_THEMES = [
+  { name: "graphite", light: false },
+  { name: "paper", light: true },
+  { name: "plum-dark", light: false },
+  { name: "win98", light: false },
+];
+
+/** The spawn seam a shot run needs, with the window and the temp core replaced by records. */
+const shotIo = (overrides = {}) => ({
+  version: () => "0.1.16",
+  run: () => "{}",
+  launch: () => ({ ready: true, kill: () => {} }),
+  sleep: () => {},
+  stopCore: () => {},
+  ...overrides,
+});
+
+test("the shot plan is one page-theme PNG for every audited page and key theme", () => {
+  const plan = shotPlan("/shots", SHOT_THEMES);
+  assert.equal(plan.pages.length, AUDIT_PAGES.length);
+  assert.deepEqual(plan.themes, ["graphite", "paper", "plum-dark", "win98"]);
+  assert.equal(plan.files.length, AUDIT_PAGES.length * SHOT_THEMES.length);
+  assert.deepEqual(plan.files.slice(0, 4).map((f) => f.file), SHOT_THEMES.map((t) => join("/shots", `chat-${t.name}.png`)));
+  assert.ok(plan.files.some((f) => f.file === join("/shots", "tasks-board-win98.png")));
+  assert.ok(plan.files.some((f) => f.file === join("/shots", "settings-general-paper.png")));
+  assert.equal(new Set(plan.files.map((f) => f.file)).size, plan.files.length);
+});
+
+test("a shot run that cannot capture always takes its window down and removes the temp home", () => {
+  const base = mkdtempSync(join(tmpdir(), "bh-shots-test-"));
+  const tempRoot = join(base, "work");
+  const dir = join(base, "shots");
+  mkdirSync(tempRoot);
+  const run = { root: ROOT, herdrApp: "herdr-app", dir, themes: SHOT_THEMES.slice(0, 1), tempRoot };
+
+  const noWindow = captureShots(run, shotIo({ launch: () => ({ ready: false, reason: "no display", kill: () => {} }) }));
+  assert.equal(noWindow.skipped, "no display");
+  assert.deepEqual(noWindow.files, []);
+  assert.deepEqual(readdirSync(tempRoot), [], "the temp app home is removed when no window opens");
+
+  let killed = false;
+  let stopped = false;
+  const broken = captureShots(
+    { ...run, pages: [AUDIT_PAGES[0]] },
+    shotIo({
+      run: (_file, args) => {
+        if (args[0] === "shot") throw new Error("herdr-app shot: no frame yet");
+        return "{}";
+      },
+      launch: () => ({ ready: true, kill: () => { killed = true; } }),
+      stopCore: () => { stopped = true; },
+    }),
+  );
+  assert.match(broken.skipped, /no frame yet/);
+  assert.ok(killed, "the window is killed after a failed capture");
+  assert.ok(stopped, "the temp core is stopped after a failed capture");
+  assert.deepEqual(broken.files, []);
+  assert.deepEqual(readdirSync(tempRoot), [], "the temp app home is removed after a failed capture");
 });
