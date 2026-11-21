@@ -151,11 +151,10 @@ test("all 16 presets are enumerated and contrast-checked with no ownTheme exempt
     assert.ok(Array.isArray(row.failures), `${row.name} has failures`);
     for (const failure of row.failures) assert.ok(failure.ratio < failure.min, `${row.name}: ${failure.check} is a real miss`);
   }
-  // look.js's own pair keeps its decorative edgeDark, which is not a 3:1 control border: the audit
-  // must report it rather than exempt the theme it drew.
-  for (const name of ["bot-herdr-light", "bot-herdr-dark"]) {
-    const row = rows.find((r) => r.name === name);
-    assert.ok(row.failures.some((f) => f.check === "controlBorder"), `${name} controls checked`);
+  // look.js's own pair now carries the same 3:1 control border as every derived preset: no theme
+  // may be exempt from the check it draws under.
+  for (const row of rows) {
+    assert.ok(!row.failures.some((f) => f.check === "controlBorder"), `${row.name} control border at 3:1`);
   }
 });
 

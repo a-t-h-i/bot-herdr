@@ -1,10 +1,109 @@
 // bot-herdr's composer look in GPUI terms: a Claude-style palette as hex, light and dark.
+//
+// Colour lives here and nowhere else. Three layers sit on top of the raw pair below:
+//   - the palette keys the mod has always drawn with (`ground`, `fill`, `ink`, `accent` …),
+//     kept as aliases so nothing visible changes;
+//   - the design language's semantic tokens (`surface0/1/2`, `textPrimary/Secondary/Muted`,
+//     `accent`, `controlBorder`, `state*` and `agentHues`), which new code draws with;
+//   - the fixed scales (`TYPE_SCALE`, `WEIGHT`, `SPACE_SCALE`, `RADIUS`).
 
-export const LIGHT = {
+/** Transparent: a layer that takes the pointer but paints nothing. */
+export const CLEAR = "#00000000";
+
+/** A harness mark on its own brand tile (programs.json tiles are colours we do not own). */
+export const TILE_INK = "#ffffff";
+
+/**
+ * The one glyph, colour and word per state, the same on every page and surface. `token` names
+ * the palette key the state draws in (`stateTone(c, key)` resolves it for the live theme).
+ */
+export const STATE = {
+  needsYou: { glyph: "◆", token: "stateNeedsYou", word: "Needs you" },
+  review: { glyph: "◇", token: "stateReview", word: "Review" },
+  working: { glyph: "●", token: "stateWorking", word: "Working" },
+  done: { glyph: "✓", token: "stateDone", word: "Done" },
+  failed: { glyph: "✕", token: "stateFailed", word: "Failed" },
+  paused: { glyph: "‖", token: "statePaused", word: "Paused" },
+  idle: { glyph: "○", token: "stateIdle", word: "Idle" },
+};
+
+/**
+ * A state's colour in the palette now drawn (`stateTone(c, "working")`); muted when unknown.
+ * @param {any} c
+ * @param {"needsYou" | "review" | "working" | "done" | "failed" | "paused" | "idle"} key
+ */
+export function stateTone(c, key) {
+  return c?.[STATE[key]?.token] ?? c?.muted ?? null;
+}
+
+/** The seven agents' identity hues: an avatar and one presence dot, never chips, fills or bars. */
+export const AGENT_NAMES = ["orchestrator", "dev", "design", "qa", "research", "scout", "advisor"];
+const AGENT_HUES = { dev: "#5b8def", design: "#d6825a", qa: "#3fa877", research: "#a47bd6", scout: "#3ea3b5", advisor: "#c4973b" };
+
+/** The composer's command hues (route.js): named here so no other file carries a colour. */
+export const COMMAND_HUES = {
+  task: "#5b8def",
+  plan: "#a47bd6",
+  new: "#3fa877",
+  settings: "#8b9099",
+  all: "#d29a3c",
+  stop: "#cc6460",
+  peek: "#3ea3b5",
+  team: "#d6825a",
+  "bh-info": "#3fa796",
+};
+
+/** The working word's hues for the roles `agentHue` does not name (indicators.js). */
+export const ROLE_HUES = { planner: "#c4973b", agent: "#8b93a7" };
+
+/** The four type sizes: metadata, body, titles and the hero number. */
+export const TYPE_SCALE = { metadata: 12, body: 13, title: 15, hero: 20 };
+/** The two weights: regular for content, semibold for titles and labels. */
+export const WEIGHT = { regular: 400, semibold: 600 };
+
+/** The 4 px space grid. */
+export const SPACE_SCALE = [4, 8, 12, 16, 24, 32];
+
+/** Controls curve at 8, cards at 12; borders, never shadows. */
+export const RADIUS = { control: 8, card: 12 };
+
+/**
+ * A palette with the design language's names on top: the raw keys stay as aliases, and every
+ * semantic token is derived from them, so any theme preset gets the whole map.
+ * @param {Record<string, any>} base
+ * @returns {Record<string, any>}
+ */
+function withTokens(base) {
+  // A control's border must read at 3:1 on its card; `edge` is the quiet divider (1.3–1.6:1).
+  const controlBorder = contrastOf(base.edgeDark, base.fill) >= 3 ? base.edgeDark : reach(base.fill, base.ink, 3);
+  // The stop mark is a glyph on the stop fill: white where it reads, black where the fill is pale.
+  const stopInk = contrastOf(base.ink, base.stop) >= 3 ? base.ink : luminance(base.stop) < 0.179 ? "#ffffff" : "#000000";
+  return {
+    ...base,
+    edgeDark: controlBorder, // the old name, kept: nothing draws the bevel lip it once meant
+    controlBorder,
+    stopInk,
+    surface0: base.ground,
+    surface1: base.fill,
+    surface2: base.hover,
+    textPrimary: base.ink,
+    textSecondary: base.muted,
+    textMuted: base.faint,
+    stateNeedsYou: base.warning,
+    stateReview: base.accent,
+    stateWorking: base.accent,
+    stateDone: base.success,
+    stateFailed: base.danger,
+    statePaused: base.muted,
+    stateIdle: base.muted,
+    agentHues: Object.fromEntries(AGENT_NAMES.map((name) => [name, agentHue(name, base.accent)])),
+  };
+}
+
+const LIGHT_BASE = {
   ground: "#faf9f5",
   fill: "#ffffff",
   edge: "#e3e0d7",
-  edgeDark: "#d6d2c6", // the slightly darker bottom lip of the bevel
   rim: "#ffffff", // the lit top edge
   ink: "#141413",
   muted: "#6a6964",
@@ -25,11 +124,10 @@ export const LIGHT = {
   warning: "#aa4f0a",
 };
 
-export const DARK = {
+const DARK_BASE = {
   ground: "#262624",
   fill: "#30302e",
   edge: "#4a4a47",
-  edgeDark: "#1d1d1b",
   rim: "#3c3c3a",
   ink: "#faf9f5",
   muted: "#bbb9b2",
@@ -78,7 +176,7 @@ export const SIZE = {
   fillet: 12,
 };
 
-/** The five text sizes, each with the line height it is drawn at. */
+/** The five text sizes the UI draws at today, each with its line height (the M3 migration). */
 export const TYPE = { xs: 10.5, sm: 12, md: 13.5, lg: 16, xl: 18 };
 export const LINE = { xs: 14, sm: 16, md: 20, lg: 22, xl: 24 };
 
@@ -255,6 +353,10 @@ function atRatio(from, to, target) {
   return mix(from, end, hi);
 }
 
+/** Our own pair, with the design language's tokens on it (every other preset gets them from `palette`). */
+export const LIGHT = withTokens(LIGHT_BASE);
+export const DARK = withTokens(DARK_BASE);
+
 /** How soft our own bubble edge is against its bubble, per polarity. */
 const ownBubbleEdge = (dark) =>
   contrastOf((dark ? DARK : LIGHT).bubbleEdge, (dark ? DARK : LIGHT).bubble);
@@ -325,11 +427,10 @@ export function palette(s = {}, t = {}) {
   const wantedInk = opaque(solid ? t.solid_foreground : t.accent_foreground, accent);
   const accentInk = [wantedInk, "#000000", "#ffffff"].find((x) => x && contrastOf(x, accent) >= 4.5) ?? "#ffffff";
   const red = onAll(opaque(t.ansi1 ?? t.blocked ?? base.danger, fill));
-  return {
+  return withTokens({
     ground,
     fill,
     edge: line(fill, border, ink),
-    edgeDark: contrastOf(border, fill) >= 3 ? border : reach(fill, ink, 3), // controls: 3:1
     rim: fill,
     ink,
     muted: onAll(opaque(t.muted ?? mix(ink, fill, 0.35), fill)),
@@ -340,6 +441,7 @@ export function palette(s = {}, t = {}) {
     accent,
     accentInk,
     accentLip: mix(accent, "#000000", 0.2),
+    edgeDark: contrastOf(border, fill) >= 3 ? border : reach(fill, ink, 3),
     stop: red,
     stopHover: mix(red, "#000000", 0.1),
     danger: red,
@@ -348,7 +450,7 @@ export function palette(s = {}, t = {}) {
     info: onAll(opaque(t.ansi4 ?? base.info, fill)),
     success: onAll(opaque(t.ansi2 ?? base.success, fill)),
     warning: onAll(opaque(t.ansi3 ?? base.warning, fill)),
-  };
+  });
 }
 
 /** A file size in one short word: 900 B, 12 KB, 3.4 MB. */
@@ -430,8 +532,8 @@ export function agentInkOn(c, name, bg) {
 /** A steady colour for an agent's name: its role's hue, or one hashed from the name. */
 export function agentHue(name, accent) {
   const key = String(name ?? "").toLowerCase();
-  const hues = { orchestrator: accent, dev: "#5b8def", design: "#d6825a", qa: "#3fa877", research: "#a47bd6", scout: "#3ea3b5" };
-  if (hues[key]) return hues[key];
+  if (key === "orchestrator") return accent;
+  if (AGENT_HUES[key]) return AGENT_HUES[/** @type {keyof typeof AGENT_HUES} */ (key)];
   let h = 0;
   for (const ch of key) h = (h * 31 + ch.charCodeAt(0)) % 360;
   // gpui-kit text colours must be theme tokens or #hex literals, not hsl().

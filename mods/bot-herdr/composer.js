@@ -28,7 +28,7 @@ import {
   shared, setShared, appHome,
 } from "herdr";
 import { showPage, hold } from "./pages.js";
-import { SIZE, MOTION, ICON, TYPE, LINE, SPACE, ROW, CHIP, CONTROL, TARGET, MARK, DOT, PIP, HAIR, GLYPH, tint, readable, textWidth, rowsFor, baseName, upFrom, filterEntries, togglePick, sizeText, clickable, pressable, focusable } from "./look.js";
+import { SIZE, MOTION, ICON, TYPE, LINE, SPACE, ROW, CHIP, CONTROL, TARGET, MARK, DOT, PIP, HAIR, GLYPH, CLEAR, tint, readable, textWidth, rowsFor, baseName, upFrom, filterEntries, togglePick, sizeText, clickable, pressable, focusable } from "./look.js";
 import { actionButton } from "./button.js";
 import { stateView } from "./switch.js";
 import { colors } from "./theme.js";
@@ -61,7 +61,6 @@ const runsHeadlessAt = (address) => Boolean(terminals().find((t) => t.address ==
 const PANE_INSET = SIZE.radius + 6;
 
 const PLACEHOLDER = "Write a message, run a command, or ask an agent";
-const CLEAR = "#00000000";
 
 /** Where agents write their replies for the chat (see brief.js and chat.js). */
 export const outboxDir = () => `${appHome().replace(/\\/g, "/")}/data/bot-herdr/replies`;
@@ -1878,7 +1877,7 @@ export class Composer {
               .bg(c.stop)
               .hover((s) => s.bg(c.stopHover))
               .on_click((_e, cx) => this.stop(cx))
-              .child(div().size(GLYPH.xs).rounded(PIP).bg("#ffffff")),
+              .child(div().size(GLYPH.xs).rounded(PIP).bg(c.stopInk)),
           ),
           "bc-stop",
           c,

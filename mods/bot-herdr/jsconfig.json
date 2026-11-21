@@ -28,5 +28,7 @@
     "strict": true,
     "strictNullChecks": false,
     "noEmit": true
-  }
+  },
+  "include": ["*.js", "gpui-kit.d.ts"],
+  "exclude": ["engine"]
 }

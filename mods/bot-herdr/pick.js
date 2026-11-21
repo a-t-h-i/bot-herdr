@@ -13,7 +13,7 @@
 import { div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { props, settings, setShared, closeOverlay, openOverlay } from "herdr";
-import { SIZE, ICON, TYPE, SPACE, CONTROL, ROW, CHIP, DOT, HAIR, GLYPH, clickable } from "./look.js";
+import { SIZE, ICON, TYPE, SPACE, CONTROL, ROW, CHIP, DOT, HAIR, GLYPH, TILE_INK, clickable } from "./look.js";
 import { actionButton } from "./button.js";
 import { colors } from "./theme.js";
 
@@ -44,7 +44,7 @@ export function openPick({ key, options, selected, bounds, minWidth = 220, heade
  */
 export function harnessMark(c, k, size = GLYPH.lg) {
   const tile = k?.tile ?? null;
-  const ink = k?.color ?? (tile ? "#ffffff" : c.muted);
+  const ink = k?.color ?? (tile ? TILE_INK : c.muted);
   const box = div().flex_none().size(size).flex().items_center().justify_center().rounded(Math.max(2, Math.round(size / 4)))
     .when(Boolean(tile), (el) => el.bg(tile));
   if (k?.icon) {

@@ -6,7 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { palette, contrastOf, agentInk, agentInkOn, agentHue, mix, ownTheme, LIGHT, DARK } from "../mods/bot-herdr/look.js";
+import { palette, contrastOf, agentInk, agentInkOn, agentHue, mix, LIGHT, DARK, STATE } from "../mods/bot-herdr/look.js";
 
 const snapshot = JSON.parse(readFileSync(new URL("./fixtures/herdr-themes.json", import.meta.url), "utf8"));
 
@@ -67,11 +67,17 @@ for (const theme of themes) {
     const onAccent = contrastOf(c.accentInk, c.accent);
     assert.ok(onAccent >= 4.5, fail(theme, "accentInk", c.accentInk, c.accent, onAccent, "4.5"));
 
-    // Our own pair's edgeDark is the decorative bottom lip of the bevel (look.js:7), not a
-    // control border; only a derived palette turns edgeDark into one (look.js:275).
-    if (!ownTheme(theme.name)) {
-      const control = contrastOf(c.edgeDark, c.fill);
-      assert.ok(control >= 3, fail(theme, "edgeDark", c.edgeDark, c.fill, control, "3"));
+    // Every preset, our own pair included, keeps a control border at 3:1 on its card (look.js
+    // `controlBorder`): the old `ownTheme` exemption is gone.
+    const control = contrastOf(c.controlBorder, c.fill);
+    assert.ok(control >= 3, fail(theme, "controlBorder", c.controlBorder, c.fill, control, "3"));
+
+    // Every state glyph reads at glyph contrast (3:1) on the card and the page.
+    for (const [key, state] of Object.entries(STATE)) {
+      for (const bg of ["fill", "ground"]) {
+        const r = contrastOf(c[state.token], c[bg]);
+        assert.ok(r >= 3, fail(theme, `state ${key}`, c[state.token], c[bg], r, "3"));
+      }
     }
 
     const bubble = contrastOf(c.bubbleEdge, c.bubble);

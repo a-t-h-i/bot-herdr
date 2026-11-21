@@ -13,7 +13,7 @@
 import { div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextView, InputState, Input } from "gpui-base";
 import { settings, shared, terminals } from "herdr";
-import { SIZE, ICON, TYPE, LINE, SPACE, CONTROL, CHIP, GLYPH, MARK, DOT, PIP, HAIR, MOTION, mix, agentHue, agentInk, agentInkOn, isLight, clickable, pressable, focusable } from "./look.js";
+import { SIZE, ICON, TYPE, LINE, SPACE, CONTROL, CHIP, GLYPH, MARK, DOT, PIP, HAIR, MOTION, mix, agentHue, agentInk, agentInkOn, isLight, stateTone, clickable, pressable, focusable } from "./look.js";
 import { actionButton } from "./button.js";
 import { segmented, stateView, pill } from "./switch.js";
 import { commentRow, openFirst, openPlan, sectionLabel, COMMENT_LINKS, arm, armed, startMenuTrigger, startMenuPanel, issueChips } from "./plandoc.js";
@@ -169,20 +169,20 @@ function resetComposer(comp) {
 function statusMark(c, status, size = GLYPH.lg) {
   const kind = MARK_KIND[status] ?? "open";
   const box = div().flex_none().size(size).flex().items_center().justify_center().rounded_full();
-  if (kind === "done") return box.bg(c.success).child(svg(ICON("check")).size(size - SPACE[2]).text_color(c.fill));
-  const ring = { active: c.accent, blocked: c.warning }[kind] ?? c.faint;
+  if (kind === "done") return box.bg(stateTone(c, "done")).child(svg(ICON("check")).size(size - SPACE[2]).text_color(c.fill));
+  const ring = { active: stateTone(c, "working"), blocked: stateTone(c, "needsYou") }[kind] ?? stateTone(c, "idle");
   const inside = markInside(c, kind);
   return box.border_1().border_color(ring).when(Boolean(inside), (el) => el.child(inside));
 }
 
 /** What sits inside a status ring, if anything. */
 function markInside(c, kind) {
-  if (kind === "active") return div().size(DOT).rounded_full().bg(c.accent);
+  if (kind === "active") return div().size(DOT).rounded_full().bg(stateTone(c, "working"));
   if (kind === "paused") return h_flex().gap(SPACE[1]).items_center()
-    .child(div().w(SPACE[1]).h(SPACE[3]).rounded(PIP).bg(c.muted))
-    .child(div().w(SPACE[1]).h(SPACE[3]).rounded(PIP).bg(c.muted));
-  if (kind === "blocked") return div().text_size(TYPE.xs).font_bold().text_color(c.warning).child("!");
-  if (kind === "cross") return svg(ICON("x")).size(GLYPH.xs).text_color(c.muted);
+    .child(div().w(SPACE[1]).h(SPACE[3]).rounded(PIP).bg(stateTone(c, "paused")))
+    .child(div().w(SPACE[1]).h(SPACE[3]).rounded(PIP).bg(stateTone(c, "paused")));
+  if (kind === "blocked") return div().text_size(TYPE.xs).font_bold().text_color(stateTone(c, "needsYou")).child("!");
+  if (kind === "cross") return svg(ICON("x")).size(GLYPH.xs).text_color(stateTone(c, "idle"));
   return null;
 }
 
@@ -232,9 +232,9 @@ function filterChip(c, { id, label, count = null, on = false, onClick }) {
   );
 }
 
-/** A status's word in a pill: active the accent, done the success tone, blocked amber, the rest muted. */
+/** A status's word in a pill: working the accent, done the success tone, blocked amber, paused muted. */
 function statusTone(c, status) {
-  return { active: c.accent, done: c.success, blocked: c.warning, paused: c.warning, abandoned: c.faint }[status] ?? c.muted;
+  return { active: stateTone(c, "working"), done: stateTone(c, "done"), blocked: stateTone(c, "needsYou"), paused: stateTone(c, "paused"), abandoned: c.faint }[status] ?? stateTone(c, "idle");
 }
 
 /** An agent's initial in a ring of its colour: the mark its name is drawn with on a step. */
@@ -331,11 +331,11 @@ const SEAT_STATE = { working: "working", done: "done", none: "not started" };
 /** A seat's state from its terminal: a breathing dot at work, a check once it answered, a quiet ring before it starts. */
 function seatMark(c, state) {
   if (state === "working") {
-    return div().flex_none().size(DOT).rounded_full().bg(c.success).opacity(0.45)
+    return div().flex_none().size(DOT).rounded_full().bg(stateTone(c, "working")).opacity(0.45)
       .loop("opacity", { from: 0.25, to: 0.9, period: 1600, easing: "ease-in-out" });
   }
-  if (state === "done") return svg(ICON("check")).flex_none().size(GLYPH.xs).text_color(c.muted);
-  return div().flex_none().size(DOT).rounded_full().border_1().border_color(c.faint);
+  if (state === "done") return svg(ICON("check")).flex_none().size(GLYPH.xs).text_color(stateTone(c, "done"));
+  return div().flex_none().size(DOT).rounded_full().border_1().border_color(stateTone(c, "idle"));
 }
 
 /** What the user answered to question `i` of a set: the options picked, and the words typed. */

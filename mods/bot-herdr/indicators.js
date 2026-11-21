@@ -14,14 +14,11 @@
 import { div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { settings } from "herdr";
-import { textWidth, agentHue, readable, TYPE, LINE } from "./look.js";
+import { textWidth, agentHue, readable, ROLE_HUES, TYPE, LINE } from "./look.js";
 
 import { INDICATORS, roleOf, indicatorFor, alpha } from "./working.js";
 
 export { INDICATORS, roleOf, indicatorFor, alpha };
-
-/** Each agent type's colour, the same hues its name wears elsewhere (look.js `agentHue`). */
-const ROLE_HUES = { planner: "#c4973b", agent: "#8b93a7" };
 
 /**
  * The colour an agent's name or @mention wears everywhere: its type's colour (the same as its
