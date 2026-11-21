@@ -66,6 +66,7 @@ Goals (autonomous verification loops)
   bh goal approve-amend|reject-amend <task>  (the user's to approve or reject)
 
 GitHub issues (autonomous intake, triage/decline, bundling, screenshot proof & PR delivery)
+  bh issues list [--state open|closed|all] [--label L] [--repo owner/repo]  cached issues, triage & local links (no network)
   bh issues fetch [--state open|closed|all] [--label L] [--limit N] [--repo owner/repo]
   bh issues show <number> [--refresh]        fenced untrusted issue details & triage status
   bh issues triage <n> --decision accept|decline --reason R [--risk low|medium|high] [--effort s|m|l|xl] [--post-comment] [--close]
@@ -870,6 +871,17 @@ async function main(argv) {
 
     case "issues":
     case "issue": {
+      if (sub === "list") {
+        const res = GH.listCachedIssues(root, {
+          state: typeof flags.state === "string" ? flags.state : "open",
+          label: typeof flags.label === "string" ? flags.label : null,
+          repo: typeof flags.repo === "string" ? flags.repo : null,
+        });
+        return out(flags, res, (r) => [
+          `${r.repo ?? "(no GitHub remote)"} (${r.transport}) — ${r.issues.length} ${r.state} issue${r.issues.length === 1 ? "" : "s"}${r.stale ? " [cache stale]" : ""}${r.error ? ` — ${r.error.message}` : ""}`,
+          ...r.issues.map((i) => `  #${i.number}  ${i.triage ? `[${i.triage.decision}] ` : ""}${i.title}${i.labels.length ? ` (${i.labels.join(", ")})` : ""}`),
+        ].join("\n"));
+      }
       if (sub === "fetch" || !sub) {
         const res = await GH.fetchIssues(root, {
           state: typeof flags.state === "string" ? flags.state : "open",
@@ -946,7 +958,7 @@ async function main(argv) {
         });
         return out(flags, delivery, (d) => `Opened PR #${d.prNumber}${d.prUrl ? ` (${d.prUrl})` : ""} for manual review & merge; closed ${d.closedIssues.map((n) => `#${n}`).join(", ") || "no issues"}.`);
       }
-      throw new UsageError("bh issues fetch|show|triage|bundle|screenshot|finish");
+      throw new UsageError("bh issues list|fetch|show|triage|bundle|screenshot|finish");
     }
 
     case "knowledge": {

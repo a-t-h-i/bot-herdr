@@ -103,7 +103,7 @@
               "id": "switch",
               "type": "block",
               "size": {
-                "px": 600
+                "px": 680
               },
               "window_drag": true,
               "content": {
@@ -198,6 +198,16 @@
                     "props": {
                       "view": "work",
                       "tab": "plans"
+                    }
+                  }
+                },
+                {
+                  "id": "issues",
+                  "type": "block",
+                  "content": {
+                    "mod": "bot-herdr",
+                    "props": {
+                      "view": "issues"
                     }
                   }
                 },

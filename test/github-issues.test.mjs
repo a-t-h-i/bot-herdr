@@ -15,6 +15,7 @@ process.env.BH_APP_HOME = join(tmp, "app");
 process.env.XDG_CONFIG_HOME = join(tmp, "xdg");
 
 const GH = await import(new URL("../mods/bot-herdr/engine/lib/github.mjs", import.meta.url));
+const P = await import(new URL("../mods/bot-herdr/engine/lib/plans.mjs", import.meta.url));
 const T = await import(new URL("../mods/bot-herdr/engine/lib/tasks.mjs", import.meta.url));
 const G = await import(new URL("../mods/bot-herdr/engine/lib/goal.mjs", import.meta.url));
 const W = await import(new URL("../mods/bot-herdr/engine/lib/workspace.mjs", import.meta.url));
@@ -31,6 +32,11 @@ const put = (dir, rel, text) => {
   mkdirSync(dirname(join(dir, rel)), { recursive: true });
   writeFileSync(join(dir, rel), text);
 };
+const putJson = (path, value) => {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(value, null, 2));
+};
+const noGh = () => ({ code: 127, out: "", err: "gh not installed", missing: true });
 
 // Minimal valid 1x1 PNG bytes
 const TINY_PNG = Buffer.from(
@@ -48,7 +54,7 @@ function makeRepoWithOrigin() {
   return dir;
 }
 
-function mockRestClient({ issues = [], calls = [] } = {}) {
+function mockRestClient({ issues = [], calls = [], comments = [] } = {}) {
   const fetchImpl = async (url, init = {}) => {
     const method = init.method || "GET";
     const body = init.body ? JSON.parse(init.body) : null;
@@ -65,7 +71,7 @@ function mockRestClient({ issues = [], calls = [] } = {}) {
         : { ok: false, status: 404, text: async () => JSON.stringify({ message: "Not Found" }) };
     }
     if (method === "GET" && /\/issues\/\d+\/comments/.test(url)) {
-      return { ok: true, status: 200, text: async () => JSON.stringify([]) };
+      return { ok: true, status: 200, text: async () => JSON.stringify(comments) };
     }
     if (method === "POST" && /\/issues\/\d+\/comments$/.test(url)) {
       return { ok: true, status: 201, text: async () => JSON.stringify({ id: 99, body: body.body }) };
@@ -240,4 +246,218 @@ test("screenshot capture stores artifact+preview, and finishIssuesTask gates on 
   const updated = T.loadTask(dir, task.id);
   assert.equal(updated.github.prNumber, 42);
   assert.deepEqual(updated.github.closedIssues, [21]);
+});
+
+// ── Cache-only listing, local cross-links & auth capability (offline) ─────────────────────
+
+test("detectAuth distinguishes gh CLI, REST token and unauthenticated access", () => {
+  assert.deepEqual(GH.detectAuth({ env: {}, ghRun: () => ({ code: 0, out: "Logged in", err: "", missing: false }) }), { transport: "gh", authenticated: true, canWrite: true });
+  assert.deepEqual(GH.detectAuth({ env: { GH_TOKEN: "ghp_a" }, ghRun: () => ({ code: 1, out: "", err: "not logged in", missing: false }) }), { transport: "rest", authenticated: true, canWrite: true });
+  assert.equal(GH.detectAuth({ env: { GITHUB_TOKEN: "ghp_b" }, ghRun: noGh }).authenticated, true, "GITHUB_TOKEN also authenticates");
+  assert.deepEqual(GH.detectAuth({ env: {}, ghRun: noGh }), { transport: "rest", authenticated: false, canWrite: false });
+});
+
+test("listCachedIssues reads cache, triage and local links with zero GitHub network calls", () => {
+  const dir = makeRepoWithOrigin();
+  const fetchedAt = new Date(Date.now() - 60_000).toISOString();
+  const oneComment = [{ author: "ann", body: "first", at: null }];
+  putJson(GH.cacheFile(dir), {
+    repo: "acme/widget",
+    transport: "rest",
+    fetchedAt,
+    state: "open",
+    label: null,
+    issues: [
+      { number: 12, title: "Login crash", body: "b", state: "open", url: "", author: "a", labels: ["bug"], createdAt: null, updatedAt: "2026-01-01T00:00:00Z", commentCount: 3, comments: [] },
+      { number: 13, title: "Dark card border", body: "b", state: "open", url: "", author: "a", labels: ["UI"], createdAt: null, updatedAt: "2026-01-02T00:00:00Z", comments: oneComment },
+    ],
+  });
+  putJson(GH.triageFile(dir), { 13: { number: 13, decision: "decline", reason: "out of scope", risk: "low", effort: "s", at: "2026-01-03T00:00:00Z", postedComment: true, closed: true } });
+
+  const plan = P.newPlan(dir, { idea: "Fix login", title: "Login", issues: [{ number: 12, title: "Login crash" }] });
+  const task = T.newTask(dir, {
+    request: "Fix #12",
+    title: "Fix #12",
+    mode: "goal",
+    github: { repo: "acme/widget", issues: [12], prNumber: 77, prUrl: "https://github.com/acme/widget/pull/77" },
+  });
+  task.goal = { status: "running", criteria: [{ id: "c1", verdict: "PASS" }, { id: "c2", verdict: null }] };
+  T.saveTask(dir, task);
+
+  const ghCalls = [];
+  const ghRun = (args) => { ghCalls.push(args); return noGh(); };
+  const open = GH.listCachedIssues(dir, { env: {}, ghRun });
+  assert.deepEqual(ghCalls, [["auth", "status"]], "only a local gh auth probe, never `gh api`");
+  assert.equal(open.repo, "acme/widget");
+  assert.equal(open.transport, "rest");
+  assert.equal(open.authenticated, false);
+  assert.equal(open.canWrite, false);
+  assert.equal(open.fetchedAt, fetchedAt);
+  assert.equal(open.stale, false);
+  assert.equal(open.error, null);
+  assert.deepEqual(open.issues.map((i) => i.number), [12], "declined #13 was closed by triage");
+  assert.equal(open.issues[0].commentCount, 3);
+  assert.deepEqual(open.issues[0].links.plans, [{ id: plan.id, title: "Login", status: "grilling" }]);
+  assert.deepEqual(open.issues[0].links.tasks, [{
+    id: task.id,
+    title: "Fix #12",
+    status: "active",
+    mode: "goal",
+    goalStatus: "running",
+    goalDone: 1,
+    goalTotal: 2,
+    prNumber: 77,
+    prUrl: "https://github.com/acme/widget/pull/77",
+  }]);
+
+  const all = GH.listCachedIssues(dir, { state: "all", env: {}, ghRun });
+  assert.deepEqual(all.issues.map((i) => i.number), [12, 13]);
+  assert.equal(all.issues[1].state, "closed");
+  assert.equal(all.issues[1].commentCount, 1, "commentCount falls back to the cached comments");
+  assert.equal(all.issues[1].triage.decision, "decline");
+
+  const labelled = GH.listCachedIssues(dir, { state: "all", label: "ui", env: {}, ghRun });
+  assert.deepEqual(labelled.issues.map((i) => i.number), [13], "label filter is case-insensitive");
+  assert.equal(labelled.label, "ui");
+
+  assert.equal(GH.listCachedIssues(dir, { env: {}, ghRun, staleMs: 1 }).stale, true, "an old fetch is stale");
+  assert.deepEqual(GH.listCachedIssues(dir, { state: "closed", env: {}, ghRun }).issues.map((i) => i.number), [13]);
+  assert.equal(GH.listCachedIssues(dir, { state: "open", env: { GH_TOKEN: "ghp_c" }, ghRun }).canWrite, true);
+});
+
+test("listCachedIssues reports a structured no-remote error instead of throwing", () => {
+  const dir = mkdtempSync(join(tmp, "nogithub-"));
+  const res = GH.listCachedIssues(dir, { env: { GH_TOKEN: "ghp_d" }, ghRun: noGh });
+  assert.equal(res.repo, null);
+  assert.deepEqual(res.error, { code: "no_github_remote", message: "No GitHub remote found on origin." });
+  assert.equal(res.fetchedAt, null);
+  assert.equal(res.stale, true);
+  assert.equal(res.authenticated, true);
+  assert.equal(res.canWrite, true);
+  assert.deepEqual(res.issues, []);
+});
+
+test("buildIssueLinks maps plans, tasks, Goal progress and PRs to issue numbers", () => {
+  const dir = makeRepoWithOrigin();
+  const plan = P.newPlan(dir, { idea: "Fix login", title: "Login", issues: [{ number: 12, title: "Login crash" }, 14] });
+  const task = T.newTask(dir, {
+    request: "Fix #12 and #15",
+    title: "Fix #12",
+    mode: "goal",
+    github: { repo: "acme/widget", issues: [12, { number: 15 }], prNumber: 77, prUrl: "https://github.com/acme/widget/pull/77" },
+  });
+  task.goal = { status: "reached", criteria: [{ id: "c1", verdict: "PASS" }, { id: "c2", verdict: "PASS" }, { id: "c3", verdict: null }] };
+  T.saveTask(dir, task);
+
+  const links = GH.buildIssueLinks(dir);
+  assert.deepEqual(links.get(12).plans, [{ id: plan.id, title: "Login", status: "grilling" }]);
+  assert.equal(links.get(12).tasks[0].id, task.id);
+  assert.equal(links.get(12).tasks[0].goalStatus, "reached");
+  assert.equal(links.get(12).tasks[0].goalDone, 2);
+  assert.equal(links.get(12).tasks[0].goalTotal, 3);
+  assert.equal(links.get(12).tasks[0].prNumber, 77);
+  assert.equal(links.get(12).tasks[0].prUrl, "https://github.com/acme/widget/pull/77");
+  assert.deepEqual(links.get(14).plans.map((p) => p.id), [plan.id], "plain int plan.issues entries link too");
+  assert.deepEqual(links.get(14).tasks, []);
+  assert.deepEqual(links.get(15).tasks.map((t) => t.id), [task.id], "{ number } task entries link too");
+  assert.equal(links.get(99), undefined);
+});
+
+test("fetchIssues preserves cached comments for unchanged issues and show --refresh persists full comments", async () => {
+  const dir = makeRepoWithOrigin();
+  const updatedAt = "2026-02-01T10:00:00Z";
+  const oldComments = [{ author: "ann", body: "first", at: "2026-01-31T00:00:00Z" }];
+  putJson(GH.cacheFile(dir), {
+    repo: "acme/widget",
+    transport: "rest",
+    fetchedAt: "2026-01-01T00:00:00.000Z",
+    state: "open",
+    label: null,
+    issues: [{ number: 21, title: "Old title", body: "b", state: "open", url: "", author: "", labels: [], createdAt: null, updatedAt, commentCount: 1, comments: oldComments }],
+  });
+
+  const calls = [];
+  const client = mockRestClient({
+    calls,
+    issues: [{ number: 21, title: "New title", body: "b", state: "open", comments: 1, updated_at: updatedAt }],
+    comments: [{ user: { login: "bob" }, body: "second", created_at: "2026-02-02T00:00:00Z" }],
+  });
+  const fetched = await GH.fetchIssues(dir, { client });
+  assert.equal(fetched.issues[0].commentCount, 1);
+  assert.deepEqual(fetched.issues[0].comments, oldComments, "unchanged issue keeps its cached comments");
+  assert.deepEqual(fetched.issues[0].links, { plans: [], tasks: [] });
+  assert.equal(fetched.authenticated, true);
+  assert.equal(fetched.canWrite, true);
+  assert.equal(fetched.stale, false);
+  assert.equal(fetched.error, null);
+
+  const moved = mockRestClient({
+    calls,
+    issues: [{ number: 21, title: "New title", body: "b", state: "open", comments: 2, updated_at: "2026-03-01T00:00:00Z" }],
+  });
+  const changed = await GH.fetchIssues(dir, { client: moved });
+  assert.deepEqual(changed.issues[0].comments, [], "a changed issue drops the stale cached comments");
+
+  const shown = await GH.showIssue(dir, 21, { client, refresh: true });
+  assert.equal(shown.commentCount, 1);
+  assert.deepEqual(shown.comments.map((c) => c.body), ["second"]);
+  assert.deepEqual(shown.links, { plans: [], tasks: [] });
+  assert.match(shown.fencedBody, /<untrusted-github-issue/);
+  const cached = GH.readCache(dir).issues.find((i) => i.number === 21);
+  assert.equal(cached.commentCount, 1, "show --refresh persists commentCount");
+  assert.deepEqual(cached.comments.map((c) => c.body), ["second"], "show --refresh persists full comments");
+});
+
+test("REST requests time out and 401/403/429 failures stay short, actionable and token-free", async () => {
+  const restClient = (fetchImpl, timeoutMs = undefined) => GH.createClient({
+    repo: "acme/widget",
+    env: { GH_TOKEN: "ghp_secret_token" },
+    ghRun: noGh,
+    fetchImpl,
+    ...(timeoutMs ? { timeoutMs } : {}),
+  });
+
+  const slow = restClient(() => new Promise((resolve) => setTimeout(() => resolve({ ok: true, status: 200, text: async () => "[]" }), 200)), 25);
+  await assert.rejects(() => slow.listIssues(), /timed out after 25ms/);
+
+  for (const status of [401, 403, 429]) {
+    const client = restClient(async () => ({
+      ok: false,
+      status,
+      text: async () => JSON.stringify({ message: `Bad credentials for ghp_secret_token\n    at handler (/srv/app.mjs:1:1)` }),
+    }));
+    await assert.rejects(() => client.listIssues(), (e) => {
+      assert.match(e.message, new RegExp(`${status}`));
+      assert.equal(e.message.includes("ghp_secret_token"), false, "the token must be redacted");
+      assert.equal(e.message.includes("at handler"), false, "no stack traces leak");
+      assert.ok(e.message.length < 400, "error stays short");
+      return true;
+    });
+  }
+
+  const offline = restClient(async () => { throw new Error("fetch failed"); });
+  await assert.rejects(() => offline.listIssues(), /network error/);
+});
+
+test("triageIssue is idempotent and syncs the cached issue", async () => {
+  const dir = makeRepoWithOrigin();
+  const calls = [];
+  const client = mockRestClient({ calls, issues: [{ number: 30, title: "Ship it", body: "b", state: "open", labels: [] }] });
+  await GH.fetchIssues(dir, { client });
+
+  const opts = { decision: "decline", reason: "out of scope", postComment: true, close: true, client };
+  const first = await GH.triageIssue(dir, 30, opts);
+  assert.equal(first.postedComment, true);
+  assert.equal(first.closed, true);
+  const second = await GH.triageIssue(dir, 30, opts);
+  assert.equal(second.postedComment, true);
+  assert.equal(second.closed, true);
+  assert.equal(calls.filter((c) => c.method === "POST" && /\/issues\/30\/comments$/.test(c.url)).length, 1, "no duplicate comment");
+  assert.equal(calls.filter((c) => c.method === "PATCH" && /\/issues\/30$/.test(c.url)).length, 1, "no duplicate close");
+
+  const cached = GH.readCache(dir).issues.find((i) => i.number === 30);
+  assert.equal(cached.state, "closed");
+  assert.equal(cached.triage.decision, "decline");
+  const listed = GH.listCachedIssues(dir, { state: "all", env: {}, ghRun: noGh });
+  assert.equal(listed.issues.find((i) => i.number === 30).state, "closed");
 });

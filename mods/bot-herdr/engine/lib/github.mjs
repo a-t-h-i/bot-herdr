@@ -97,6 +97,11 @@ function normalizeIssue(raw) {
     labels: (raw.labels ?? []).map((l) => sanitizeIssueText(typeof l === "string" ? l : l?.name)).filter(Boolean),
     createdAt: raw.created_at ?? raw.createdAt ?? null,
     updatedAt: raw.updated_at ?? raw.updatedAt ?? null,
+    commentCount: typeof raw.comments === "number"
+      ? raw.comments
+      : typeof raw.commentCount === "number"
+        ? raw.commentCount
+        : Array.isArray(raw.comments) ? raw.comments.length : 0,
     comments: Array.isArray(raw.comments)
       ? raw.comments.map((c) => ({
           author: sanitizeIssueText(c.user?.login ?? c.author?.login ?? ""),
@@ -108,21 +113,72 @@ function normalizeIssue(raw) {
 }
 
 /**
+ * What GitHub access this machine has, without touching the network: `gh` CLI when installed and
+ * authenticated, else a `GH_TOKEN`/`GITHUB_TOKEN` REST token. `canWrite` gates GitHub writes.
+ */
+export function detectAuth({ env = process.env, ghRun = defaultGhRun } = {}) {
+  const probe = ghRun(["auth", "status"], { env });
+  if (!probe.missing && probe.code === 0) return { transport: "gh", authenticated: true, canWrite: true };
+  const token = env.GH_TOKEN || env.GITHUB_TOKEN || "";
+  return { transport: "rest", authenticated: Boolean(token), canWrite: Boolean(token) };
+}
+
+const REST_TIMEOUT_MS = 20_000;
+
+/** Keeps a secret out of a user-facing error message and collapses it to one line. */
+function redactToken(text, token) {
+  const clean = String(text ?? "").replace(/\s+/g, " ").trim();
+  return token ? clean.split(token).join("[redacted]") : clean;
+}
+
+/** A short GitHub REST failure: no token, no stack trace, only what the user can act on. */
+function restError(status, method, path, detail, token) {
+  const reason = status === 401
+    ? "authentication failed: the token is invalid or expired (run `gh auth login` or set GH_TOKEN)"
+    : status === 403
+      ? "access forbidden or rate limit exhausted (run `gh auth login` or set GH_TOKEN)"
+      : status === 429
+        ? "rate limited by GitHub; try again later or authenticate with `gh auth login` / GH_TOKEN"
+        : "request failed";
+  const clean = redactToken(String(detail ?? "").split("\n")[0].slice(0, 200), token);
+  return new Error(`GitHub API ${method} ${path} → ${status}: ${reason}${clean ? ` — ${clean}` : ""}`);
+}
+
+/** One REST call bounded by `timeoutMs`: aborts and rejects when GitHub does not answer in time. */
+async function fetchWithTimeout(fetchImpl, url, init, timeoutMs) {
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      controller?.abort();
+      reject(Object.assign(new Error("timeout"), { code: "timeout" }));
+    }, timeoutMs);
+    timer.unref?.();
+  });
+  try {
+    const sent = fetchImpl(url, { ...init, ...(controller ? { signal: controller.signal } : {}) });
+    return await Promise.race([sent, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Builds a dual-transport GitHub API client for `repo` (`owner/repo`).
  * Prefers `gh` CLI when installed and authenticated, automatically falling back to native Node
  * `fetch()` against GitHub REST API v3 using `GH_TOKEN`/`GITHUB_TOKEN` (zero external deps).
  * Intentionally exposes NO merge method: PRs are always merged manually by the user.
  */
-export function createClient({ repo, env = process.env, ghRun = defaultGhRun, fetchImpl = globalThis.fetch, preferRest = false } = {}) {
+export function createClient({ repo, env = process.env, ghRun = defaultGhRun, fetchImpl = globalThis.fetch, preferRest = false, timeoutMs = REST_TIMEOUT_MS } = {}) {
   const parsed = typeof repo === "string" ? parseGitHubRepo(repo) : repo;
   if (!parsed?.full) throw new Error("GitHub client requires a valid owner/repo.");
 
   const token = env.GH_TOKEN || env.GITHUB_TOKEN || "";
-  let useGh = false;
-  if (!preferRest) {
-    const probe = ghRun(["auth", "status"], { env });
-    useGh = !probe.missing && probe.code === 0;
-  }
+  const auth = preferRest
+    ? { transport: "rest", authenticated: Boolean(token), canWrite: Boolean(token) }
+    : detectAuth({ env, ghRun });
+  const useGh = auth.transport === "gh";
+  const ms = Number(timeoutMs) > 0 ? Number(timeoutMs) : REST_TIMEOUT_MS;
 
   const ghApi = (path, { method = "GET", body = null } = {}) => {
     const args = ["api", "--method", method, "-H", "Accept: application/vnd.github+json", path];
@@ -149,7 +205,13 @@ export function createClient({ repo, env = process.env, ghRun = defaultGhRun, fe
       ...(body !== null ? { "Content-Type": "application/json" } : {}),
     };
     const url = `https://api.github.com${path.startsWith("/") ? path : `/${path}`}`;
-    const res = await fetchImpl(url, { method, headers, ...(body !== null ? { body: JSON.stringify(body) } : {}) });
+    let res;
+    try {
+      res = await fetchWithTimeout(fetchImpl, url, { method, headers, ...(body !== null ? { body: JSON.stringify(body) } : {}) }, ms);
+    } catch (e) {
+      if (e?.code === "timeout") throw new Error(`GitHub API ${method} ${path} timed out after ${ms}ms.`);
+      throw new Error(redactToken(`GitHub API ${method} ${path} failed: network error — ${e?.message ?? e}`, token));
+    }
     const text = await res.text();
     let data = null;
     try {
@@ -157,9 +219,7 @@ export function createClient({ repo, env = process.env, ghRun = defaultGhRun, fe
     } catch {
       data = { message: text };
     }
-    if (!res.ok) {
-      throw new Error(`GitHub API ${method} ${path} failed (${res.status}): ${data?.message || text.slice(0, 200)}`);
-    }
+    if (!res.ok) throw restError(res.status, method, path, data?.message || text, token);
     return data;
   };
 
@@ -167,6 +227,8 @@ export function createClient({ repo, env = process.env, ghRun = defaultGhRun, fe
 
   return {
     transport: useGh ? "gh" : "rest",
+    authenticated: Boolean(auth.authenticated),
+    canWrite: Boolean(auth.canWrite),
     repo: parsed,
 
     async listIssues({ state = "open", label = null, limit = 30 } = {}) {
@@ -240,17 +302,190 @@ function saveTriage(root, number, record) {
   });
 }
 
+// ── Local Plan/Task/PR Cross-Links ────────────────────────────────────────────────────────
+
+/** Issue numbers from `plan.issues` / `task.github.issues`, where entries are `{ number }` or plain ints. */
+function linkedNumbers(entries) {
+  return (entries ?? [])
+    .map((entry) => Number(typeof entry === "object" && entry !== null ? entry.number : entry))
+    .filter((n) => Number.isInteger(n) && n > 0);
+}
+
+/** A task's row in an issue's links: Goal progress and the PR opened for it. */
+function taskLink(task) {
+  const criteria = task.goal?.criteria ?? [];
+  return {
+    id: task.id,
+    title: task.title ?? "",
+    status: task.status ?? "",
+    mode: task.mode ?? "task",
+    goalStatus: task.goal?.status ?? null,
+    goalDone: criteria.filter((c) => c.verdict === "PASS").length,
+    goalTotal: criteria.length,
+    prNumber: task.github?.prNumber ?? null,
+    prUrl: task.github?.prUrl ?? null,
+  };
+}
+
+/** Local Plan/Task/PR cross-links per issue number — reads the store only, never the network. */
+export function buildIssueLinks(root) {
+  const links = new Map();
+  const at = (number) => {
+    if (!links.has(number)) links.set(number, { plans: [], tasks: [] });
+    return links.get(number);
+  };
+  for (const plan of P.listPlans(root)) {
+    for (const number of linkedNumbers(plan.issues)) at(number).plans.push({ id: plan.id, title: plan.title ?? "", status: plan.status ?? "" });
+  }
+  for (const task of T.listTasks(root, { all: true })) {
+    for (const number of linkedNumbers(task.github?.issues)) at(number).tasks.push(taskLink(task));
+  }
+  return links;
+}
+
+const linksFor = (links, number) => links.get(Number(number)) ?? { plans: [], tasks: [] };
+
+function tryDetectRepo(root, { repo = null, git = W.runGit } = {}) {
+  try {
+    return detectRepo(root, { repo, git }).full;
+  } catch {
+    return null;
+  }
+}
+
 // ── High-Level Issue Workflows ───────────────────────────────────────────────────────────
+
+/** One cached issue as the UI sees it: latest triage wins, a closed triage closes it, links attached. */
+function cachedIssue(issue, triage, links) {
+  const record = triage[String(issue.number)] ?? issue.triage ?? null;
+  const comments = Array.isArray(issue.comments) ? issue.comments : [];
+  return {
+    ...issue,
+    state: record?.closed ? "closed" : String(issue.state ?? "open").toLowerCase(),
+    labels: Array.isArray(issue.labels) ? issue.labels : [],
+    commentCount: Number.isInteger(issue.commentCount) ? issue.commentCount : comments.length,
+    comments,
+    triage: record,
+    links: linksFor(links, issue.number),
+  };
+}
+
+/**
+ * The Issues tab's read path: cached issues, local triage and Plan/Task/PR links with no GitHub
+ * request at all. Auth capability is reported so the UI can gate GitHub writes.
+ */
+export function listCachedIssues(root, { state = "open", label = null, repo = null, env = process.env, ghRun = defaultGhRun, git = W.runGit, staleMs = 300_000 } = {}) {
+  const cache = readCache(root);
+  const triage = readTriage(root);
+  const links = buildIssueLinks(root);
+  const auth = detectAuth({ env, ghRun });
+  const wanted = String(state || "open").toLowerCase();
+  const repoFull = tryDetectRepo(root, { repo, git }) ?? cache.repo ?? null;
+  if (!repoFull) {
+    return {
+      repo: null,
+      transport: auth.transport,
+      authenticated: auth.authenticated,
+      canWrite: auth.canWrite,
+      fetchedAt: null,
+      stale: true,
+      state: wanted,
+      label,
+      error: { code: "no_github_remote", message: "No GitHub remote found on origin." },
+      issues: [],
+    };
+  }
+  const wantedLabel = label ? String(label).toLowerCase() : null;
+  const issues = (cache.issues ?? [])
+    .map((issue) => cachedIssue(issue, triage, links))
+    .filter((issue) => wanted === "all" || issue.state === wanted)
+    .filter((issue) => !wantedLabel || issue.labels.some((l) => l.toLowerCase() === wantedLabel));
+  const fetchedAt = cache.fetchedAt ?? null;
+  return {
+    repo: repoFull,
+    transport: cache.transport ?? auth.transport,
+    authenticated: auth.authenticated,
+    canWrite: auth.canWrite,
+    fetchedAt,
+    stale: !fetchedAt || Date.now() - Date.parse(fetchedAt) > staleMs,
+    state: wanted,
+    label,
+    error: null,
+    issues,
+  };
+}
+
+/** The cached comments of an unchanged issue (same `updatedAt` and `commentCount`), else null. */
+function preservedComments(previous, issue) {
+  if (!previous || previous.updatedAt !== issue.updatedAt) return null;
+  if (Number(previous.commentCount) !== Number(issue.commentCount)) return null;
+  return Array.isArray(previous.comments) && previous.comments.length ? previous.comments : null;
+}
+
+/** Writes one fetched issue into `cache.json` without dropping the rest of the cache. */
+function persistIssue(root, issue, { repo = null, transport = null } = {}) {
+  const file = cacheFile(root);
+  return withLock(file, () => {
+    const cache = readCache(root);
+    const issues = [...(cache.issues ?? [])];
+    const idx = issues.findIndex((i) => Number(i.number) === Number(issue.number));
+    if (idx >= 0) issues[idx] = { ...issues[idx], ...issue };
+    else issues.push(issue);
+    writeJson(file, {
+      repo: repo ?? cache.repo ?? null,
+      transport: transport ?? cache.transport ?? null,
+      fetchedAt: cache.fetchedAt ?? now(),
+      state: cache.state ?? "open",
+      label: cache.label ?? null,
+      issues,
+    });
+    return issue;
+  });
+}
+
+/** Keeps `cache.json` in step with a local triage decision (a decline may close the issue). */
+function syncCachedTriage(root, number, record) {
+  const file = cacheFile(root);
+  return withLock(file, () => {
+    const cache = readCache(root);
+    const issues = cache.issues ?? [];
+    const idx = issues.findIndex((i) => Number(i.number) === Number(number));
+    if (idx < 0) return null;
+    issues[idx] = { ...issues[idx], triage: record, ...(record.closed ? { state: "closed" } : {}) };
+    writeJson(file, { ...cache, issues });
+    return issues[idx];
+  });
+}
 
 export async function fetchIssues(root, { state = "open", label = null, limit = 30, repo = null, client = null, git = W.runGit } = {}) {
   const detected = client?.repo ?? detectRepo(root, { repo, git });
   const gh = client ?? createClient({ repo: detected });
   const issues = await gh.listIssues({ state, label, limit });
+  const cache = readCache(root);
+  const previous = new Map((cache.issues ?? []).map((i) => [Number(i.number), i]));
   const triage = readTriage(root);
-  const enriched = issues.map((i) => ({ ...i, triage: triage[String(i.number)] ?? null }));
-  const payload = { repo: detected.full, transport: gh.transport, fetchedAt: now(), state, label, issues: enriched };
-  writeJson(cacheFile(root), payload);
-  return payload;
+  const links = buildIssueLinks(root);
+  const enriched = issues.map((issue) => ({
+    ...issue,
+    comments: preservedComments(previous.get(issue.number), issue) ?? issue.comments,
+    triage: triage[String(issue.number)] ?? null,
+    links: linksFor(links, issue.number),
+  }));
+  const fetchedAt = now();
+  const payload = { repo: detected.full, transport: gh.transport, fetchedAt, state, label, issues: enriched };
+  withLock(cacheFile(root), () => writeJson(cacheFile(root), payload));
+  return {
+    repo: detected.full,
+    transport: gh.transport,
+    authenticated: Boolean(gh.authenticated),
+    canWrite: Boolean(gh.canWrite),
+    fetchedAt,
+    stale: false,
+    state,
+    label,
+    error: null,
+    issues: enriched,
+  };
 }
 
 export async function showIssue(root, number, { repo = null, client = null, refresh = false, git = W.runGit } = {}) {
@@ -258,15 +493,17 @@ export async function showIssue(root, number, { repo = null, client = null, refr
   if (!Number.isInteger(n) || n <= 0) throw new Error(`Invalid issue number: ${number}`);
   const cache = readCache(root);
   let issue = !refresh ? (cache.issues ?? []).find((i) => i.number === n) ?? null : null;
-  if (!issue || refresh) {
+  if (!issue) {
     const detected = client?.repo ?? detectRepo(root, { repo: repo || cache.repo, git });
     const gh = client ?? createClient({ repo: detected });
-    issue = await gh.getIssue(n);
+    const fetched = await gh.getIssue(n);
+    issue = { ...fetched, comments: fetched.comments ?? [], commentCount: fetched.comments?.length ?? 0 };
+    persistIssue(root, issue, { repo: detected.full, transport: gh.transport });
   }
   const triage = readTriage(root)[String(n)] ?? null;
   const fencedBody = fenceUntrusted(`github:#${n} title+body`, `Title: ${issue.title}\n\n${issue.body}`);
   const fencedComments = (issue.comments ?? []).map((c, idx) => fenceUntrusted(`github:#${n} comment ${idx + 1} by ${c.author}`, c.body));
-  return { ...issue, triage, fencedBody, fencedComments };
+  return { ...issue, triage, links: linksFor(buildIssueLinks(root), n), fencedBody, fencedComments };
 }
 
 export async function triageIssue(root, number, {
@@ -290,20 +527,26 @@ export async function triageIssue(root, number, {
   const riskNorm = ["low", "medium", "high"].includes(String(risk).toLowerCase()) ? String(risk).toLowerCase() : "medium";
   const effortNorm = ["xs", "s", "m", "l", "xl"].includes(String(effort).toLowerCase()) ? String(effort).toLowerCase() : "m";
 
-  let postedComment = false;
-  let closed = false;
-  if (postComment || close) {
+  // Idempotent: the same decision and rationale never posts a second comment or re-closes.
+  const prior = readTriage(root)[String(n)] ?? null;
+  const sameRationale = prior?.decision === dec && prior?.reason === why;
+  const wantComment = postComment && !(sameRationale && prior?.postedComment);
+  const wantClose = close && dec === "decline" && !prior?.closed;
+
+  let postedComment = Boolean(sameRationale && prior?.postedComment);
+  let closed = Boolean(prior?.closed);
+  if (wantComment || wantClose) {
     const cache = readCache(root);
     const detected = client?.repo ?? detectRepo(root, { repo: repo || cache.repo, git });
     const gh = client ?? createClient({ repo: detected });
-    if (postComment) {
+    if (wantComment) {
       const commentBody = dec === "decline"
         ? `### Proposal Declined\n\nThank you for raising this issue. After review, we are declining this proposal for now.\n\n- **Reason:** ${why}\n- **Risk:** ${riskNorm}\n- **Estimated effort:** ${effortNorm}\n\nFeel free to reopen with additional context or a scoped alternative.`
         : `### Triage: Accepted\n\n- **Rationale:** ${why}\n- **Risk:** ${riskNorm}\n- **Estimated effort:** ${effortNorm}`;
       await gh.commentIssue(n, commentBody);
       postedComment = true;
     }
-    if (close && dec === "decline") {
+    if (wantClose) {
       await gh.closeIssue(n, { stateReason: "not_planned" });
       closed = true;
     }
@@ -320,7 +563,9 @@ export async function triageIssue(root, number, {
     postedComment,
     closed,
   };
-  return saveTriage(root, n, record);
+  const saved = saveTriage(root, n, record);
+  syncCachedTriage(root, n, saved);
+  return saved;
 }
 
 /**

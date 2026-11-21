@@ -10,6 +10,7 @@ export const PAGES = [
   { id: "terminals", icon: "page-terminals", label: "Terminals" },
   { id: "tasks", icon: "page-tasks", label: "Tasks" },
   { id: "plans", icon: "page-plans", label: "Plans" },
+  { id: "issues", icon: "page-issues", label: "Issues" },
   { id: "knowledge", icon: "page-knowledge", label: "Knowledge" },
   { id: "metrics", icon: "page-metrics", label: "Metrics" },
   { id: "settings", icon: "page-settings", label: "Settings" },
