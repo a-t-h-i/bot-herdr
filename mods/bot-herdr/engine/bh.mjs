@@ -20,6 +20,7 @@ import * as MX from "./lib/metrics.mjs";
 import { listHarnesses, listTools } from "./lib/tools.mjs";
 import * as W from "./lib/workspace.mjs";
 import * as RZ from "./lib/resilience.mjs";
+import * as IM from "./lib/improve.mjs";
 import * as C from "./classifier/index.mjs";
 import { fileKind } from "./classifier/qa-risk.mjs";
 import { tail, testCommand, testCounts, listProjectFiles } from "./scripts/lib/common.mjs";
@@ -63,6 +64,14 @@ Scripts
   bh scripts                      bh scripts show <name>        bh scripts run <name> [args…]
   bh scripts pick "<step>"        bh scripts save <file> [--name snake_case]
   bh check [--base <ref>]         lint, typecheck and tests for what changed
+
+Self-improvement (eval-gated; \`bh improve resume\` is the user's)
+  bh improve analyze [--window N]            what the task telemetry says to fix, and the deterministic fix
+  bh improve fold [agent] [--dry-run]        dedupe and trim knowledge under the caps (the old version is archived)
+  bh improve check-diff [--base R] [--target R]   the safety invariants a change must pass
+  bh improve apply --branch bh/improve-X [--title T] [--no-install]   gate it, merge it, install it
+  bh improve verify [--id ID] [--no-rollback]      roll back when the next window's metrics regress
+  bh improve rollback [ID] [--reason R]      bh improve history [--limit N]      bh improve resume
 
 Resilience
   bh resilience status [--task T] [--json]   config, cooldowns, failovers and the task's breaker
@@ -118,6 +127,42 @@ function askedText(q) {
   for (const f of q.failed) lines.push(`Couldn't draw question ${f.question}, option "${f.option}": ${f.error.replace(/\.$/, "")}. The card shows "Open in browser" for it.`);
   return lines.join("\n");
 }
+
+/** `bh improve analyze`: the window's numbers, then each finding with the fix it names. */
+function analyzeText(a) {
+  const m = a.metrics;
+  const lines = [
+    `${m.tasks} tasks in the window: ${m.completedTasks} done, $${m.totalCostUsd} (avg $${m.avgCostUsd}), ${Math.round(m.avgWorkedMs / 60000)} min avg per task.`,
+    `Checks: ${m.failedChecks}/${m.totalChecks} failed (${Math.round(m.checkFailRate * 100)}%). Gates: ${m.failedGateRounds}/${m.totalGateRounds} failed (${Math.round(m.qaFailRate * 100)}%). Blockers: ${m.blockerCount}.`,
+  ];
+  for (const f of a.findings) {
+    lines.push(`\n[${f.severity}] ${f.kind} (${f.count}): ${f.summary}`, `  → ${f.recommendation}`);
+    for (const line of f.evidence) lines.push(`  · ${line}`);
+  }
+  return lines.join("\n");
+}
+
+/** `bh improve fold`: what each file came to, and what went. */
+const foldLine = (f) => `${f.agent}: ${f.beforeChars} → ${f.afterChars} characters, ${f.removedEntries} entr${f.removedEntries === 1 ? "y" : "ies"} folded${f.archived ? " (the version before is archived)" : ""}${f.changed ? "" : " (nothing to fold)"}`;
+
+/** `bh improve apply`: an applied experiment, or the rejection/rollback and the pause it left. */
+function improveLine(r) {
+  if (r.ok) return `Applied ${r.experiment.id}: ${r.experiment.title} — merged ${r.experiment.appliedCommit}${r.experiment.evals.install?.detail ? `; ${r.experiment.evals.install.detail}` : ""}.`;
+  const what = r.verdict === "rollback_failed" ? "Rollback FAILED" : r.verdict === "rolled_back" ? "Rolled back" : "Rejected";
+  return `${what} ${r.experiment.id}: ${r.experiment.reason}\nSelf-improvement is paused until the user runs bh improve resume.`;
+}
+
+/** `bh improve verify`: whether the window after the experiment got worse, and what was done about it. */
+function verifyLine(r) {
+  if (r.ok) return `No regression in the window after ${r.id}: ${r.post.tasks} tasks, ${Math.round(r.post.checkFailRate * 100)}% checks failed, ${Math.round(r.post.qaFailRate * 100)}% gates failed (baseline ${Math.round(r.baseline.checkFailRate * 100)}% and ${Math.round(r.baseline.qaFailRate * 100)}%).`;
+  const why = r.reasons.length ? r.reasons.join("; ") : "the window has too little data to judge";
+  if (r.verdict === "rollback_failed") return `Rollback FAILED ${r.id}: ${r.error ?? why}. Self-improvement is paused until the user runs bh improve resume.`;
+  if (r.rolledBack) return `Regressed after ${r.id}: ${why}. Rolled back to ${r.rollback.rollbackCommit}; self-improvement is paused until the user runs bh improve resume.`;
+  return `Regressed after ${r.id}: ${why}. Nothing was rolled back (--no-rollback); self-improvement is paused until the user runs bh improve resume.`;
+}
+
+/** One experiment for `bh improve history`. */
+const experimentLine = (e) => `${e.at}  ${e.id}  ${String(e.verdict).padEnd(11)} ${e.title ?? e.branch}${e.reason ? ` — ${e.reason.replace(/\s+/g, " ").slice(0, 140)}` : ""}`;
 
 /**
  * `--edit <cid>` (new words) or `--delete <cid>` on one comment of a task or plan (`M` is its
@@ -420,7 +465,7 @@ async function main(argv) {
   const [cmd = "help", sub, ...more] = argv;
   const root = projectRoot();
   const c = C.makeClassifier();
-  const { flags, rest } = parseArgs(argv.slice(1), ["option", "kinds", "skill"], [...BOOLEANS, "refresh", "peek", "board", "shared", "drop", "list", "summary"]);
+  const { flags, rest } = parseArgs(argv.slice(1), ["option", "kinds", "skill"], [...BOOLEANS, "refresh", "peek", "board", "shared", "drop", "list", "summary", "dry-run", "no-install", "no-rollback"]);
   const args = rest.slice(1);
 
   switch (cmd) {
@@ -983,6 +1028,45 @@ async function main(argv) {
         return out(flags, { ok: true, id: saved.id, status: saved.status }, (x) => `${x.id} is ${x.status}.`);
       }
       throw new UsageError("bh resilience [status|save|reset|pause]");
+    }
+
+    case "improve": {
+      const window = Number(flags.window ?? 10) || 10;
+      if (!sub || sub === "analyze") return out(flags, IM.analyze(root, { window }), analyzeText);
+      if (sub === "fold") {
+        const opts = { dryRun: flags["dry-run"] === true };
+        const folded = args[0] ? [K.fold(root, args[0], opts)] : K.foldAll(root, opts);
+        return out(flags, folded, (list) => list.map(foldLine).join("\n") || "No knowledge files to fold.");
+      }
+      if (sub === "check-diff") {
+        const verdict = IM.verifyBranchSafety(root, flags.base ?? "main", flags.target ?? "HEAD");
+        out(flags, verdict, (v) => (v.ok ? `OK: ${v.files.length} file${v.files.length === 1 ? "" : "s"} changed, no protected file or guard is touched.` : ["Not allowed:", ...v.violations.map((x) => `- [${x.rule}] ${x.file}${x.detail ? ` — ${x.detail}` : ""}`)].join("\n")));
+        if (!verdict.ok) process.exitCode = 1;
+        return;
+      }
+      if (sub === "apply") {
+        const result = IM.applyExperiment(root, { branch: need(flags.branch, "bh improve apply --branch bh/improve-<name> [--title T] [--no-install]"), title: flags.title ?? "", install: flags["no-install"] !== true, window });
+        out(flags, result, improveLine);
+        if (!result.ok) process.exitCode = 1;
+        return;
+      }
+      if (sub === "verify") {
+        const result = IM.verifyExperiment(root, { id: flags.id ?? null, window, autoRollback: flags["no-rollback"] !== true, install: flags["no-install"] !== true });
+        out(flags, result, verifyLine);
+        if (!result.ok) process.exitCode = 1;
+        return;
+      }
+      if (sub === "rollback") {
+        const result = IM.rollbackExperiment(root, { id: args[0] ?? flags.id ?? null, reason: flags.reason ?? "Manual rollback", install: flags["no-install"] !== true });
+        return out(flags, result, (r) => `Rolled back ${r.id}: commit ${r.rollbackCommit}; ${r.installed ? "the mod is installed from the rolled-back tree" : "install did not run"}. Self-improvement is paused until the user runs bh improve resume.`);
+      }
+      if (sub === "history") return out(flags, IM.listExperiments(root, { limit: Number(flags.limit ?? 20) || 20 }), (list) => list.map(experimentLine).join("\n") || "No self-improvement experiments yet.");
+      if (sub === "resume") {
+        personOnly("Self-improvement resume");
+        const state = IM.setPaused(root, false, null, null);
+        return out(flags, { ok: true, ...state }, "Self-improvement resumed: bh improve apply runs again.");
+      }
+      throw new UsageError("bh improve [analyze|fold|check-diff|apply|verify|rollback|history|resume]");
     }
 
     case "classify": {

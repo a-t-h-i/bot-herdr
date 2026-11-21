@@ -16,6 +16,8 @@
 - Claude Code headless can exit 0 with a single-line synthetic quota message (anthropics/claude-code#79500); classify only whole-line anchored matches <=220 chars, never prose.
 - runner.turn() must refresh the live Acp instance agent each turn, and resumeState() resets state.harness to the roster harness so fallback reuse checks state.sessions[harness].
 - Per-task locks must live beside the task folder (tasks/<id>.lock), never inside tasks/<id>/task.json, so deleteTask never removes an open lock fd and missing ids never create ghost directories.
+- core.mjs withLock clears locks older than 10s as stale; long-running gates/installs must use a PID claim file guarded by withLock (improve.mjs exclusive).
+- Self-improvement safety protects security-critical files whole (bh.mjs, core, runner, resilience, agent, roster, workspace, scripts, common, install.mjs, improve.mjs, package/pm/tsc configs) and keeps existing test/* files immutable, with every entry and RegExp deep-frozen.
 
 ## Standards
 - team.hc never runs hc through a shell (a brief is one argument); tests stand in for hc with a script named by BH_HC

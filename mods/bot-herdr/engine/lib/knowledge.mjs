@@ -105,6 +105,106 @@ export function search(root, words) {
   return out;
 }
 
+// ── Folding: shortening a file without losing what the user marked ───────────────────────
+
+/** The caps a fold works to: the hard one, the brief one, and how much History may keep. */
+export const FOLD = { maxChars: 16000, briefTarget: 7500, historyCap: 4000 };
+
+/** A bullet's text with case and spacing folded: two bullets that read the same are the same. */
+const bulletKey = (line) => line.replace(/^-\s+/, "").replace(/\s+/g, " ").trim().toLowerCase();
+
+/** A section's lines as units: a `- ` bullet with its indented continuation lines, or one other line. */
+function unitsOf(lines) {
+  const units = [];
+  for (const line of lines) {
+    const last = units.at(-1);
+    if (last?.bullet && /^\s+\S/.test(line)) last.lines.push(line);
+    else units.push({ bullet: line.startsWith("- "), lines: [line] });
+  }
+  return units;
+}
+
+const unitText = (unit) => unit.lines.join("\n");
+const joinUnits = (head, units) => [head, ...units.map(unitText)].join("\n");
+
+/** One section with exact-duplicate bullets dropped (the first copy stays, continuation lines with it). */
+function dedupeSection(section) {
+  const [head, ...rest] = section.split("\n");
+  const units = unitsOf(rest);
+  const seen = new Set();
+  const kept = units.filter((unit) => {
+    if (!unit.bullet) return true;
+    const key = bulletKey(unit.lines.join(" "));
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return { section: joinUnits(head, kept), dropped: units.length - kept.length };
+}
+
+/** A section with its oldest bullets (and their continuation lines) dropped until it fits in `budget`; a bullet the user noted is never dropped. */
+function trimSection(section, budget, isNoted) {
+  const [head, ...rest] = section.split("\n");
+  const units = unitsOf(rest);
+  let dropped = 0;
+  while (joinUnits(head, units).length > budget) {
+    const at = units.findIndex((unit) => unit.bullet && !isNoted(unitText(unit)));
+    if (at < 0) break;
+    units.splice(at, 1);
+    dropped++;
+  }
+  return { section: joinUnits(head, units), dropped };
+}
+
+/**
+ * Shortens one agent's knowledge to the caps: duplicate bullets go first, then the oldest History
+ * entries (newest kept), and the oldest Facts only when the file is still over its hard cap. A
+ * bullet a user noted is never dropped: their note is an instruction, not a hint. The version
+ * before is archived by `write`. `dryRun` says what it would do and changes nothing.
+ */
+export function fold(root, agent, { maxChars = FOLD.maxChars, briefTarget = FOLD.briefTarget, dryRun = false, compactForBrief = false } = {}) {
+  const before = read(root, agent);
+  if (!before.trim()) return { agent, beforeChars: before.length, afterChars: before.length, removedEntries: 0, archived: false, changed: false };
+  const noted = notes(root, agent).map((n) => String(n.entry ?? "")).filter(Boolean);
+  const isNoted = (line) => noted.some((entry) => line.includes(entry));
+  const [head, raw] = sectionsOf(before);
+  let removedEntries = 0;
+  const sections = raw.map((section) => {
+    const folded = dedupeSection(section);
+    removedEntries += folded.dropped;
+    return folded.section;
+  });
+  const doc = () => [head, ...sections].filter((part) => part.trim()).join("\n").trimEnd() + "\n";
+  const at = (name) => sections.findIndex((section) => sectionName(section) === name);
+  const cut = (index, budget) => {
+    const trimmed = trimSection(sections[index], budget, isNoted);
+    if (!trimmed.dropped) return;
+    sections[index] = trimmed.section;
+    removedEntries += trimmed.dropped;
+  };
+  const cap = compactForBrief ? Math.min(maxChars, briefTarget) : maxChars;
+  const history = at("History");
+  if (history >= 0) {
+    const room = Math.min(briefTarget, FOLD.historyCap, sections[history].length - Math.max(0, doc().length - cap));
+    if (sections[history].length > room) cut(history, Math.max(0, room));
+  }
+  while (doc().length > maxChars) {
+    const facts = at("Facts");
+    if (facts < 0) break;
+    const size = sections[facts].length;
+    cut(facts, Math.max(0, size - (doc().length - maxChars)));
+    if (sections[facts].length === size) break;
+  }
+  const next = removedEntries ? doc() : before;
+  if (removedEntries && !dryRun) write(root, agent, next);
+  return { agent, beforeChars: before.length, afterChars: next.length, removedEntries, archived: Boolean(removedEntries && !dryRun && before.trim()), changed: next !== before };
+}
+
+/** Every agent's file, folded: what `bh improve fold` runs when it is given no agent. */
+export function foldAll(root, opts = {}) {
+  return list(root).map((k) => fold(root, k.agent, opts));
+}
+
 /** A file split into the part before its first `## ` section and the sections themselves, in order. */
 function sectionsOf(md) {
   const lines = md.split("\n");

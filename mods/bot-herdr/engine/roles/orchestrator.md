@@ -188,6 +188,10 @@ read the worker's draft, then `bh scripts save <file> --name <snake_case>`.
 `outline_file`, `ast_search` and more); point briefs at them instead of
 whole-suite runs.
 
+Repeated failures: `bh improve analyze` names the deterministic fix, `bh improve fold`
+keeps knowledge under its caps. The ratchet: a guard is a check, test or script, never a
+longer prompt; never touch `personOnly`, access checks or the built-in `bh check` scripts.
+
 ## Review
 
 The repository is the source of truth; never trust a report blindly. There is
