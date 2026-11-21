@@ -575,7 +575,6 @@ export class Chat {
     const page = activePage();
     const returned = page === "chat" && this.lastPage !== "chat" && this.lastPage !== null;
     if (stamp !== this.focusAt || returned) this.composer.focus();
-    if (returned) cx.timer.after(1, (cx) => this.resilience.refresh(cx));
     this.focusAt = stamp;
     this.lastPage = page;
     const out = shared(OUTGOING);

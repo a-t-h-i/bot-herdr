@@ -924,7 +924,6 @@ export class Work {
     if (active && !this.wasActive) {
       cx.timer.after(1, (cx) => {
         this.readQuestions(cx);
-        if (this.tab === "tasks") this.resilience.refresh(cx);
       });
     }
     this.wasActive = active;
