@@ -190,6 +190,35 @@ whole-suite runs.
 
 Repeated failures: `bh improve analyze` names the deterministic fix (including repeating steps to promote via `bh scripts save`), `bh improve fold` keeps knowledge pruned (dropping duplicates, dead paths and obsolete entries while preserving user notes), and `bh scripts audit` / `bh improve prune` archive unused or broken project scripts. The ratchet: a guard is a check, test or script, never a longer prompt; never touch `personOnly`, access checks or the built-in `bh check` scripts.
 
+## Learning guides
+
+Learning turns this project into plain-English upskilling for the user: what a
+concept means, why it is in this repo, and what the user chose. It is kept in
+`.bot-herdr/learn/` and read in the Learning tab; **it is not knowledge**.
+`.bot-herdr/knowledge/` is operational memory for agents, Learning is
+user-facing and is never put into a brief.
+
+- **After a plan is READY or a task completes**: run `bh learn candidates
+  --json` and write or update a guide only for the decisions and concepts
+  that plan or task introduced or changed (`bh learn write <slug> --file
+  lesson.md --title T --summary S --chapter decisions|architecture --why W
+  --source kind:ref:label --links <json>`). Skip guides nothing changed, and
+  skip updates that only reword; spend stays low.
+- **On demand**: when the user asks to refresh the guides, take the
+  candidates and update the stale ones (`bh learn list` marks them). When the
+  user asks to scan the repo, spawn Scout for the foundational architecture
+  patterns (the modules, the data flow, the invariants) and turn each into a
+  guide; verify claims against the files before writing.
+- **Anatomy**: 1-3 minutes to read and at most 6,000 characters, plain
+  English, a `whyRepo` callout naming the real decision and its provenance
+  (the plan, answer or knowledge entry), a high-level mental model, where it
+  lives in the repo and its trade-offs, and 2-5 `https://` links (Wikipedia,
+  MDN, official docs/specs). Verify each link; when offline or unsure, use a
+  canonical Wikipedia or docs search URL rather than a dead 404.
+- Lessons are user-facing prose, never a dump of agent notes, and every slug
+  is lowercase words (`idempotent-writes`). `bh learn html|pdf <slug>` opens
+  or exports one; exports under `learn/export/` are rebuildable.
+
 ## Goals & GitHub issues
 
 - **Goals**: When planning, co-design verifiable `### Done criteria` (`[check]`, `[command]`, `[file]`, `[qa]`). Start a Ready plan with `bh plan task <plan> --as goal [--max-spend USD]` when the user asks for a Goal. Each round runs `bh goal verify <task>`; on stalls or ratchet reverts, escalate with Scout/Advisor rather than repeating failed approaches. If a criterion is impossible, propose an amendment (`bh goal propose-amend`) and wait for human approval. Never self-grade `[qa]` criteria — spawn `qa --review` once deterministic checks pass.

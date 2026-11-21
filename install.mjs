@@ -50,6 +50,30 @@ export function ensureIssuesPage(root) {
   return changed;
 }
 
+/**
+ * Non-destructively ensures the "learning" block sits right after "knowledge" in pages.children
+ * and widens the top-bar "switch" to 760 from a 600 or 680 default. A width the user chose
+ * already (800, say) is kept. Returns whether the layout changed.
+ */
+export function ensureLearningPage(root) {
+  const pages = findNode(root, "pages");
+  if (!pages || !Array.isArray(pages.children)) return false;
+  let changed = false;
+  if (!pages.children.some((c) => c?.id === "learning")) {
+    const block = { id: "learning", type: "block", content: { mod: "bot-herdr", props: { view: "learning" } } };
+    const knowledgeIdx = pages.children.findIndex((c) => c?.id === "knowledge");
+    if (knowledgeIdx >= 0) pages.children.splice(knowledgeIdx + 1, 0, block);
+    else pages.children.push(block);
+    changed = true;
+  }
+  const sw = findNode(root, "switch");
+  if (sw?.size?.px === 600 || sw?.size?.px === 680) {
+    sw.size.px = 760;
+    changed = true;
+  }
+  return changed;
+}
+
 async function runInstall() {
   const args = new Set(process.argv.slice(2));
   const candidateHomes = [
@@ -110,6 +134,7 @@ async function runInstall() {
       // tab bar's Files and Changes buttons show it on every page (Chat too).
       changed = panelBesidePages(kept) || changed;
       changed = ensureIssuesPage(kept) || changed;
+      changed = ensureLearningPage(kept) || changed;
       if (changed) writeFileSync(layout, `${JSON.stringify(kept, null, 2)}\n`);
     } catch {
       // not JSON we can read: leave it as it is

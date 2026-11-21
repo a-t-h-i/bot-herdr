@@ -103,7 +103,7 @@
               "id": "switch",
               "type": "block",
               "size": {
-                "px": 680
+                "px": 760
               },
               "window_drag": true,
               "content": {
@@ -219,6 +219,16 @@
                     "props": {
                       "view": "work",
                       "tab": "knowledge"
+                    }
+                  }
+                },
+                {
+                  "id": "learning",
+                  "type": "block",
+                  "content": {
+                    "mod": "bot-herdr",
+                    "props": {
+                      "view": "learning"
                     }
                   }
                 },

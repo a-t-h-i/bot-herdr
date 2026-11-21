@@ -15,6 +15,7 @@ import * as P from "./lib/plans.mjs";
 import * as K from "./lib/knowledge.mjs";
 import * as S from "./lib/scripts.mjs";
 import * as Q from "./lib/ask.mjs";
+import * as L from "./lib/learn.mjs";
 import * as team from "./lib/team.mjs";
 import * as MX from "./lib/metrics.mjs";
 import { listHarnesses, listTools } from "./lib/tools.mjs";
@@ -81,6 +82,13 @@ Knowledge (one file per agent)
   bh knowledge note <agent> "<entry words>" "<note>"      bh knowledge write <agent> --file F
   bh knowledge inbox [--task T]   the Knowledge Proposals bullets of a task's reports that are not recorded yet
 
+Learning (plain-English guides for the user: this repo's concepts and the decisions behind it)
+  bh learn list [--json]          bh learn show <slug>          bh learn candidates [--all] [--json]
+  bh learn write <slug> --file <md> --title T --summary S [--chapter decisions|architecture] [--why W]
+                                  [--read-mins N] [--source kind:ref:label] [--links <json>] [--json]
+  bh learn read <slug> [--unread]   bh learn delete <slug>
+  bh learn html <slug> [--open]     bh learn pdf <slug> [--open]
+
 Scripts
   bh scripts                      bh scripts show <name>        bh scripts run <name> [args…]
   bh scripts pick "<step>"        bh scripts save <file> [--name snake_case]
@@ -134,6 +142,12 @@ function personOnly(what) {
 }
 
 const out = (flags, value, text) => console.log(flags.json ? JSON.stringify(value, null, 2) : typeof text === "function" ? text(value) : text ?? value);
+
+/** Opens a file in the user's default app, without waiting for it (the chat's mockups and lesson pages). */
+function openFile(file) {
+  const [cmd, args] = process.platform === "win32" ? ["cmd", ["/c", "start", "", file]] : process.platform === "darwin" ? ["open", [file]] : ["xdg-open", [file]];
+  spawn(cmd, args, { detached: true, stdio: "ignore", windowsHide: true }).unref();
+}
 
 /** Questions with a misplaced block are not asked: the warnings say what to fix, and nothing is written. */
 function refuseAsk(flags, warnings) {
@@ -465,6 +479,65 @@ function proposals(md) {
   return mdSection(md, "Knowledge Proposals").split("\n").filter((line) => /^-\s+/.test(line)).map((line) => line.replace(/^-\s+/, "").trim()).filter(Boolean);
 }
 
+/** A `--sources`/`--links` value as the JSON list it must be. */
+function jsonList(value, flag) {
+  let list;
+  try {
+    list = JSON.parse(String(value));
+  } catch {
+    throw new UsageError(`${flag} takes JSON.`);
+  }
+  if (!Array.isArray(list)) throw new UsageError(`${flag} takes a JSON list.`);
+  return list;
+}
+
+/** `--sources <json>` plus repeated `--source kind:ref:label`, as the lesson store keeps them. */
+function lessonSources(flags) {
+  const listed = flags.sources === undefined ? [] : jsonList(flags.sources, "--sources");
+  const named = (flags.source ?? []).map((source) => {
+    const text = String(source);
+    const first = text.indexOf(":");
+    const second = first < 0 ? -1 : text.indexOf(":", first + 1);
+    if (second < 0) throw new UsageError(`--source ${text}: write kind:ref:label.`);
+    return { kind: text.slice(0, first), ref: text.slice(first + 1, second), label: text.slice(second + 1) };
+  });
+  return [...listed, ...named];
+}
+
+/** `--links <json>`: the external reading of a lesson. */
+const lessonLinks = (flags) => (flags.links === undefined ? [] : jsonList(flags.links, "--links"));
+
+const lessonLine = (l) => `${l.read ? "✓" : "·"} ${l.title} — ${l.slug} (${l.chapter}, ${l.readMins} min${l.stale ? ", stale" : ""})`;
+const candidateLine = (c) => `[${c.kind}] ${c.label}: ${c.summary} (${c.ref})`;
+
+/** `bh learn list`: the guides, then what the project has to explain but no guide covers yet. */
+function lessonsText(x) {
+  const lessons = x.lessons.map(lessonLine).join("\n");
+  const gap = x.candidatesCount ? `${x.candidatesCount} unexplained decision${x.candidatesCount === 1 ? "" : "s"} (bh learn candidates).` : "";
+  return [lessons || "No lessons yet.", gap].filter(Boolean).join("\n");
+}
+
+/**
+ * `bh learn html|pdf`: writes the export. A failure is JSON in --json mode (exit 0, so the
+ * mod reads res.error), and a sentence on stderr with exit 1 otherwise.
+ */
+function lessonExport(flags, kind, root, args) {
+  const slug = need(args[0], `bh learn ${kind} <slug> [--open]`);
+  let result;
+  try {
+    result = kind === "html" ? L.exportLessonHtml(root, slug) : L.exportLessonPdf(root, slug);
+  } catch (e) {
+    result = { ok: false, error: e.message };
+  }
+  if (!result.ok) {
+    if (flags.json) return out(flags, result, () => result.error);
+    console.error(`bh learn ${kind}: ${result.error}`);
+    process.exit(1);
+  }
+  if (flags.open) openFile(result.path);
+  return out(flags, result, (x) => `Wrote ${x.path}${flags.open ? " and opened it" : ""}.`);
+}
+
 /** What a review needs before it reads code: the acceptance criteria, the reports, the receipts and the risk. */
 async function reviewContext(root, task, cwd) {
   const { qaRiskBrief, unreadRisk } = await import("./classifier/qa-risk.mjs");
@@ -492,8 +565,8 @@ async function main(argv) {
   const c = C.makeClassifier();
   const { flags, rest } = parseArgs(
     argv.slice(1),
-    ["option", "kinds", "skill", "issue"],
-    [...BOOLEANS, "refresh", "peek", "board", "shared", "drop", "list", "summary", "dry-run", "no-install", "no-rollback", "branch", "worktree", "no-git", "no-revert", "goal", "ready", "post-comment", "close", "draft-pr", "no-close"]
+    ["option", "kinds", "skill", "issue", "source"],
+    [...BOOLEANS, "refresh", "peek", "board", "shared", "drop", "list", "dry-run", "no-install", "no-rollback", "branch", "worktree", "no-git", "no-revert", "goal", "ready", "post-comment", "close", "draft-pr", "no-close", "open", "unread"]
   );
   const args = rest.slice(1);
 
@@ -1016,6 +1089,41 @@ async function main(argv) {
       return out(flags, { agent, text: K.read(root, agent), notes: K.notes(root, agent) }, () => K.withNotes(root, agent) || `Nothing recorded for ${agent} yet.`);
     }
 
+    case "learn": {
+      if (sub === "list") return out(flags, L.listLessons(root), lessonsText);
+      if (sub === "show") return out(flags, L.getLesson(root, need(args[0], "bh learn show <slug>")), (x) => x.markdown);
+      if (sub === "candidates") {
+        const listed = L.listCandidates(root, { all: Boolean(flags.all) });
+        return out(flags, listed, (x) => x.candidates.map(candidateLine).join("\n") || "No unexplained decisions: the guides cover this project's plans, answers and knowledge.");
+      }
+      if (sub === "write") {
+        const slug = need(args[0], 'bh learn write <slug> --file <md> --title T --summary S');
+        const body = need(bodyText(flags, args.slice(1)), "the lesson body (--file <md>)");
+        const saved = L.writeLesson(root, {
+          slug,
+          title: need(flags.title, "--title <title>"),
+          summary: need(flags.summary, "--summary <one line>"),
+          markdown: body,
+          chapter: typeof flags.chapter === "string" ? flags.chapter : "architecture",
+          whyRepo: typeof flags.why === "string" ? flags.why : "",
+          sources: lessonSources(flags),
+          links: lessonLinks(flags),
+          readMins: flags["read-mins"] === undefined ? null : Number(flags["read-mins"]),
+        });
+        return out(flags, saved, (x) => `Saved ${x.slug}${x.archived ? " (the version before is archived)" : ""}.`);
+      }
+      if (sub === "read") {
+        const marked = L.setLessonRead(root, need(args[0], "bh learn read <slug> [--unread]"), !flags.unread);
+        return out(flags, marked, (x) => (x.read ? `Marked ${x.slug} read.` : `Marked ${x.slug} unread.`));
+      }
+      if (sub === "delete") {
+        const gone = L.deleteLesson(root, need(args[0], "bh learn delete <slug>"));
+        return out(flags, gone, (x) => `Deleted ${x.slug}; its words are kept in archive/.`);
+      }
+      if (sub === "html" || sub === "pdf") return lessonExport(flags, sub, root, args);
+      throw new UsageError("bh learn list|show|write|read|delete|candidates|html|pdf …");
+    }
+
     case "scripts":
     case "script": {
       if (!sub || sub === "list") return out(flags, S.scripts(root), (l) => l.map(S.scriptLine).join("\n").replaceAll("node {script}", "bh scripts run"));
@@ -1419,9 +1527,7 @@ async function main(argv) {
 
     case "open": {
       // Opens a file (a question's mockup) in the user's default app, without waiting for it.
-      const file = need(sub, "bh open <file>");
-      const [cmd, args2] = process.platform === "win32" ? ["cmd", ["/c", "start", "", file]] : process.platform === "darwin" ? ["open", [file]] : ["xdg-open", [file]];
-      spawn(cmd, args2, { detached: true, stdio: "ignore", windowsHide: true }).unref();
+      openFile(need(sub, "bh open <file>"));
       return out(flags, { ok: true }, "Opened.");
     }
 

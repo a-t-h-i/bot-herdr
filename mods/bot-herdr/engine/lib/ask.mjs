@@ -5,7 +5,7 @@
 // <app home>/data/bot-herdr/questions/<id>.json, and <id>-<q>-<o>.html for each mockup.
 
 import { rmSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { DATA, listDir, newId, now, readJson, writeJson, writeText } from "./core.mjs";
 import { drawMockup } from "./media.mjs";
 
@@ -177,6 +177,29 @@ export function answersText(q) {
     lines.push(`${i + 1}. ${x.seat ? `[${x.seat}] ` : ""}${x.text}\n   → ${what}`);
   });
   return lines.join("\n");
+}
+
+/**
+ * A project folder as it is compared: absolute, without a task worktree's
+ * `.bot-herdr/worktrees/<name>` tail (what core's store() shares with the main checkout), and
+ * with no trailing separator. Both `/` and `\` count, so records made on another OS match.
+ */
+const WORKTREE = /[\\/]\.bot-herdr[\\/]worktrees[\\/][^\\/]+(?:[\\/].*)?$/;
+
+export function canonicalProjectDir(dir) {
+  const full = resolve(String(dir ?? "").trim() || ".");
+  const root = full.replace(WORKTREE, "");
+  return root.replace(/[\\/]+$/, "") || root;
+}
+
+/** Answered question sets asked for this project, oldest first, a task worktree reading its own project's. */
+export function answeredForProject(root) {
+  const project = canonicalProjectDir(root);
+  return listDir(join(QDIR, "answered"))
+    .filter((d) => d.isFile() && d.name.endsWith(".json"))
+    .map((d) => readJson(join(QDIR, "answered", d.name)))
+    .filter((q) => q && q.cwd && canonicalProjectDir(q.cwd) === project)
+    .sort((a, b) => String(a.answered || a.created).localeCompare(String(b.answered || b.created)));
 }
 
 export function answer(id, answers) {

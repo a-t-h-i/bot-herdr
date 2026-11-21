@@ -12,6 +12,7 @@ export const PAGES = [
   { id: "plans", icon: "page-plans", label: "Plans" },
   { id: "issues", icon: "page-issues", label: "Issues" },
   { id: "knowledge", icon: "page-knowledge", label: "Knowledge" },
+  { id: "learning", icon: "page-learning", label: "Learning" },
   { id: "metrics", icon: "page-metrics", label: "Metrics" },
   { id: "settings", icon: "page-settings", label: "Settings" },
 ];

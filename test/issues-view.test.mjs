@@ -233,7 +233,7 @@ test("static security & GPUI guards on issues.js, layout, and registration", () 
 
   const layout = JSON.parse(readFileSync(join(ROOT, "layouts", "bot-herdr.json"), "utf8"));
   const find = (n, id) => (n?.id === id ? n : (n?.children ?? []).reduce((a, c) => a || find(c, id), null));
-  assert.equal(find(layout, "switch").size.px, 680);
+  assert.ok(find(layout, "switch").size.px >= 680);
   const pageIds = find(layout, "pages").children.map((c) => c.id);
   assert.equal(pageIds[pageIds.indexOf("plans") + 1], "issues");
 });

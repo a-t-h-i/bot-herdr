@@ -24,9 +24,10 @@ import { Toast, isNotification } from "./toast.js";
 import { FileView } from "./viewer.js";
 import { PlanDoc } from "./plandoc.js";
 import { Metrics } from "./metrics.js";
+import { Learning, LearningDoc } from "./learning.js";
 import Issues from "./issues.js";
 
-const VIEWS = { chat: Chat, switch: Switch, work: Work, issues: Issues, settings: Settings, pick: Pick, lightbox: Lightbox, toast: Toast, file: FileView, plan: PlanDoc, note: NoteForm, metrics: Metrics, "settings-more": MoreSheet };
+const VIEWS = { chat: Chat, switch: Switch, work: Work, issues: Issues, learning: Learning, "learning-doc": LearningDoc, settings: Settings, pick: Pick, lightbox: Lightbox, toast: Toast, file: FileView, plan: PlanDoc, note: NoteForm, metrics: Metrics, "settings-more": MoreSheet };
 
 export default class BotHerdr extends View {
   init(given, cx) {
