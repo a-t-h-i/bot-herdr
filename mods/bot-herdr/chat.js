@@ -130,10 +130,60 @@ export function plainMarkdown(text) {
     .join("\n\n");
 }
 
-/** Selectable text: a press on it selects (and Ctrl/Cmd+C copies) instead of reaching the feed. */
-const selectable = (id, text) => TextView.markdown(id, plainMarkdown(text)).selectable(true);
+/** Selectable pre-escaped markdown: a press selects (and Ctrl/Cmd+C copies) instead of reaching the feed. */
+const selectable = (id, md) => TextView.markdown(id, md).selectable(true);
 /** Keeps a press on text from the feed's handler, which would take focus and end the selection. */
 const keepPress = (el) => el.on_mouse_down("left", (_e, cx) => cx.stop_propagation());
+
+// Per-entry pure text/markdown caches (WeakMap so pruned entries GC automatically).
+const replyCache = new WeakMap();
+const mineCache = new WeakMap();
+const kidCache = new WeakMap();
+const noteCache = new WeakMap();
+
+function replyParts(e) {
+  const text = String(e.text ?? "");
+  const cached = replyCache.get(e);
+  if (cached && cached.text === text) return cached;
+  const parts = segments(text).map((p) => (p.kind === "md" ? { ...p, linked: linkTasks(linkFiles(p.text)) } : p));
+  const pics = parts.filter((p) => p.kind === "mockup");
+  const next = { text, parts, pics };
+  replyCache.set(e, next);
+  return next;
+}
+
+function mineView(e, inner) {
+  const text = String(e.text ?? "");
+  let cached = mineCache.get(e);
+  if (!cached || cached.text !== text || cached.inner !== inner) {
+    const folded = fold(text, inner, (line) => textWidth(line, TYPE.md));
+    cached = { text, inner, folded, openMd: null, closedMd: null };
+    mineCache.set(e, cached);
+  }
+  return cached;
+}
+
+function kidView(k) {
+  const text = String(k.text ?? "");
+  let cached = kidCache.get(k);
+  if (!cached || cached.text !== text) {
+    const lines = text.split("\n");
+    const more = lines.length > KID_LINES;
+    cached = { text, more, shortText: more ? `${lines.slice(0, KID_LINES).join("\n")}…` : text, shortMd: null, fullMd: null };
+    kidCache.set(k, cached);
+  }
+  return cached;
+}
+
+function noteMd(e) {
+  const text = String(e.text ?? "");
+  let cached = noteCache.get(e);
+  if (!cached || cached.text !== text) {
+    cached = { text, md: plainMarkdown(text) };
+    noteCache.set(e, cached);
+  }
+  return cached.md;
+}
 
 export class Chat {
   init(props, cx) {
@@ -190,8 +240,10 @@ export class Chat {
   }
 
   space() {
+    if (this.composer?.space) return this.composer.space()?.id ?? null;
     const f = focused();
-    return (spaces().find((s) => s.id === f?.space) ?? spaces().find((s) => s.active))?.id ?? null;
+    const list = spaces();
+    return (list.find((s) => s.id === f?.space) ?? list.find((s) => s.active))?.id ?? null;
   }
 
   add(entry, cx) {
@@ -364,17 +416,24 @@ export class Chat {
    * Every live agent, with the space it is in and what to call it. One that never reports a
    * status (`quiet`, live.js) counts as working from our message until its reply.
    */
-  live() {
+  live(space = null) {
     const now = Date.now();
-    const listed = liveAgents();
+    const listed = this.composer?.live ? this.composer.live() : liveAgents();
     const byAddress = new Map(listed.map((a) => [a.address, a]));
     const statusOf = (a, quiet) => (quiet ? quietStatus(findWait(this.waits, a.address), now) : a.status ?? null);
-    const out = listed.map((a) => ({ address: a.address, space: a.space, status: statusOf(a, a.quiet), tile: a.program?.tile ?? null, quiet: Boolean(a.quiet) }));
-    for (const t of terminals()) {
+    const out = listed.map((a) => ({ address: a.address, space: a.space, status: statusOf(a, a.quiet), tile: a.program?.tile ?? null, quiet: Boolean(a.quiet), name: a.program?.name ?? null }));
+    const allTerminals = this.composer?.allTerminals ? this.composer.allTerminals() : terminals();
+    let fallbackSpace = space;
+    for (const t of allTerminals) {
       if (t.state !== "live" || byAddress.has(t.address) || !t.parent) continue;
       const quiet = !t.status && isQuiet(t);
       if (!(t.program?.agent || t.status || quiet)) continue;
-      out.push({ address: t.address, space: byAddress.get(t.parent)?.space ?? this.space(), status: statusOf(t, quiet), tile: t.program?.tile ?? null, quiet });
+      let parentSpace = byAddress.get(t.parent)?.space;
+      if (parentSpace === undefined) {
+        if (fallbackSpace === null) fallbackSpace = this.space();
+        parentSpace = fallbackSpace;
+      }
+      out.push({ address: t.address, space: parentSpace, status: statusOf(t, quiet), tile: t.program?.tile ?? null, quiet, name: t.name || t.program?.name || null });
     }
     return out;
   }
@@ -536,13 +595,11 @@ export class Chat {
   }
 
   /** Who works in this space now, and in what role. */
-  workers() {
-    const space = this.space();
-    const team = this.composer.roster();
-    const byAddress = this.composer.entriesByAddress();
-    return this.live().filter((a) => a.space === space && a.status === "working").map((a) => {
-      const name = this.composer.nameOf(a.address);
-      const role = byAddress.get(a.address)?.role ?? findAgent(team, name)?.role ?? (/(^|[-_ ])(dev|design|qa|scout|research|planner|panel)/i.exec(name)?.[2] ?? "agent");
+  workers(space = this.space(), team = this.composer.roster(), byAddress = this.composer.entriesByAddress()) {
+    return this.live(space).filter((a) => a.space === space && a.status === "working").map((a) => {
+      const entry = byAddress.get(a.address);
+      const name = entry?.name ?? a.name ?? a.address;
+      const role = entry?.role ?? findAgent(team, name)?.role ?? (/(^|[-_ ])(dev|design|qa|scout|research|planner|panel)/i.exec(name)?.[2] ?? "agent");
       return { address: a.address, name, tile: a.tile, role, status: a.status };
     });
   }
@@ -569,6 +626,11 @@ export class Chat {
   // ── Drawing ────────────────────────────────────────────────────────────────────────────────
 
   render(cx) {
+    const withFrame = this.composer?.withFrame ? (fn) => this.composer.withFrame(fn) : (fn) => fn();
+    return withFrame(() => this.renderFrame(cx));
+  }
+
+  renderFrame(cx) {
     this.cx = cx; // mockups in replies start drawing as they are drawn
     // Take the keyboard when asked (ctrl+shift+m, the Chat pill) or when this page comes up.
     const stamp = shared(FOCUS) ?? 0;
@@ -584,6 +646,13 @@ export class Chat {
     }
 
     const c = colors();
+    const team = this.composer.roster();
+    const tones = new Map();
+    const toneFor = (name) => {
+      const key = String(name ?? "");
+      if (!tones.has(key)) tones.set(key, mentionTone(c, key, team));
+      return tones.get(key);
+    };
     const width = Math.max(320, Math.min(SIZE.maxWidth, this.size.width - SIZE.gutter * 2));
     const space = this.space();
     const columnLeft = Math.round((this.size.width - width) / 2);
@@ -591,13 +660,14 @@ export class Chat {
     // The feed's height. Heights measured since the last wheel, or the composer folding to its
     // slim bar, can change how far up the feed goes: never leave empty space above the oldest.
     this.room = Math.max(0, this.size.height - foot);
+    const items = this.items(space);
     if (this.back > 0 || this.px > 0) {
-      const heights = this.feedHeights(space);
+      const heights = this.feedHeights(space, items);
       const next = clampScroll({ back: this.back, px: this.px }, heights, heights.length, this.room);
       this.back = next.back;
       this.px = next.px;
     }
-    const view = shown(this.items(space), space, this.back);
+    const view = shown(items, space, this.back);
     this.back = view.back;
     if (view.total === 0) this.px = 0;
     // Only entries newly added via add() animate their arrival; scrolling into history never flashes,
@@ -615,7 +685,7 @@ export class Chat {
       });
     }
     const up = this.back > 0 || this.px > 0;
-    const working = this.workers();
+    const working = this.workers(space, team);
     if (!working.length) this.drawnFx = null;
     this.composer.questions = this.open.list;
     // A pane with nothing to draw (a suggestion list that matches nothing) dims nothing either.
@@ -662,7 +732,7 @@ export class Chat {
             cx.notify();
           })
           .on_scroll_wheel((e, cx) => this.scroll(e, view.total, cx))
-          .when(view.total === 0, (el) => el.child(this.empty(c, width)))
+          .when(view.total === 0, (el) => el.child(this.empty(c, width, team)))
           .when(view.total > 0, (el) =>
             el.child(
               // Bottom-anchored and shifted down by the pixel offset, so its foot is clipped.
@@ -674,7 +744,7 @@ export class Chat {
                 .w(width)
                 .gap(SPACE[4])
                 .pt(SPACE[4])
-                .children(view.list.map((e) => this.entry(c, e, width)))
+                .children(view.list.map((e) => this.entry(c, e, width, team, toneFor)))
                 .when(!up && working.length > 0, (col) => col.child(this.working(c, working, width))),
             ))
           // Stays put over the feed while the column scrolls under it.
@@ -709,7 +779,7 @@ export class Chat {
           .bottom(SIZE.foot)
           .flex()
           .justify_center()
-          .child(this.composer.render(cx, this.size.width, this.size.height)),
+          .child(this.composer.render(cx, this.size.width, this.size.height, c)),
       );
   }
 
@@ -767,13 +837,12 @@ export class Chat {
   }
 
   /** This space's entries' drawn heights (gap included), newest first; undefined until measured. */
-  feedHeights(space) {
-    const mine = this.items(space);
+  feedHeights(space, mine = this.items(space)) {
     return mine.map((_, i) => this.heights.get(heightKey(mine[mine.length - 1 - i])));
   }
 
-  empty(c, width) {
-    const lead = this.composer.leadEntry().name;
+  empty(c, width, team = this.composer.roster()) {
+    const lead = team.find((a) => a.lead)?.name ?? "Orchestrator";
     return v_flex()
       .relative()
       .w(width)
@@ -787,8 +856,8 @@ export class Chat {
       }));
   }
 
-  entry(c, e, width) {
-    const el = e.kind === "me" ? this.mine(c, e, width) : e.kind === "kids" ? this.kids(c, e) : e.kind === "agent" ? this.reply(c, e, width) : this.note(c, e);
+  entry(c, e, width, team = this.composer.roster(), toneFor = null) {
+    const el = e.kind === "me" ? this.mine(c, e, width, team, toneFor) : e.kind === "kids" ? this.kids(c, e) : e.kind === "agent" ? this.reply(c, e, width, team, toneFor) : this.note(c, e);
     const arriving = this.arriving.has(e.id);
     const hKey = heightKey(e);
     // Measured for the pixel scroll: its height plus the column's gap.
@@ -808,13 +877,16 @@ export class Chat {
       });
   }
 
-  mine(c, e, width) {
+  mine(c, e, width, team = this.composer.roster(), toneFor = null) {
     // A long message folds, with Show more; both text measures stay near 75 characters.
     const room = Math.min(600, Math.round(width * 0.82));
     const inner = room - SPACE[4] * 2;
-    const folded = fold(e.text, inner, (line) => textWidth(line, TYPE.md));
+    const mv = mineView(e, inner);
+    const folded = mv.folded;
     const open = this.unfolded.has(e.id);
-    const text = folded.folded && !open ? folded.text : String(e.text ?? "");
+    const md = folded.folded && !open
+      ? (mv.closedMd ??= plainMarkdown(folded.text))
+      : (mv.openMd ??= plainMarkdown(mv.text));
     const chips = (e.files ?? []).map((name, i) => this.sentChip(c, e, name, i));
     return v_flex()
       .id(`bh-e-${e.id}`)
@@ -832,7 +904,7 @@ export class Chat {
           .border_color(c.bubbleEdge)
           .text_size(TYPE.md)
           .line_height(`${LINE.md}px`)
-          .child(keepPress(div().child(selectable(`bh-mine-md-${e.id}-${open ? "o" : "c"}`, text))))
+          .child(keepPress(div().child(selectable(`bh-mine-md-${e.id}-${open ? "o" : "c"}`, md))))
           .when(folded.folded, (el) => el.child(
             clickable(
               div()
@@ -854,7 +926,7 @@ export class Chat {
             el.child(h_flex().pt(SPACE[2]).gap(SPACE[3]).flex_wrap().children(chips))),
       )
       .child(h_flex().gap(SPACE[1]).items_center().text_size(TYPE.xs)
-        .children((e.to ?? []).map((n, i) => div().id(`bh-e-to-${e.id}-${i}`).font_medium().text_color(mentionTone(c, n, this.composer.roster())).child(String(n))))
+        .children((e.to ?? []).map((n, i) => div().id(`bh-e-to-${e.id}-${i}`).font_medium().text_color(toneFor ? toneFor(n) : mentionTone(c, n, team)).child(String(n))))
         .child(div().text_color(c.faint).child(`· ${clock(e.at)}`)));
   }
 
@@ -880,11 +952,11 @@ export class Chat {
     });
   }
 
-  reply(c, e, width) {
+  reply(c, e, width, team = this.composer.roster(), toneFor = null) {
     // Markdown, with any ```mockup block drawn as a picture.
-    const parts = segments(e.text);
-    const pics = parts.filter((p) => p.kind === "mockup");
+    const { parts, pics } = replyParts(e);
     const show = this.hovered === e.id;
+    const fromName = e.from?.name ?? "Agent";
     return v_flex()
       .id(`bh-e-${e.id}`)
       .flex_none()
@@ -905,7 +977,7 @@ export class Chat {
           .gap(SPACE[3])
           .items_center()
           // Agents are named in their own colour, no icon and no dot.
-          .child(div().text_size(TYPE.sm).font_semibold().text_color(mentionTone(c, e.from?.name ?? "Agent", this.composer.roster())).child(e.from?.name ?? "Agent"))
+          .child(div().text_size(TYPE.sm).font_semibold().text_color(toneFor ? toneFor(fromName) : mentionTone(c, fromName, team)).child(fromName))
           .child(div().text_size(TYPE.xs).text_color(c.faint).child(clock(e.at)))
           .child(div().flex_1())
           .child(this.link(c, `bh-open-${e.id}`, "Open terminal", () => openTerminal(e.from.address), show)),
@@ -918,7 +990,7 @@ export class Chat {
           .text_size(TYPE.md)
           .line_height(`${LINE.md}px`)
           .children(parts.map((p, i) => (p.kind === "md"
-            ? TextView.markdown(`bh-md-${e.id}-${i}`, linkTasks(linkFiles(p.text))).selectable(true).on_link_click(openFeedLink)
+            ? TextView.markdown(`bh-md-${e.id}-${i}`, p.linked).selectable(true).on_link_click(openFeedLink)
             : this.picture(c, e, p, pics.indexOf(p), pics, width)))),
       )
       .child(this.replyComments(c, e, show));
@@ -1005,7 +1077,7 @@ export class Chat {
       .items_center()
       .text_size(TYPE.sm)
       .text_color(c.muted)
-      .child(keepPress(div().min_w(0)).child(selectable(`bh-note-md-${e.id}`, e.text)))
+      .child(keepPress(div().min_w(0)).child(selectable(`bh-note-md-${e.id}`, noteMd(e))))
       .when(Boolean(e.address), (el) => el.child(this.link(c, `bh-open-${e.id}`, "Open terminal", () => openTerminal(e.address))));
   }
 
@@ -1078,9 +1150,11 @@ export class Chat {
 
   /** One child's report in an opened group: who, when, its first lines and Show all. */
   kidReport(c, k) {
-    const lines = String(k.text ?? "").split("\n");
+    const kv = kidView(k);
     const open = this.unfolded.has(k.id);
-    const text = open || lines.length <= KID_LINES ? String(k.text ?? "") : `${lines.slice(0, KID_LINES).join("\n")}…`;
+    const md = open || !kv.more
+      ? (kv.fullMd ??= linkTasks(linkFiles(kv.text)))
+      : (kv.shortMd ??= linkTasks(linkFiles(kv.shortText)));
     return v_flex()
       .id(`bh-kid-${k.id}`)
       .flex_none()
@@ -1089,8 +1163,8 @@ export class Chat {
         .child(div().text_size(TYPE.sm).font_semibold().text_color(agentInk(c, k.from?.name ?? "Agent")).child(k.from?.name ?? "Agent"))
         .child(div().text_size(TYPE.xs).text_color(c.faint).child(clock(k.at))))
       .child(div().text_size(TYPE.sm).line_height(`${LINE.sm}px`)
-        .child(TextView.markdown(`bh-kid-md-${k.id}-${open ? "o" : "c"}`, linkTasks(linkFiles(text))).selectable(true).on_link_click(openFeedLink)))
-      .when(lines.length > KID_LINES, (el) => el.child(
+        .child(TextView.markdown(`bh-kid-md-${k.id}-${open ? "o" : "c"}`, md).selectable(true).on_link_click(openFeedLink)))
+      .when(kv.more, (el) => el.child(
         actionButton(c, `bh-kid-more-${k.id}`, open ? "Show less" : "Show all", (_ev, cx) => this.showKidFull(k.id, cx), { tone: "quiet" }).self_start(),
       ));
   }
