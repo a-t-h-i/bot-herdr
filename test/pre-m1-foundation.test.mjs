@@ -1,6 +1,7 @@
 // pre-M1 foundation: the additive bh dispatchers (ui-audit, home, thread, approvals, review,
-// goal progress) and the approvals permission hook. The modules are placeholders: they must be
-// listed in help, answer without crashing, and leave a refused call to the existing reject path.
+// goal progress) and the approvals permission hook. ui-audit is real from M1 on (test/ui-audit
+// .test.mjs covers it); the rest are placeholders: they must be listed in help, answer without
+// crashing, and leave a refused call to the existing reject path.
 
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
@@ -30,7 +31,7 @@ test("bh help lists the redesign foundation commands", () => {
 });
 
 test("the placeholder commands answer without crashing", () => {
-  for (const cmd of [["ui-audit"], ["home"], ["thread"], ["approvals"], ["review"], ["goal", "progress", "t-20260101-progress"]]) {
+  for (const cmd of [["home"], ["thread"], ["approvals"], ["review"], ["goal", "progress", "t-20260101-progress"]]) {
     const r = runBh(...cmd);
     assert.equal(r.status, 0, `${cmd.join(" ")}: ${r.stderr}`);
     assert.match(r.stdout, /not implemented yet/, cmd.join(" "));

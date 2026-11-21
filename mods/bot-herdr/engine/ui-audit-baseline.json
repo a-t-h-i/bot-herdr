@@ -1,0 +1,17 @@
+{
+  "at": "2026-11-21T22:20:27.467Z",
+  "treeHash": "60f6026243044c550009c55c0cf35788a57b0c4fba5becde901ef30879aaa284",
+  "pages": {
+    "chat": 41,
+    "tasks": 167,
+    "tasks-board": 187,
+    "plans": 101,
+    "issues": 95,
+    "knowledge": 142,
+    "learning": 71,
+    "metrics": 194,
+    "settings": 292,
+    "settings-general": 110,
+    "switch": 29
+  }
+}
