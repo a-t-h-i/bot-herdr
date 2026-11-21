@@ -15,6 +15,17 @@ export const BOARD_KINDS = ["contract", "decision", "blocker", "question", "done
 
 const dir = (root, id) => store(root, "tasks", id);
 const file = (root, id) => join(dir(root, id), "task.json");
+// A task's lock sits beside its folder, never inside it: deleting the folder must not remove a lock
+// another command holds open (Windows refuses that delete; a waiter chokes on the missing lock),
+// and a failed lookup must not leave an empty `<id>/` folder behind.
+const lockTarget = (root, id) => join(store(root, "tasks"), String(id));
+
+/** The id as a folder name, refused before anything touches the disk when it could escape the tasks store. */
+function taskId(id) {
+  const name = String(id);
+  if (!/^[\w-]+$/.test(name)) throw new Error(`No task ${id}. \`bh task list\` shows them.`);
+  return name;
+}
 
 export function loadTask(root, id) {
   const task = readJson(file(root, id));
@@ -28,13 +39,31 @@ export function saveTask(root, task) {
   return task;
 }
 
+/** A write that read the task before someone else changed it: `--if-updated` saw a newer `updated`. */
+export class ConflictError extends Error {
+  constructor(task, expected) {
+    super(`Conflict: task ${task.id} was updated at ${task.updated} (expected ${expected}). Refresh and retry.`);
+    this.name = "ConflictError";
+    this.conflict = true;
+    this.expected = expected;
+    this.actual = task.updated;
+  }
+}
+
+/** Refuses the write when the caller's `--if-updated` is not the task's current `updated`. */
+function assertFresh(task, ifUpdated) {
+  if (ifUpdated && task.updated !== ifUpdated) throw new ConflictError(task, ifUpdated);
+}
+
 /**
  * Changes one task under its lock: loaded fresh, changed, saved. Returns what `change` returned.
- * Two commands changing one task at once never lose an update.
+ * Two commands changing one task at once never lose an update; `ifUpdated` refuses a stale one.
  */
-export function updateTask(root, id, change) {
-  return withLock(file(root, id), () => {
-    const task = loadTask(root, id);
+export function updateTask(root, id, change, { ifUpdated = null } = {}) {
+  const name = taskId(id);
+  return withLock(lockTarget(root, name), () => {
+    const task = loadTask(root, name);
+    assertFresh(task, ifUpdated);
     const result = change(task);
     saveTask(root, task);
     return result;
@@ -76,14 +105,82 @@ function savedTotals(root, task) {
   return totals;
 }
 
-export function listTasks(root, { all = false } = {}) {
+/** Every task's `task.json`, newest `updated` first; archived ones only with `all`. */
+function rawTasks(root, all) {
   return listDir(store(root, "tasks"))
     .filter((d) => d.isDirectory())
     .map((d) => readJson(join(store(root, "tasks"), d.name, "task.json")))
     .filter((t) => t && (all || !t.archived))
-    .sort((a, b) => String(b.updated).localeCompare(String(a.updated)))
-    .map((t) => withUsage(root, t));
+    .sort((a, b) => String(b.updated).localeCompare(String(a.updated)));
 }
+
+export function listTasks(root, { all = false } = {}) {
+  return rawTasks(root, all).map((t) => withUsage(root, t));
+}
+
+/** A task's spend and time for the summary list: a finished task's saved totals, else its turns (both cached). */
+function totalsOf(root, task) {
+  const saved = savedTotals(root, task);
+  if (saved) return { spendUsd: Number(saved.usage?.costUsd || 0), workedMs: Number(saved.timeMs || 0) };
+  return { spendUsd: Number(usageTotals(usageOf(root, task.id)).costUsd || 0), workedMs: Number(worked(root, task) || 0) };
+}
+
+/** The agents a task is running now: on its active steps and its open children, once each. */
+function activeAgents(steps, children) {
+  const names = [
+    ...steps.filter((s) => s.status === "active").map((s) => s.agent),
+    ...children.filter((c) => c.state === "open").map((c) => c.agent),
+  ];
+  return [...new Set(names.filter((n) => n && String(n).trim()))];
+}
+
+/**
+ * One row of `bh task list --summary`: progress counts, who is running, what needs the user and what
+ * it cost. No steps, comments, children or request, so the workbench's polling stays small.
+ */
+export function taskSummary(root, task) {
+  const steps = task.steps ?? [];
+  const children = task.children ?? [];
+  const blocked = steps.filter((s) => s.status === "blocked").length;
+  const open = openComments(task).length;
+  const gate = (task.gates ?? []).at(-1) ?? null;
+  const { spendUsd, workedMs } = totalsOf(root, task);
+  return {
+    id: task.id,
+    title: task.title,
+    status: task.status,
+    archived: Boolean(task.archived),
+    track: task.track,
+    plan: task.plan ?? null,
+    created: task.created,
+    updated: task.updated,
+    done: steps.filter((s) => s.status === "done" || s.status === "skipped").length,
+    total: steps.length,
+    blocked,
+    openComments: open,
+    needsYou: Boolean(task.status === "paused" || blocked > 0 || open > 0 || gate?.verdict === "CHANGES_REQUIRED" || gate?.verdict === "BLOCKED"),
+    running: Boolean(task.status === "active" && (steps.some((s) => s.status === "active") || children.some((c) => c.state === "open"))),
+    activeAgents: activeAgents(steps, children),
+    spendUsd,
+    workedMs,
+    latestGate: gate && { verdict: gate.verdict, round: gate.round },
+  };
+}
+
+/** The lightweight rows `bh task list --summary` gives, newest first (`all`: archived ones too). */
+export function listTaskSummaries(root, { all = false } = {}) {
+  return rawTasks(root, all).map((t) => taskSummary(root, t));
+}
+
+/** What `bh task show --json` says the UI may offer, so it never guesses from the status alone. */
+export const allowedActions = (task) => ({
+  pause: task.status === "active",
+  resume: task.status === "paused" || task.status === "backlog",
+  done: task.status === "active" || task.status === "paused",
+  archive: !task.archived && task.status !== "active",
+  unarchive: Boolean(task.archived),
+  delete: task.status !== "active",
+});
 
 /** The task a bare `bh task …` means: the newest active one, else the newest. */
 export function currentTask(root) {
@@ -166,16 +263,19 @@ export function setStatus(task, status) {
 /**
  * Deletes a task's folder, for `bh task delete`. Not while it is active. Its worktree goes first, with
  * git's own check: git refuses when the worktree holds changes, and then nothing is deleted. Its
- * branch is kept. Returns { deleted, branch }.
+ * branch is kept. Returns { deleted, branch }. Under the task's lock, so `ifUpdated` sees no race.
  */
-export function deleteTask(root, id) {
-  if (!/^[\w-]+$/.test(String(id))) throw new Error(`No task ${id}. \`bh task list\` shows them.`);
-  const task = loadTask(root, id);
-  if (task.status === "active") throw new Error(`${id} is active: pause or finish it first.`);
-  const g = task.git;
-  if (g?.mode === "worktree" && g.path && existsSync(g.path)) removeWorktree(root, g.path);
-  rmSync(dir(root, id), { recursive: true, force: true });
-  return { deleted: id, branch: g?.branch ?? null };
+export function deleteTask(root, id, { ifUpdated = null } = {}) {
+  const name = taskId(id);
+  return withLock(lockTarget(root, name), () => {
+    const task = loadTask(root, name);
+    assertFresh(task, ifUpdated);
+    if (task.status === "active") throw new Error(`${name} is active: pause or finish it first.`);
+    const g = task.git;
+    if (g?.mode === "worktree" && g.path && existsSync(g.path)) removeWorktree(root, g.path);
+    rmSync(dir(root, name), { recursive: true, force: true });
+    return { deleted: name, branch: g?.branch ?? null };
+  });
 }
 
 function removeWorktree(root, path) {
@@ -390,7 +490,7 @@ export function taskDetail(root, task, entries = []) {
     const ms = usage.length ? stepTime(usage, s.n) : (s.workedMs ?? 0);
     return { ...s, events: stepEvents(s, entries, receipts, task.children ?? []), agentName: s.agent ?? open(s.n), timeMs: ms, elapsedMs: ms, usage: usageTotals(usage.filter((r) => r.step === s.n)) };
   });
-  return { ...task, steps, done: steps.filter((s) => s.status === "done" || s.status === "skipped").length, total: steps.length, usage: usageTotals(usage), timeMs: worked(root, task) };
+  return { ...task, steps, done: steps.filter((s) => s.status === "done" || s.status === "skipped").length, total: steps.length, usage: usageTotals(usage), timeMs: worked(root, task), checks: receipts, allowedActions: allowedActions(task) };
 }
 
 /** A gate verdict on the task, and a `done` board entry for it; round defaults to one past the last. */
@@ -409,6 +509,12 @@ export function recordGate(root, id, { verdict, round = null, file, summary, fro
 export function taskLine(t) {
   const done = t.steps.filter((s) => s.status === "done" || s.status === "skipped").length;
   return `${t.id}  ${t.status.padEnd(9)} ${t.steps.length ? `${done}/${t.steps.length} steps  ` : ""}${t.title}`;
+}
+
+/** One line per task for `bh task list --summary`: how far it got, and whether it wants the user. */
+export function summaryLine(s) {
+  const marks = [s.running ? "running" : "", s.needsYou ? "needs you" : ""].filter(Boolean).join(", ");
+  return `${s.id}  ${s.status.padEnd(9)} ${s.total ? `${s.done}/${s.total} steps  ` : ""}${s.title}${marks ? `  (${marks})` : ""}`;
 }
 
 /** One step as `bh task show` prints it, with its report under it. */

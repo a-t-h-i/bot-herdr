@@ -15,6 +15,7 @@
 - The mod runtime has no Intl (new Intl.NumberFormat fails herdr-app check): format numbers with Number#toLocaleString().
 - bhJson(args) appends --json itself; never pass it.
 - gpui-kit.d.ts supports role('switch'), role('status'), accessibility_label, aria_selected, aria_level, and aria_active_descendant (no aria_checked).
+- work.js split tabs drop outer pb/overflow_y_scroll and size split panes to height - PAGE_CHROME - stripH for single-scroll; use openTerminal(address) from pages.js to jump to a live terminal.
 
 ## Standards
 - When reusing the Composer for non-chat sends (e.g. plan comments), override send but reset input/files/pane state or the composer sticks (chosen by Design)

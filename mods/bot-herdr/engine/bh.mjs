@@ -30,9 +30,9 @@ const HELP = `bh: bot-herdr's tools. Run from the project folder. Add --json for
 Tasks
   bh task new "<request>" [--title T] [--track fast|full] [--plan P] [--branch|--worktree|--no-git]
                                   start a task (prints its triage, and its branch or worktree when Settings isolates tasks)
-  bh task list [--all]            bh task show [<id>] [--board]            bh task current
+  bh task list [--all] [--summary]   bh task show [<id>] [--board]            bh task current
   bh task steps <id> "<step>" "<step>" …   (or --file plan.md: its ## Steps list)
-  bh task step <id> <n> start|done|block|skip [--agent A] [--note N]
+  bh task step <id> <n> start|done|block|skip|todo [--agent A] [--note N]
   bh task status <id> active|paused|done|abandoned     bh task archive <id>   bh task delete <id>  (not while active; its worktree goes, its branch stays)
   bh task comment <id> [--step N] "<text>"  [--edit <cid> "<text>" | --delete <cid>]
   bh task resolve <id> [--comment <cid>]       (the user's comments; all of them without --comment)
@@ -150,6 +150,9 @@ function stepAgent(flags, task, n, to) {
   const step = task.steps.find((s) => s.n === Number(n));
   return to === "start" && !step?.agent ? actor() : null;
 }
+
+/** `--if-updated <iso>`: refuse a task write the caller made on a copy someone else has changed since. */
+const ifUpdated = (flags) => ({ ifUpdated: flags["if-updated"] ?? null });
 
 /**
  * Settings → Git isolation (or --branch / --worktree / --no-git for this one task): gives a new
@@ -417,7 +420,7 @@ async function main(argv) {
   const [cmd = "help", sub, ...more] = argv;
   const root = projectRoot();
   const c = C.makeClassifier();
-  const { flags, rest } = parseArgs(argv.slice(1), ["option", "kinds", "skill"], [...BOOLEANS, "refresh", "peek", "board", "shared", "drop", "list"]);
+  const { flags, rest } = parseArgs(argv.slice(1), ["option", "kinds", "skill"], [...BOOLEANS, "refresh", "peek", "board", "shared", "drop", "list", "summary"]);
   const args = rest.slice(1);
 
   switch (cmd) {
@@ -446,7 +449,10 @@ async function main(argv) {
           W.gitLine(t.git) || isolation,
         ].filter(Boolean).join("\n"));
       }
-      if (sub === "list") return out(flags, T.listTasks(root, { all: Boolean(flags.all) }), (l) => l.map(T.taskLine).join("\n") || "No tasks yet.");
+      if (sub === "list") {
+        if (flags.summary) return out(flags, T.listTaskSummaries(root, { all: Boolean(flags.all) }), (l) => l.map(T.summaryLine).join("\n") || "No tasks yet.");
+        return out(flags, T.listTasks(root, { all: Boolean(flags.all) }), (l) => l.map(T.taskLine).join("\n") || "No tasks yet.");
+      }
       if (sub === "current") return out(flags, T.currentTask(root), (t) => t?.id ?? "No task.");
       const id = /^t-\d{8}-\w+$/.test(args[0] ?? "") ? args[0] : T.currentTask(root)?.id;
       need(id, `bh task ${sub} <id>`);
@@ -462,51 +468,52 @@ async function main(argv) {
       if (sub === "steps") {
         const titles = typeof flags.file === "string" ? T.stepsFromMarkdown(bodyText(flags, [])) : rest2;
         need(titles.length || "", `bh task steps <id> "<step 1>" "<step 2>" …`);
-        const task = T.updateTask(root, id, (t) => T.setSteps(t, titles));
+        const task = T.updateTask(root, id, (t) => T.setSteps(t, titles), ifUpdated(flags));
         return out(flags, task, (t) => t.steps.map((s) => `${s.n}. ${s.title}`).join("\n"));
       }
       if (sub === "step") {
         const [n, to] = rest2;
-        need(to, "bh task step <id> <n> start|done|block|skip");
-        if (to === "done") {
-          const refused = checkBeforeDone(root, T.loadTask(root, id), n, flags);
+        need(to, "bh task step <id> <n> start|done|block|skip|todo");
+        const step = T.updateTask(root, id, (t) => {
+          // The freshness check ran first, so a stale `--if-updated` is a conflict, not a refused check.
+          const refused = to === "done" ? checkBeforeDone(root, t, n, flags) : "";
           if (refused) throw new Error(refused);
-        }
-        const step = T.updateTask(root, id, (t) => T.moveStep(t, n, to, { agent: stepAgent(flags, t, n, to), note: flags.note }));
+          return T.moveStep(t, n, to, { agent: stepAgent(flags, t, n, to), note: flags.note });
+        }, ifUpdated(flags));
         return out(flags, step, (s) => `Step ${s.n} is ${s.status}: ${s.title}`);
       }
       if (sub === "status") {
         const status = need(rest2[0], "bh task status <id> <status>");
-        const task = T.updateTask(root, id, (t) => T.setStatus(t, status));
+        const task = T.updateTask(root, id, (t) => T.setStatus(t, status), ifUpdated(flags));
         if (task.status === "done") compactPending(root, { kind: "done", reason: `task ${task.id} done`, task: task.id });
         return out(flags, task, (t) => `${t.id} is ${t.status}.`);
       }
       if (sub === "comment") {
         const words = () => rest2.join(" ") || bodyText(flags, []);
         const usage = 'bh task comment <id> [--step N] "<text>"';
-        const one = T.updateTask(root, id, (t) => changeOne(T, t, flags, words) ?? { c: T.comment(t, { step: flags.step ?? null, text: need(words(), usage) }) });
+        const one = T.updateTask(root, id, (t) => changeOne(T, t, flags, words) ?? { c: T.comment(t, { step: flags.step ?? null, text: need(words(), usage) }) }, ifUpdated(flags));
         return out(flags, one.c, () => one.said ?? `Comment ${one.c.id} added.`);
       }
       if (sub === "resolve" && flags.comment !== undefined) {
-        const x = T.updateTask(root, id, (t) => T.resolveComment(t, String(flags.comment)));
+        const x = T.updateTask(root, id, (t) => T.resolveComment(t, String(flags.comment)), ifUpdated(flags));
         return out(flags, x, () => `Comment ${x.id} resolved.`);
       }
       if (sub === "resolve") {
         const task = T.updateTask(root, id, (t) => {
           t.comments = (t.comments ?? []).map((x) => ({ ...x, open: false }));
           return t;
-        });
+        }, ifUpdated(flags));
         return out(flags, task, () => "Comments marked addressed.");
       }
       if (sub === "archive" || sub === "unarchive") {
         const task = T.updateTask(root, id, (t) => {
           t.archived = sub === "archive";
           return t;
-        });
+        }, ifUpdated(flags));
         return out(flags, task, (t) => `${t.id} ${t.archived ? "archived" : "back in the list"}.`);
       }
       if (sub === "delete") {
-        const gone = T.deleteTask(root, id);
+        const gone = T.deleteTask(root, id, ifUpdated(flags));
         return out(flags, gone, (g) => `Deleted ${g.deleted}.${g.branch ? ` Its branch ${g.branch} is kept.` : ""}`);
       }
       throw new UsageError("bh task new|list|show|steps|step|status|comment|resolve|archive|delete");
@@ -1161,6 +1168,10 @@ async function main(argv) {
 }
 
 main(process.argv.slice(2)).catch((e) => {
+  if (e.conflict && process.argv.slice(2).some((a) => /^--json(=|$)/.test(a))) {
+    console.log(JSON.stringify({ error: e.message, conflict: true, expected: e.expected ?? null, actual: e.actual ?? null }));
+    return process.exit(1);
+  }
   console.error(e instanceof UsageError ? `Usage: ${e.message}` : `bh: ${e.message}`);
   process.exit(e instanceof UsageError ? 2 : 1);
 });

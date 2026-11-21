@@ -18,7 +18,7 @@ import { actionButton } from "./button.js";
 import { segmented, stateView, pill } from "./switch.js";
 import { commentRow, openFirst, openPlan, sectionLabel, COMMENT_LINKS, arm, armed } from "./plandoc.js";
 import { colors } from "./theme.js";
-import { activePage, sendFromChat, startPlanTask, OPEN_TASK } from "./pages.js";
+import { activePage, openTerminal, sendFromChat, showPage, startPlanTask, OPEN_TASK } from "./pages.js";
 import { ROSTER_KEY, roster, slug } from "./roster.js";
 import { bh, bhJson, enc, projectDir } from "./bh.js";
 import { outline, notesOn } from "./doc.js";
@@ -33,28 +33,47 @@ import { mockupFile, openInBrowser } from "./media.js";
 import { openLightbox } from "./lightbox.js";
 import { openFile, openLink } from "./viewer.js";
 import { OpenQuestions, publishCounts } from "./questions.js";
-import { awaited, seatStates, seatsOf, boardAge, boardRows, boardTone } from "./signals.js";
+import { seatStates, seatsOf, boardAge, boardTone } from "./signals.js";
 import { stepAgents, usageText } from "./steps.js";
 import { skillsLine } from "./skillsview.js";
 import { ResilienceMonitor, renderStatusStrip, STRIP_HEIGHT, openResilienceSettings } from "./statusstrip.js";
+import {
+  STATUS_CHIPS,
+  BOARD_KINDS,
+  taskSummaryFallback,
+  chipCounts,
+  filterTasks,
+  groupTasks,
+  progressModel,
+  gateBadge,
+  allowedActionsFallback,
+  stepActions,
+  terminalForStep,
+  detailTabCounts,
+  filterBoard,
+  nextRefreshAction,
+  formatUsd,
+  formatWorked,
+  stepEventTone,
+  mutationError,
+  chipForTask,
+  nextOpenedOnChip,
+  formatTaskSkills,
+} from "./tasksview.js";
 
 const TABS = [
   { id: "tasks", icon: "page-tasks", label: "Tasks" },
   { id: "plans", icon: "page-plans", label: "Plans" },
   { id: "knowledge", icon: "page-knowledge", label: "Knowledge" },
 ];
-const SECTIONS = [
-  { id: "open", label: "Under way", has: ["active", "paused", "backlog"] },
-  { id: "done", label: "Finished", has: ["done", "abandoned"] },
-];
-const LIST_W = 340;
+const CHIP_LABELS = { active: "Active", blocked: "Blocked", done: "Done", archived: "Archived" };
+const LIST_W = 330;
 const NARROW = 720; // under this window width a page shows its list or its detail, not both
 const RAIL_W = 52;
 const PLAN_COL = 810; // the Plans column is at most this wide
 const PLAN_LIST_W = 250; // the other plans, beside the column
 const MOCK_W = 120; // a question's mockup thumbnail
 const MOCK_H = 82;
-const STEP_TEXT = SPACE[2] + MARK + SPACE[3] + (SPACE[5] + SPACE[3]) + SPACE[3]; // where a step's text starts
 
 /** How each plan status reads, and its colour token. */
 const PLAN_STATUS = {
@@ -101,8 +120,6 @@ export function duration(ms) {
   return h ? `${h}h ${m % 60}m` : `${m}m`;
 }
 
-/** What a task worked: the engine's own turn total, else the steps' stored time; nothing runs on a clock. */
-const workedOf = (t) => (Number.isFinite(t?.timeMs) ? t.timeMs : (t.steps ?? []).reduce((sum, s) => sum + (s.workedMs ?? 0), 0));
 /** How old something is, in one short word: now, 40s, 3h, 4d. */
 export function age(iso, at = Date.now()) {
   const ms = at - Date.parse(iso ?? "");
@@ -168,21 +185,55 @@ function markInside(c, kind) {
   return null;
 }
 
-/** The steps as pill-shaped segments: done ones accent, the running one half lit, blocked amber. */
-function pips(c, steps) {
-  return h_flex().flex_none().gap(SPACE[1]).items_center().children(steps.slice(0, 12).map((s) =>
-    div().flex_none().w(SPACE[4]).h(SPACE[2]).rounded(PIP).bg(pipTone(c, s.status))));
+/** Resolves a semantic tone key ("success" | "warning" | "danger" | "accent" | "muted") to a theme colour. */
+function toneColor(c, tone) {
+  return { success: c.success, warning: c.warning, danger: c.danger, accent: c.accent, muted: c.muted }[tone] ?? c.muted;
 }
 
-function pipTone(c, status) {
-  if (status === "done" || status === "skipped") return c.accent;
-  if (status === "active") return alpha(c.accent, 0.5);
-  return status === "blocked" ? c.warning : c.edge;
+/** Compact 5px progress bar replacing wide pip strips on task rows. */
+function progressBar(c, prog) {
+  const fill = toneColor(c, prog.tone);
+  return div()
+    .flex_1()
+    .min_w(36)
+    .h(5)
+    .rounded_full()
+    .bg(c.edge)
+    .overflow_hidden()
+    .when(prog.pct > 0, (el) => el.child(div().h_full().w(`${prog.pct}%`).rounded_full().bg(fill)));
+}
+
+/** A compact selectable filter pill button with `aria_selected`. */
+function filterChip(c, { id, label, count = null, on = false, onClick }) {
+  const text = count != null ? `${label} · ${count}` : label;
+  return clickable(
+    h_flex()
+      .role("tab")
+      .aria_selected(on)
+      .flex_none()
+      .h(CHIP)
+      .px(SPACE[3])
+      .gap(SPACE[1])
+      .items_center()
+      .rounded_full()
+      .border_1()
+      .border_color(on ? alpha(c.accent, 0.45) : alpha(c.edge, 0.6))
+      .bg(on ? alpha(c.accent, 0.14) : c.well)
+      .text_size(TYPE.xs)
+      .font_medium()
+      .text_color(on ? c.accent : c.muted)
+      .hover((s) => s.text_color(on ? c.accent : c.ink))
+      .on_click(onClick)
+      .child(text),
+    c,
+    id,
+    { fill: on ? alpha(c.accent, 0.2) : c.hover },
+  );
 }
 
 /** A status's word in a pill: active the accent, done the success tone, blocked amber, the rest muted. */
 function statusTone(c, status) {
-  return { active: c.accent, done: c.success, blocked: c.warning, abandoned: c.faint }[status] ?? c.muted;
+  return { active: c.accent, done: c.success, blocked: c.warning, paused: c.warning, abandoned: c.faint }[status] ?? c.muted;
 }
 
 /** An agent's initial in a ring of its colour: the mark its name is drawn with on a step. */
@@ -211,30 +262,11 @@ function groupLabel(c, label, count) {
     .child(div().px(SPACE[2]).rounded_full().bg(c.well).text_size(TYPE.xs).text_color(c.muted).child(String(count)));
 }
 
-/** A row's second line: the status (blocked when a step is) and the track, or, once finished, the time worked. */
-function taskMeta(t, blocked, finished) {
-  if (finished) return `${t.status} · worked ${duration(workedOf(t))}`;
-  return [blocked ? "blocked" : t.status ?? "backlog", t.track ? `${t.track} track` : ""].filter(Boolean).join(" · ");
-}
-
 /** How many of a step's comments are still open, in accent with the comment glyph. */
 function commentCount(c, n) {
   return h_flex().flex_none().gap(SPACE[1]).items_center().text_size(TYPE.xs).text_color(c.accent)
     .child(svg(ICON("comment")).size(GLYPH.sm))
     .child(String(n));
-}
-
-/** A list row's words: the title, then the meta line (in amber when something is blocked). */
-function taskRowText(c, t) {
-  const finished = t.status === "done" || t.status === "abandoned";
-  const blocked = t.status === "blocked" || (t.steps ?? []).some((s) => s.status === "blocked");
-  const tone = t.status === "abandoned" ? c.faint : finished ? c.muted : c.ink;
-  return v_flex()
-    .flex_1()
-    .min_w(0)
-    .gap(SPACE[1])
-    .child(div().truncate().text_size(TYPE.md).font_medium().text_color(tone).child(t.title ?? t.id))
-    .child(div().truncate().text_size(TYPE.sm).text_color(blocked ? c.warning : c.muted).child(taskMeta(t, blocked, finished)));
 }
 
 /** A small text link: its label in `tone`, ink on hover, reachable by the keyboard. */
@@ -326,9 +358,21 @@ export class Work {
     this.height = 700;
     this.dir = null; // the project folder the data is from
     this.tasks = null;
+    this.taskDetail = null; // full `bh task show` record for the currently opened task
+    this.taskDetailId = null;
+    this.pendingDetailId = null;
+    this.detailReqSeq = 0;
     this.plans = null;
     this.kinds = null; // knowledge files: [{ agent, entries, chars, over }]
     this.archived = false;
+    this.taskChip = "active"; // active | blocked | done | archived
+    this.detailTab = "steps"; // steps | board | comments | plan
+    this.boardKind = "all";
+    this.expandedSteps = new Set(); // expanded step numbers for the opened task
+    this.expandedTaskId = null;
+    this.creatingTask = false;
+    this.creatingBusy = false;
+    this.commentStep = null; // { n, title } when composer targets one step
     this.opened = null; // task id shown open
     this.stayClosed = false; // no task opens on its own: one was just deleted, or the list was picked
     this.plan = null; // the plan shown: its full record
@@ -340,11 +384,18 @@ export class Work {
     this.armed = null; // a two-step action waiting for its second click (see arm)
     this.notes = [];
     this.busy = false;
-    this.problem = null;
+    this.reloadQueued = false;
+    this.problem = null; // a page load that failed
+    this.taskActionError = null; // a task command that failed: kept until the next action or Dismiss
+    this.openWanted = null; // a task Chat asked to open, until the list knows its status chip
     this.descOpen = new Set(); // details and steps the user opened
     this.comment = InputState.new({ placeholder: "Comment" });
     this.idea = InputState.new({ placeholder: "What should the team plan?" });
     this.idea.on("submit", (_e, cx) => this.startPlan(cx));
+    this.taskSearch = InputState.new({ placeholder: "Search tasks…" });
+    this.taskSearch.on("change", (_e, cx) => cx.notify());
+    this.newTaskInput = InputState.new({ placeholder: "Describe the new task…" });
+    this.newTaskInput.on("submit", (_e, cx) => this.createTask(cx));
     this.showPrevious = false; // the Plans page's list of plans, from the rail
     this.tucking = false; // the View plan tab has tucked into the composer (its sheet opens next)
     this.pageKey = null; // the page/tab drawn last: rows stagger when it changes
@@ -363,9 +414,7 @@ export class Work {
     this.handle = cx.focus_handle(); // holds the keyboard while the Plans box is folded
     this.open = new OpenQuestions(); // the agents' open questions, read here as the chat reads them
     this.wasActive = false;
-    this.resumeAsks = {}; // task id → when Resume asked the Orchestrator (dropped when it is active)
     this.seatSig = ""; // the panel's seat states drawn last, so a change redraws the rail
-    this.boardAll = new Set(); // task ids whose whole board is shown (else its newest ten)
     // Plans are written at length: the Plans page's box starts taller than the chat's.
     this.planComposer = pageComposer(given, cx, {
       minRows: 2,
@@ -373,13 +422,14 @@ export class Work {
       onSend: (text, cx) => this.sendPlanText(text, cx),
       onAnswer: (q, answers, cx) => this.answerQuestion(this.planComposer, q, answers, cx),
     });
-    // The task's box at the foot of its detail: a comment on the task, its placeholder names it.
+    // The task's box at the foot of its detail: starts folded, expands on click or step Comment.
     this.taskComposer = pageComposer(given, cx, {
       minRows: 1,
       placeholder: "Comment on the task…",
       onSend: (text, cx) => this.sendTaskComment(cx, text),
       onAnswer: (q, answers, cx) => this.answerQuestion(this.taskComposer, q, answers, cx),
     });
+    this.taskComposer.expanded = false;
     this.readQuestions(cx);
     cx.timer.every(QUESTIONS_MS, (cx) => {
       if (activePage() === (this.fixed ?? "work")) this.readQuestions(cx);
@@ -398,8 +448,10 @@ export class Work {
   // ── Data ───────────────────────────────────────────────────────────────────────────────────
 
   reload(cx) {
-    if (this.busy) return;
-    this.busy = true;
+    const step = nextRefreshAction({ busy: this.busy, queued: this.reloadQueued }, "start");
+    this.busy = step.state.busy;
+    this.reloadQueued = step.state.queued;
+    if (step.action !== "run") return;
     const dir = projectDir();
     if (this.tab === "tasks") this.resilience?.refresh(cx);
     cx.spawn(async (cx) => {
@@ -409,8 +461,11 @@ export class Work {
         if (this.tab === "plans") await this.loadPlans(dir);
         if (this.tab === "knowledge") await this.loadKnowledge(dir);
       } finally {
-        this.busy = false;
+        const done = nextRefreshAction({ busy: this.busy, queued: this.reloadQueued }, "finish");
+        this.busy = done.state.busy;
+        this.reloadQueued = done.state.queued;
         cx.notify();
+        if (done.action === "rerun") this.reload(cx);
       }
     });
   }
@@ -422,18 +477,123 @@ export class Work {
     this.opened = null;
     this.stayClosed = false;
     this.tasks = null;
+    this.taskDetail = null;
+    this.taskDetailId = null;
+    this.expandedSteps = new Set();
+    this.expandedTaskId = null;
+    this.creatingTask = false;
+    this.commentStep = null;
     this.plans = null;
     this.knowAll = null;
     this.plan = null;
     this.knownText = null;
   }
 
+  /** Two-tier task load: lightweight `--summary` list (legacy fallback), then `bh task show` for the opened task. */
   async loadTasks(dir) {
-    const got = await bhJson(["task", "list", "--all"], { cwd: dir });
+    let got = await bhJson(["task", "list", "--summary", "--all"], { cwd: dir });
+    if (got === null) got = await bhJson(["task", "list", "--all"], { cwd: dir });
     if (dir !== projectDir()) return;
-    this.tasks = got ?? [];
-    this.resumeAsks = awaited(this.resumeAsks, this.tasks ?? []);
+    const list = Array.isArray(got) ? got.map(taskSummaryFallback) : [];
+    this.tasks = list;
     this.problem = got ? null : "Couldn't read the tasks. Is node on your PATH?";
+    this.alignChip(list);
+    this.openWanted = null;
+    const id = this.pickOpenedId(list);
+    if (id) await this.fetchTaskDetail(id, dir);
+    else {
+      this.taskDetail = null;
+      this.taskDetailId = null;
+    }
+  }
+
+  /** Keeps the chip showing the open task: one opened from Chat is not hidden by the `active` chip. */
+  alignChip(list) {
+    const found = (list ?? []).find((t) => t.id === this.opened);
+    if (!found || filterTasks([found], { chip: this.taskChip }).length) return;
+    this.taskChip = chipForTask(found);
+    this.archived = this.taskChip === "archived";
+  }
+
+  /** Resolves which task id should be open right now, keeping a live selection or picking the top match. */
+  pickOpenedId(list) {
+    if (this.opened && list.some((t) => t.id === this.opened)) return this.opened;
+    if (this.stayClosed || this.width < NARROW) return null;
+    const visible = filterTasks(list, { query: this.taskSearch?.value?.() ?? "", chip: this.taskChip });
+    const pick = visible.find((t) => t.status === "active") ?? visible[0] ?? null;
+    this.opened = pick?.id ?? null;
+    return this.opened;
+  }
+
+  /** Fetches full detail for one task via `bh task show`, dropping stale or superseded responses. */
+  async fetchTaskDetail(id, dir) {
+    const seq = ++this.detailReqSeq;
+    const detail = await bhJson(["task", "show", id], { cwd: dir });
+    if (dir !== projectDir() || seq !== this.detailReqSeq || (this.opened && this.opened !== id)) return;
+    if (!detail || Array.isArray(detail)) return;
+    this.taskDetail = detail;
+    this.taskDetailId = id;
+    if (this.expandedTaskId !== id) {
+      this.expandedTaskId = id;
+      const steps = Array.isArray(detail.steps) ? detail.steps : [];
+      const active = steps.filter((s) => s.status === "active").map((s) => s.n);
+      const firstBlocked = steps.find((s) => s.status === "blocked")?.n;
+      this.expandedSteps = new Set(active.length ? active : firstBlocked != null ? [firstBlocked] : []);
+    }
+    if (this.detailTab === "plan" && !detail.plan) this.detailTab = "steps";
+  }
+
+  /** Kicks an immediate detail fetch when the user clicks a different task row. */
+  loadTaskDetail(id, dir, cx) {
+    if (!id) return;
+    cx.spawn(async (cx) => {
+      await this.fetchTaskDetail(id, dir);
+      cx.notify();
+    });
+  }
+
+  /** Selects a task from the list and immediately fetches its full detail without waiting for the 4s poll. */
+  openTask(id, cx) {
+    this.opened = id;
+    this.commenting = null;
+    this.commentStep = null;
+    this.stayClosed = false;
+    this.boardKind = "all";
+    if (this.taskDetailId !== id) this.taskDetail = null;
+    const summary = (this.tasks ?? []).find((t) => t.id === id);
+    if (this.detailTab === "plan" && !summary?.plan) this.detailTab = "steps";
+    this.loadTaskDetail(id, this.dir ?? projectDir(), cx);
+    cx.notify();
+  }
+
+  /** Creates a new task from the inline creation card, opens it, and refreshes the list. */
+  createTask(cx) {
+    const text = this.newTaskInput.value().trim();
+    if (!text || this.creatingBusy) return;
+    const dir = this.dir ?? projectDir();
+    this.creatingBusy = true;
+    cx.notify();
+    cx.spawn(async (cx) => {
+      try {
+        const created = await bhJson(["task", "new", `--data=${enc(text)}`], { cwd: dir });
+        if (dir !== projectDir()) return;
+        if (!created?.id) {
+          this.problem = "Couldn't create the task.";
+          return;
+        }
+        this.newTaskInput.set_value("");
+        this.creatingTask = false;
+        this.taskChip = "active";
+        this.archived = false;
+        this.problem = null;
+        this.openTask(created.id, cx);
+        this.taskComposer.say(`Created ${created.title ?? created.id}`, cx);
+        this.reload(cx);
+      } finally {
+        this.creatingBusy = false;
+        cx.notify();
+      }
+    });
   }
 
   async loadPlans(dir) {
@@ -535,17 +695,42 @@ export class Work {
   }
 
   act(args, cx, done) {
-    this.run(args, cx, (r) => {
+    this.run(args, cx, (r, cx) => {
       this.problem = r.code === 0 ? null : firstLine(r);
-      done?.(r);
+      done?.(r, cx);
+    });
+  }
+
+  /** Appends `--if-updated <iso>` when an expected timestamp is known for optimistic concurrency. */
+  withIfUpdated(args, updated) {
+    return updated ? [...args, "--if-updated", String(updated)] : args;
+  }
+
+  /** Latest known `updated` ISO timestamp for a task id (preferring full detail over summary). */
+  taskUpdated(id) {
+    if (this.taskDetailId === id && this.taskDetail?.updated) return this.taskDetail.updated;
+    return (this.tasks ?? []).find((t) => t.id === id)?.updated ?? null;
+  }
+
+  /** Mutating task CLI call: `--json` for a structured conflict, `--if-updated`, and a kept failure line. */
+  actTask(args, cx, done = null, updated = null) {
+    this.run(this.withIfUpdated([...args, "--json"], updated), cx, (r, cx) => {
+      const { conflict, message } = mutationError(r);
+      // A failed command is said and kept: the list reload that follows never erases it.
+      this.taskActionError = message || null;
+      if (conflict) this.taskComposer?.say(message, cx, "warning");
+      else if (message) this.taskComposer?.say(message, cx, "error");
+      done?.(r, cx);
     });
   }
 
   /** `bh task delete` or `bh plan delete`: `after` runs on success; a failure is said in `composer`. */
-  remove(args, composer, cx, after) {
+  remove(args, composer, cx, after, failed = null) {
     this.run(args, cx, (r, cx) => {
       if (r.code === 0) return after();
-      composer.say(firstLine(r) || "Couldn't delete it.", cx, "error");
+      const { conflict, message } = mutationError(r);
+      composer.say(message || "Couldn't delete it.", cx, conflict ? "warning" : "error");
+      failed?.(message);
     });
   }
 
@@ -594,13 +779,14 @@ export class Work {
   /** Resolve, reopen, edit and delete for a task's or a plan's comment (`kind` "task" or "plan"). */
   commentActions(kind, id, x) {
     const w = this.commenting;
+    const runCmd = (args, cx) => (kind === "task" ? this.actTask(args, cx, null, this.taskUpdated(id)) : this.act(args, cx));
     return {
       key: `bh-${kind}-c-${id}-${x.id}`,
       editing: Boolean(w && w.kind === kind && w.id === id && w.edit === x.id),
-      resolve: (cx) => this.act([kind, "resolve", id, "--comment", x.id], cx),
-      reopen: (cx) => this.act([kind, "comment", id, "--edit", x.id, "--data", enc(x.text)], cx),
+      resolve: (cx) => runCmd([kind, "resolve", id, "--comment", x.id], cx),
+      reopen: (cx) => runCmd([kind, "comment", id, "--edit", x.id, "--data", enc(x.text)], cx),
       edit: (cx) => this.editInline(kind, id, x.step ?? x.line ?? null, x.id, x.text, cx),
-      delete: (cx) => this.act([kind, "comment", id, "--delete", x.id], cx),
+      delete: (cx) => runCmd([kind, "comment", id, "--delete", x.id], cx),
     };
   }
 
@@ -610,7 +796,10 @@ export class Work {
     if (!text || !where) return;
     this.inline.set_value("");
     this.commenting = null;
-    if (where.edit && where.kind !== "knowledge") return this.act([where.kind, "comment", where.id, "--edit", where.edit, "--data", enc(text)], cx);
+    if (where.edit && where.kind !== "knowledge") {
+      const args = [where.kind, "comment", where.id, "--edit", where.edit, "--data", enc(text)];
+      return where.kind === "task" ? this.actTask(args, cx, null, this.taskUpdated(where.id)) : this.act(args, cx);
+    }
     if (where.kind === "plan") {
       const plan = this.plan;
       if (!plan) return;
@@ -632,11 +821,11 @@ export class Work {
     }
     // A task's comment: on a step when one is named, else on the task itself.
     if (where.at == null) return this.sendTaskComment(cx, text, where.id);
-    const task = (this.tasks ?? []).find((t) => t.id === where.id);
-    const step = task?.steps?.find((x) => x.n === where.at);
-    this.act(["task", "comment", where.id, "--step", String(where.at), "--data", enc(text)], cx, (r) => {
+    const detail = this.taskDetailId === where.id ? this.taskDetail : null;
+    const step = detail?.steps?.find((x) => x.n === where.at);
+    this.actTask(["task", "comment", where.id, "--step", String(where.at), "--data", enc(text)], cx, (r) => {
       if (r.code === 0) sendFromChat(`The user commented on step ${where.at}${step ? ` ("${step.title}")` : ""} of task ${where.id}: ${text}\n\nTake it into account (bh task show ${where.id}) or say why it needs no change.`);
-    });
+    }, this.taskUpdated(where.id));
   }
 
   /** A knowledge note edited: taken back, then kept again with the new text; the Orchestrator hears of it. */
@@ -649,12 +838,22 @@ export class Work {
     });
   }
 
-  /** A comment on the task itself, from the box at its foot or the box under Comments. */
+  /** A comment on the task (or targeted step) from the foldable composer; folds back when sent. */
   sendTaskComment(cx, text, id = this.opened) {
     if (!text || !id) return;
-    this.act(["task", "comment", id, "--data", enc(text)], cx, (r) => {
+    const target = id === this.opened ? this.commentStep : null;
+    const updated = this.taskUpdated(id);
+    this.commentStep = null;
+    this.taskComposer.expanded = false;
+    if (target?.n != null) {
+      this.actTask(["task", "comment", id, "--step", String(target.n), "--data", enc(text)], cx, (r) => {
+        if (r.code === 0) sendFromChat(`The user commented on step ${target.n}${target.title ? ` ("${target.title}")` : ""} of task ${id}: ${text}\n\nTake it into account (bh task show ${id}) or say why it needs no change.`);
+      }, updated);
+      return;
+    }
+    this.actTask(["task", "comment", id, "--data", enc(text)], cx, (r) => {
       if (r.code === 0) sendFromChat(`The user commented on task ${id}: ${text}\n\nTake it into account (bh task show ${id}) or say why it needs no change.`);
-    });
+    }, updated);
   }
 
   /** Shows or hides a detail the page keeps open or shut: a task's details, its request, a step's agents. */
@@ -740,13 +939,19 @@ export class Work {
     if (want?.at > (this.openAt ?? 0)) {
       this.openAt = want.at;
       this.opened = want.id;
+      this.openWanted = want.id;
       this.archived = false;
       this.stayClosed = false;
+      // A done or archived task opens under its own chip; while the list loads, the old chip stays.
+      const found = (this.tasks ?? []).find((t) => t.id === want.id);
+      if (found) this.taskChip = chipForTask(found);
+      cx.timer.after(1, (cx) => this.loadTaskDetail(want.id, projectDir(), cx));
     }
+    const banner = this.problem || (this.tab === "tasks" ? this.taskActionError : null);
     const c = colors();
     const content = Math.max(320, Math.min(MAX, this.width - SIZE.gutter * 2));
     // A page or tab opening draws its rows from hidden, then staggers them in; re-renders do not.
-    const pageKey = `${this.tab}:${this.archived}`;
+    const pageKey = `${this.tab}:${this.taskChip}`;
     if (pageKey !== this.pageKey) {
       this.pageKey = pageKey;
       this.rowsIn = false;
@@ -764,8 +969,9 @@ export class Work {
     // The agents' open questions go to the box of the tab shown; the Knowledge tab has no box.
     this.planComposer.questions = this.tab === "plans" ? this.open.list : [];
     this.taskComposer.questions = this.tab === "tasks" ? this.open.list : [];
-    // The plan's column reaches the page's foot: nothing sits below its pinned box.
+    // A pinned plan or the split Tasks workbench reaches the page's foot with its own inner scroll.
     const pinned = stale ? null : this.shownPlan();
+    const fullPage = Boolean(pinned) || (!stale && this.tab === "tasks" && Boolean(this.tasks?.length));
     return div()
       .id("bh-work")
       .relative()
@@ -792,14 +998,14 @@ export class Work {
           .id("bh-work-scroll")
           .absolute()
           .inset_0()
-          .overflow_y_scroll()
+          .when(!fullPage || Boolean(banner), (el) => el.overflow_y_scroll())
           .items_center()
           .child(
             v_flex()
               .flex_none()
               .w(content)
               .pt(SPACE[5])
-              .when(!pinned, (el) => el.pb(SPACE[5]))
+              .when(!fullPage, (el) => el.pb(SPACE[5]))
               .gap(GAP)
               // The plan column reaches the page's top: a pinned plan is a whole page of conversation,
               // so its empty tab bar (the pin puts no tabs there) would only cut the chats; its
@@ -813,11 +1019,16 @@ export class Work {
                   .child(div().flex_1())
                   .child(actionButton(c, "bh-work-refresh", null, (_e, cx) => this.reload(cx), { icon: "refresh-cw", tone: "quiet", tooltip: "Refresh" })),
               ))
-              .when(Boolean(this.problem), (el) => el.child(stateView(c, {
+              .when(Boolean(banner), (el) => el.child(stateView(c, {
                 id: "bh-work-error",
-                title: "Couldn't load this page",
-                line: this.problem,
-                action: { label: "Try again", on: (_e, cx) => this.reload(cx) },
+                title: this.problem ? "Couldn't load this page" : "That action didn't work",
+                line: banner,
+                action: this.problem
+                  ? { label: "Try again", on: (_e, cx) => this.reload(cx) }
+                  : { label: "Dismiss", on: (_e, cx) => {
+                    this.taskActionError = null;
+                    cx.notify();
+                  } },
               })))
               .child(body),
           ),
@@ -838,7 +1049,7 @@ export class Work {
 
   // Tasks
 
-  /** The Tasks page: the list and the chosen task side by side; under NARROW, one of them with a link back. */
+  /** The Tasks workbench: searchable, filterable split list with tabbed interactive detail. */
   tasksView(c, width) {
     const strip = this.resilience.model();
     const stripEl = strip.visible ? renderStatusStrip(c, strip, {
@@ -849,129 +1060,237 @@ export class Work {
     }) : null;
     if (this.tasks === null) return stateView(c, { id: "bh-tasks-loading", title: "Loading tasks…", loading: true });
     if (!this.tasks.length) {
-      const hero = this.hero(c, width, "page-tasks", "No tasks yet", "Type /task in the chat to start one.");
-      return stripEl ? v_flex().w(width).gap(SPACE[3]).child(stripEl).child(hero) : hero;
+      const empty = v_flex()
+        .w(width)
+        .items_center()
+        .gap(SPACE[4])
+        .child(this.hero(c, width, "page-tasks", "No tasks yet", "Create a task below or type /task in the chat."))
+        .child(this.creatingTask
+          ? div().w(Math.min(440, width)).child(this.newTaskCard(c))
+          : actionButton(c, "bh-task-empty-new", "New task", (_e, cx) => this.toggleNewTask(cx), { icon: "plus", tone: "primary" }));
+      return stripEl ? v_flex().w(width).gap(SPACE[3]).child(stripEl).child(empty) : empty;
     }
     const narrow = this.width < NARROW;
-    const archived = this.tasks.filter((t) => t.archived);
-    const current = this.tasks.filter((t) => !t.archived);
-    const list = this.archived ? archived : current;
-    if (!narrow && !this.stayClosed && !list.some((t) => t.id === this.opened)) this.opened = (list.find((t) => t.status === "active") ?? list[0])?.id ?? null;
-    const open = list.find((t) => t.id === this.opened) ?? null;
+    const counts = chipCounts(this.tasks);
+    const query = this.taskSearch.value();
+    const filtered = filterTasks(this.tasks, { query, chip: this.taskChip });
+    if (!narrow && !this.stayClosed && !this.openWanted && !filtered.some((t) => t.id === this.opened)) {
+      const next = (filtered.find((t) => t.status === "active") ?? filtered[0])?.id ?? null;
+      if (next !== this.opened) {
+        this.opened = next;
+        if (next && this.taskDetailId !== next && this.pendingDetailId !== next) {
+          this.pendingDetailId = next;
+          this.cx?.timer.after(1, (cx) => {
+            this.pendingDetailId = null;
+            this.loadTaskDetail(next, this.dir ?? projectDir(), cx);
+          });
+        }
+      }
+    }
+    const open = filtered.find((t) => t.id === this.opened) ?? this.tasks.find((t) => t.id === this.opened) ?? null;
     const stripH = stripEl ? STRIP_HEIGHT + SPACE[3] : 0;
-    const paneH = Math.max(320, this.height - 96 - stripH);
-    const listW = narrow ? width : Math.min(LIST_W, Math.floor(width * 0.45));
+    const paneH = Math.max(320, this.height - PAGE_CHROME - stripH);
+    const listW = narrow ? width : Math.min(LIST_W, Math.floor(width * 0.42));
     const paneW = narrow ? width : Math.max(0, width - listW - HAIR);
     const split = h_flex()
       .w(width)
       .h(paneH)
       .items_start()
-      .when(!narrow || !open, (el) => el.child(this.taskList(c, { list, current, archived, width: listW, height: paneH, narrow })))
+      .when(!narrow || !open, (el) => el.child(this.taskList(c, { filtered, counts, query, width: listW, height: paneH, narrow })))
       .when(!narrow, (el) => el.child(div().flex_none().w(HAIR).h(paneH).bg(c.edge)))
       .when(!narrow || Boolean(open), (el) => el.child(this.taskPane(c, open, { width: paneW, height: paneH, narrow })));
     return stripEl ? v_flex().w(width).gap(SPACE[3]).child(stripEl).child(split) : split;
   }
 
-  /** The list column: the "Tasks" heading with the Tasks / Archived switch on its right, then the groups. */
-  taskList(c, { list, current, archived, width, height, narrow }) {
-    const groups = this.taskGroups(list);
+  /** Toggles the compact inline task creation card and focuses its input when opening. */
+  toggleNewTask(cx) {
+    this.creatingTask = !this.creatingTask;
+    if (this.creatingTask) this.newTaskInput.focus();
+    else this.newTaskInput.set_value("");
+    cx.notify();
+  }
+
+  /** Compact inline creation card for `+ New task`. */
+  newTaskCard(c) {
+    return v_flex()
+      .id("bh-task-new-card")
+      .flex_none()
+      .p(SPACE[3])
+      .gap(SPACE[2])
+      .rounded(SIZE.control)
+      .bg(c.fill)
+      .border_1()
+      .border_color(alpha(c.accent, 0.5))
+      .child(this.inputBox(c, this.newTaskInput))
+      .child(h_flex().gap(SPACE[2]).justify_end().items_center()
+        .child(actionButton(c, "bh-task-new-cancel", "Cancel", (_e, cx) => this.toggleNewTask(cx), { tone: "quiet" }))
+        .child(actionButton(c, "bh-task-new-submit", this.creatingBusy ? "Creating…" : "Create", (_e, cx) => this.createTask(cx), { tone: "primary", disabled: this.creatingBusy })));
+  }
+
+  /** The left list column: heading + New task, search box, status chips, and scrollable grouped rows. */
+  taskList(c, { filtered, counts, query, width, height, narrow }) {
+    const groups = groupTasks(filtered, this.taskChip);
+    const hasQuery = Boolean(query.trim());
     return v_flex()
       .flex_none()
       .w(width)
       .h(height)
       .gap(SPACE[3])
       .pr(narrow ? 0 : SPACE[4])
-      .child(h_flex().items_center().justify_between().gap(SPACE[3])
+      .pb(SPACE[4])
+      .child(h_flex().flex_none().items_center().justify_between().gap(SPACE[3])
         .child(div().text_size(TYPE.xl).font_semibold().child("Tasks"))
-        .child(this.taskSwitch(c, current, archived)))
+        .child(actionButton(c, "bh-task-new-btn", "New task", (_e, cx) => this.toggleNewTask(cx), { icon: "plus", tone: "primary" })))
+      .when(this.creatingTask, (el) => el.child(this.newTaskCard(c)))
+      .child(this.taskSearchBox(c, hasQuery))
+      .child(this.taskChipBar(c, counts))
       .child(v_flex()
         .id("bh-task-list")
         .flex_1()
         .min_h(0)
         .overflow_y_scroll()
         .gap(SPACE[1])
-        .when(!list.length, (el) => el.child(mutedLine(c, this.archived ? "Nothing archived. Archive a finished task from its detail to keep this list short." : "Every task is archived.")))
-        .children(groups.flatMap((g) => [groupLabel(c, g.label, g.rows.length), ...g.rows.map((t, i) => this.taskRow(c, t, i))])));
+        .when(!filtered.length, (el) => el.child(this.emptyFilterNote(c, hasQuery)))
+        .children(groups.flatMap((g) => [groupLabel(c, g.label, g.items.length), ...g.items.map((t, i) => this.taskRow(c, t, i))])));
   }
 
-  /** The list's groups: under way and finished (SECTIONS), or the one archived group. */
-  taskGroups(list) {
-    if (this.archived) return [{ id: "archived", label: "Archived", rows: list }];
-    return SECTIONS.map((sec) => ({ ...sec, rows: list.filter((t) => sec.has.includes(t.status ?? "backlog")) })).filter((g) => g.rows.length);
+  /** Search input with search icon and a clear `×` button when non-empty. */
+  taskSearchBox(c, hasQuery) {
+    return h_flex()
+      .flex_none()
+      .h(CONTROL)
+      .px(SPACE[3])
+      .gap(SPACE[2])
+      .items_center()
+      .rounded(SIZE.control)
+      .bg(c.fill)
+      .border_1()
+      .border_color(c.edge)
+      .child(svg(ICON("search")).flex_none().size(GLYPH.sm).text_color(c.faint))
+      .child(Input.new(this.taskSearch).flex_1().min_w(0).h_full().text_size(TYPE.sm).text_color(c.ink))
+      .when(hasQuery, (el) => el.child(
+        actionButton(c, "bh-task-search-clear", null, (_e, cx) => {
+          this.taskSearch.set_value("");
+          cx.notify();
+        }, { icon: "x", tone: "quiet", tooltip: "Clear search", a11y: "Clear search" }),
+      ));
   }
 
-  taskSwitch(c, current, archived) {
-    return segmented(c, {
-      id: "bh-task-filter",
-      items: [
-        { id: "tasks", label: "Tasks", count: current.length, on: !this.archived },
-        { id: "archived", label: "Archived", count: archived.length, on: this.archived },
-      ],
-      onPick: (id, cx) => {
-        this.archived = id === "archived";
-        this.opened = null;
-        this.stayClosed = false;
+  /** Status filter chips (`Active · N`, `Blocked · N`, `Done · N`, `Archived · N`). */
+  taskChipBar(c, counts) {
+    return h_flex()
+      .role("tab_list")
+      .flex_none()
+      .flex_wrap()
+      .gap(SPACE[2])
+      .items_center()
+      .children(STATUS_CHIPS.map((id) => filterChip(c, {
+        id: `bh-task-chip-${id}`,
+        label: CHIP_LABELS[id],
+        count: counts[id],
+        on: this.taskChip === id,
+        onClick: (_e, cx) => {
+          this.taskChip = id;
+          this.archived = id === "archived";
+          this.stayClosed = false;
+          const next = filterTasks(this.tasks ?? [], { query: this.taskSearch.value(), chip: id });
+          // Narrow windows stay on the filtered list: opening the first match would hide it.
+          const open = nextOpenedOnChip(next, this.opened, this.width < NARROW);
+          if (open) this.openTask(open, cx);
+          else cx.notify();
+        },
+      })));
+  }
+
+  /** Helpful message when no tasks match the active filter or search query. */
+  emptyFilterNote(c, hasQuery) {
+    const line = hasQuery
+      ? "No tasks match your search."
+      : this.taskChip === "archived"
+        ? "Nothing archived yet."
+        : this.taskChip === "blocked"
+          ? "No blocked or paused tasks."
+          : this.taskChip === "done"
+            ? "No finished tasks yet."
+            : "No active tasks.";
+    return v_flex()
+      .py(SPACE[4])
+      .px(SPACE[2])
+      .gap(SPACE[2])
+      .items_start()
+      .child(mutedLine(c, line))
+      .when(hasQuery, (el) => el.child(actionButton(c, "bh-task-clear-query", "Clear search", (_e, cx) => {
+        this.taskSearch.set_value("");
         cx.notify();
-      },
-    });
+      }, { tone: "quiet" })));
   }
 
-  /** A row of the list: its status circle, the title and its meta line; on the right, the steps' pips and count, or the age. */
+  /** A list row: status mark + truncated title on line 1; compact 5px progress bar + metrics on line 2. */
   taskRow(c, t, i = 0) {
     const on = this.opened === t.id;
+    const finished = t.status === "done" || t.status === "abandoned";
+    const tone = t.status === "abandoned" ? c.faint : finished ? c.muted : c.ink;
+    const prog = progressModel(t);
+    const cost = formatUsd(t.spendUsd);
+    const worked = formatWorked(t.workedMs);
     return clickable(
-      this.rowFrame(c, t, on, i)
-        .child(statusMark(c, t.status, GLYPH.lg))
-        .child(taskRowText(c, t))
-        .child(this.taskRowEnd(c, t, t.steps ?? [])),
+      v_flex()
+        .flex_none()
+        .p(SPACE[3])
+        .gap(SPACE[2])
+        .rounded(SIZE.control)
+        .border_1()
+        .border_color(on ? alpha(c.accent, 0.45) : alpha(c.ground, 0))
+        .when(on, (el) => el.bg(alpha(c.accent, 0.1)))
+        .opacity(this.rowsIn === false ? 0 : 1)
+        .transition("opacity", { ...MOTION.row, delay: Math.min(i, 8) * MOTION.stagger })
+        .on_click((_e, cx) => this.openTask(t.id, cx))
+        .child(h_flex().gap(SPACE[3]).items_center()
+          .child(statusMark(c, t.blocked > 0 && t.status === "active" ? "blocked" : t.status, GLYPH.lg))
+          .child(div().flex_1().min_w(0).truncate().text_size(TYPE.md).font_medium().text_color(tone).child(t.title || t.id)))
+        .child(h_flex().pl(GLYPH.lg + SPACE[3]).gap(SPACE[2]).items_center().text_size(TYPE.xs).text_color(c.muted)
+          .when(prog.total > 0, (el) => el.child(progressBar(c, prog)))
+          .when(t.blocked > 0, (el) => el.child(div().flex_none().font_medium().text_color(c.warning).child("blocked")))
+          .when(!t.blocked && t.needsYou, (el) => el.child(div().flex_none().font_medium().text_color(c.accent).child("needs you")))
+          .child(div().flex_none().child(prog.total > 0 ? prog.label : age(t.updated ?? t.created)))
+          .when(Boolean(cost), (el) => el.child(div().flex_none().child(`· ${cost}`)))
+          .when(Boolean(worked), (el) => el.child(div().flex_none().child(`· ${worked}`)))),
       c,
       `bh-task-${t.id}`,
       { fill: on ? alpha(c.accent, 0.14) : null },
     );
   }
 
-  /** A list row's box: its padding, the accent edge and tint when chosen, and a click that opens the task. */
-  rowFrame(c, t, on, i) {
-    return h_flex()
-      .p(SPACE[3])
-      .gap(SPACE[3])
-      .items_start()
-      .rounded(SIZE.control)
-      .border_1()
-      .border_color(on ? alpha(c.accent, 0.4) : alpha(c.ground, 0))
-      .when(on, (el) => el.bg(alpha(c.accent, 0.1)))
-      .opacity(this.rowsIn === false ? 0 : 1)
-      .transition("opacity", { ...MOTION.row, delay: Math.min(i, 8) * MOTION.stagger })
-      .on_click((_e, cx) => {
-        this.opened = t.id;
-        this.commenting = null;
-        this.stayClosed = false;
-        cx.notify();
-      });
-  }
-
-  /** The row's right end: the steps' pips with done of all, or with no steps, how old the task is. */
-  taskRowEnd(c, t, steps) {
-    if (!steps.length) return div().flex_none().text_size(TYPE.xs).text_color(c.muted).child(age(t.updated ?? t.created));
-    const done = steps.filter((s) => s.status === "done" || s.status === "skipped").length;
-    return h_flex().flex_none().gap(SPACE[2]).items_center()
-      .child(pips(c, steps))
-      .child(div().text_size(TYPE.xs).text_color(c.muted).child(`${done}/${steps.length}`));
-  }
-
-  /** The pane beside the list: the chosen task, its comment box pinned at the foot; or, with none, the prompt. */
-  taskPane(c, t, { width, height, narrow }) {
-    if (!t) return this.pickPrompt(c, width, height);
-    const inner = narrow ? width : Math.max(0, width - SPACE[4]);
-    this.taskComposer.placeholder = `Comment on ${t.title ?? t.id}…`;
+  /** Right detail pane: fixed header + detail tabs, ONE scrollable tab body, and foldable composer at foot. */
+  taskPane(c, open, { width, height, narrow }) {
+    if (!open) return this.pickPrompt(c, width, height);
+    const detail = this.taskDetailId === open.id && this.taskDetail ? this.taskDetail : open;
+    const inner = narrow ? width : Math.max(0, width - SPACE[5]);
+    const targetTitle = this.commentStep ? `step ${this.commentStep.n}` : (detail.title || detail.id);
+    this.taskComposer.placeholder = `Comment on ${targetTitle}…`;
     return v_flex()
       .id("bh-task-detail")
       .flex_none()
       .w(width)
       .h(height)
-      .pl(narrow ? 0 : SPACE[4])
-      .child(v_flex().id("bh-task-scroll").flex_1().min_h(0).overflow_y_scroll().pb(SPACE[4]).child(this.taskBody(c, t, narrow)))
-      .child(this.taskComposer.render(this.cx, inner + SIZE.gutter * 2, height));
+      .pl(narrow ? 0 : SPACE[5])
+      .when(narrow, (el) => el.child(div().flex_none().pb(SPACE[2]).child(backLink(c, "bh-task-back", "Tasks", (_e, cx) => {
+        this.opened = null;
+        this.stayClosed = true;
+        cx.notify();
+      }))))
+      .child(this.taskDetailHead(c, detail))
+      .child(this.taskDetailTabs(c, detail))
+      .child(v_flex()
+        .id("bh-task-scroll")
+        .flex_1()
+        .min_h(0)
+        .overflow_y_scroll()
+        .gap(SPACE[3])
+        .py(SPACE[2])
+        .pr(SPACE[1])
+        .child(this.taskTabBody(c, detail)))
+      .child(this.taskComposerDock(c, detail, inner, height));
   }
 
   /** With no task chosen (a wide window): a pointer and the line about choosing one, centred. */
@@ -985,74 +1304,86 @@ export class Work {
       .items_center()
       .gap(SPACE[3])
       .child(svg(ICON("pointer")).size(24).text_color(c.faint))
-      .child(div().max_w(320).text_center().text_size(TYPE.md).text_color(c.muted).child("Choose a task to see its steps, progress and comments."));
+      .child(div().max_w(320).text_center().text_size(TYPE.md).text_color(c.muted).child("Choose a task to see its steps, board and comments."));
   }
 
-  /** The scrolling part of a task's detail, top to bottom: its actions, title, facts, progress, steps and comments. */
-  taskBody(c, t, narrow) {
-    const comments = openFirst(t.comments);
+  /** Fixed detail header: title + allowed actions, meta line with status/QA gate/branch/usage, collapsible Details. */
+  taskDetailHead(c, t) {
+    const open = this.descOpen?.has(`details:${t.id}`);
+    const gate = gateBadge(t);
+    const usage = usageText(t.usage);
+    const worked = formatWorked(t.timeMs ?? t.workedMs);
+    const metrics = usage || [formatUsd(t.spendUsd), worked].filter(Boolean).join(" · ");
     return v_flex()
-      .gap(SPACE[4])
+      .flex_none()
+      .gap(SPACE[3])
       .pb(SPACE[4])
-      .when(narrow, (el) => el.child(backLink(c, "bh-task-back", "Back to tasks", (_e, cx) => {
-        this.opened = null;
-        cx.notify();
-      })))
-      .child(this.taskActions(c, t))
-      .child(this.taskTitle(c, t))
-      .child(this.taskFacts(c, t))
-      .child(this.taskProgress(c, t))
-      .child(this.taskSteps(c, t, comments))
-      .child(this.taskBoard(c, t))
-      .when(Boolean(t.plan), (el) => el.child(this.taskFullPlan(c, t)))
-      .child(this.taskComments(c, t, comments));
+      .border_b(HAIR)
+      .border_color(c.edge)
+      .child(h_flex().gap(SPACE[3]).items_start().justify_between()
+        .child(h_flex().flex_1().min_w(0).gap(SPACE[3]).items_center()
+          .child(statusMark(c, t.status, 18))
+          .child(div().flex_1().min_w(0).text_size(TYPE.xl).font_semibold().line_height(`${LINE.xl}px`).child(t.title ?? t.id)))
+        .child(this.taskActions(c, t)))
+      .child(h_flex().flex_wrap().gap(SPACE[2]).items_center().text_size(TYPE.sm).text_color(c.muted)
+        .child(pill(c, t.status ?? "backlog", statusTone(c, t.status), { pulse: t.status === "active" }))
+        .when(Boolean(gate), (el) => el.child(pill(c, gate.label, toneColor(c, gate.tone))))
+        .when(Boolean(t.track), (el) => el.child(div().child(`${t.track} track`)))
+        .when(Boolean(t.git?.branch), (el) => el.child(div().child(`· branch ${t.git.branch}`)))
+        .when(Boolean(metrics), (el) => el.child(div().child(`· ${metrics}`)))
+        .child(textLink(c, `bh-task-details-${t.id}`, open ? "Details ▴" : "Details ▾", (_e, cx) => this.toggleDesc(`details:${t.id}`, cx), open ? c.ink : c.accent)))
+      .when(Boolean(open), (el) => el.child(this.taskDetails(c, t)));
   }
 
-  /** Pause, Archive or Unarchive, and Delete once the task is not running; Resume waits in its own box. */
+  /** Action buttons driven by `allowedActionsFallback(t)`, passing `--if-updated` on every mutation. */
   taskActions(c, t) {
-    const running = t.status === "active";
-    const finished = t.status === "done" || t.status === "abandoned";
+    const acts = allowedActionsFallback(t);
     return h_flex()
+      .flex_none()
       .flex_wrap()
       .gap(SPACE[2])
       .items_center()
-      .when(running, (el) => el.child(this.pauseButton(c, t)))
-      .when(!running && !finished && t.status !== "paused", (el) => el.child(this.resumeButton(c, t)))
-      .when(Boolean((this.resumeAsks ?? {})[t.id]), (el) => el.child(
-        div().text_size(TYPE.xs).text_color(c.faint).child("resume asked"),
-      ))
-      .child(this.archiveButton(c, t))
-      .when(!running, (el) => el.child(this.taskDelete(c, t)));
+      .when(acts.pause, (el) => el.child(this.pauseButton(c, t)))
+      .when(acts.resume, (el) => el.child(this.resumeButton(c, t)))
+      .when(acts.done, (el) => el.child(this.markDoneButton(c, t)))
+      .when(acts.archive || acts.unarchive, (el) => el.child(this.archiveButton(c, t, acts.unarchive)))
+      .when(acts.delete, (el) => el.child(this.taskDelete(c, t)));
   }
 
-  /** Pause: `bh task status paused`, and the composer says so. */
+  /** Pause: `bh task status <id> paused --if-updated <updated>`. */
   pauseButton(c, t) {
-    return actionButton(c, `bh-pause-${t.id}`, "Pause", (_e, cx) => this.act(["task", "status", t.id, "paused"], cx, (r) => {
+    return actionButton(c, `bh-pause-${t.id}`, "Pause", (_e, cx) => this.actTask(["task", "status", t.id, "paused"], cx, (r, cx) => {
       if (r.code === 0) this.taskComposer.say(`Paused ${t.title ?? t.id}`, cx);
-    }), { icon: "pause" });
+    }, t.updated), { icon: "pause" });
   }
 
-  /** Resume asks the Orchestrator to pick the task up again: the toast says it was asked, and a mark stands until it is active. */
+  /** Resume: `bh task status <id> active --if-updated <updated>`. */
   resumeButton(c, t) {
-    return actionButton(c, `bh-resume-${t.id}`, "Resume", (_e, cx) => {
-      sendFromChat(`Resume task ${t.id}`);
-      this.resumeAsks = { ...this.resumeAsks, [t.id]: { at: Date.now(), status: t.status } };
-      this.taskComposer.say(`Asked the Orchestrator to resume ${t.title ?? t.id}`, cx);
-      cx.notify();
-    }, { icon: "play" });
+    return actionButton(c, `bh-resume-${t.id}`, "Resume", (_e, cx) => this.actTask(["task", "status", t.id, "active"], cx, (r, cx) => {
+      if (r.code === 0) this.taskComposer.say(`Resumed ${t.title ?? t.id}`, cx);
+    }, t.updated), { icon: "play" });
   }
 
-  /** Archive or Unarchive: the list follows the task to the tab it now lives in, and the composer says which. */
-  archiveButton(c, t) {
-    const label = t.archived ? "Unarchive" : "Archive";
-    return actionButton(c, `bh-arch-${t.id}`, label, (_e, cx) => this.act(["task", t.archived ? "unarchive" : "archive", t.id], cx, (r) => {
+  /** Mark done: `bh task status <id> done --if-updated <updated>`. */
+  markDoneButton(c, t) {
+    return actionButton(c, `bh-done-${t.id}`, "Mark done", (_e, cx) => this.actTask(["task", "status", t.id, "done"], cx, (r, cx) => {
+      if (r.code === 0) this.taskComposer.say(`Marked ${t.title ?? t.id} done`, cx);
+    }, t.updated), { icon: "check" });
+  }
+
+  /** Archive or Unarchive with `--if-updated`. */
+  archiveButton(c, t, isArchived = Boolean(t.archived)) {
+    const label = isArchived ? "Unarchive" : "Archive";
+    return actionButton(c, `bh-arch-${t.id}`, label, (_e, cx) => this.actTask(["task", isArchived ? "unarchive" : "archive", t.id], cx, (r, cx) => {
       if (r.code !== 0) return;
-      this.archived = !t.archived;
-      this.taskComposer.say(`${t.archived ? "Unarchived" : "Archived"} ${t.title ?? t.id}`, cx);
-    }), { icon: "archive" });
+      this.archived = !isArchived;
+      // Unarchiving keeps a done task under Done; only an open one returns to Active.
+      this.taskChip = chipForTask({ ...t, archived: false });
+      this.taskComposer.say(`${isArchived ? "Unarchived" : "Archived"} ${t.title ?? t.id}`, cx);
+    }, t.updated), { icon: "archive" });
   }
 
-  /** Delete a stopped task: `bh task delete`, then the task below it opens (else the one above), its composer saying "Deleted <title>". */
+  /** Delete a stopped task (two-click confirm via `arm`/`armed`) with `--if-updated`. */
   taskDelete(c, t) {
     return this.twoStep(c, {
       id: `bh-delete-${t.id}`,
@@ -1061,19 +1392,26 @@ export class Work {
       icon: "trash",
       run: (cx) => {
         const next = this.neighbourOf(t);
-        this.remove(["task", "delete", t.id], this.taskComposer, cx, () => {
+        this.remove(this.withIfUpdated(["task", "delete", t.id, "--json"], t.updated), this.taskComposer, cx, () => {
           this.opened = next?.id ?? null;
+          this.taskDetail = null;
+          this.taskDetailId = null;
           this.stayClosed = !next;
-          if (next) this.taskComposer.say(`Deleted ${t.title ?? t.id}`, cx);
+          if (next) {
+            this.loadTaskDetail(next.id, this.dir ?? projectDir(), cx);
+            this.taskComposer.say(`Deleted ${t.title ?? t.id}`, cx);
+          }
+        }, (message) => {
+          this.taskActionError = message || "Couldn't delete the task.";
         });
       },
     });
   }
 
-  /** The row after `t` in the list as it is drawn, else the one before it, else none. */
+  /** The row after `t` in the current filtered list, else the one before it, else none. */
   neighbourOf(t) {
-    const list = (this.tasks ?? []).filter((x) => Boolean(x.archived) === this.archived);
-    const rows = this.taskGroups(list).flatMap((g) => g.rows);
+    const filtered = filterTasks(this.tasks ?? [], { query: this.taskSearch?.value?.() ?? "", chip: this.taskChip });
+    const rows = groupTasks(filtered, this.taskChip).flatMap((g) => g.items);
     const at = rows.findIndex((x) => x.id === t.id);
     if (at < 0) return null;
     return rows[at + 1] ?? rows[at - 1] ?? null;
@@ -1089,39 +1427,46 @@ export class Work {
     }, { icon, tone: "danger", tooltip: label === null && sure ? ask : tip });
   }
 
-  taskTitle(c, t) {
-    return h_flex().gap(SPACE[3]).items_center()
-      .child(statusMark(c, t.status, 18))
-      .child(div().flex_1().min_w(0).text_size(TYPE.xl).font_semibold().line_height(`${LINE.xl}px`).child(t.title ?? t.id));
-  }
-
-  /** The status pill, the track, what it cost, and the Details link that opens what the task is made of. */
-  taskFacts(c, t) {
-    const open = this.descOpen?.has(`details:${t.id}`);
-    const usage = usageText(t.usage);
-    return v_flex()
-      .gap(SPACE[3])
-      .child(h_flex().flex_wrap().gap(SPACE[3]).items_center()
-        .child(pill(c, t.status ?? "backlog", statusTone(c, t.status)))
-        .when(Boolean(t.track), (el) => el.child(div().text_size(TYPE.sm).text_color(c.muted).child(`${t.track} track`)))
-        .when(Boolean(usage), (el) => el.child(mutedLine(c, usage)))
-        .child(textLink(c, `bh-task-details-${t.id}`, "Details", (_e, cx) => this.toggleDesc(`details:${t.id}`, cx), open ? c.ink : c.muted)))
-      .when(Boolean(open), (el) => el.child(this.taskDetails(c, t)));
-  }
-
-  /** The id, when it started, the branch or worktree, and the request without its [task] or [plan] tag. */
+  /** Collapsible metadata drawer: id, started date, branch/worktree, request, triage, skills and checks. */
   taskDetails(c, t) {
     const req = String(t.request ?? "").replace(/^\s*\[(?:task|plan)\]\s*/i, "");
     const started = day(t.created);
+    const triage = this.triageSummary(t.triage);
+    const skills = formatTaskSkills(t.skills);
+    // `bh check` run for the whole task (no step): its receipts are not on any step card.
+    const lastCheck = (Array.isArray(t.checks) ? t.checks : []).filter((r) => r?.step == null).at(-1);
     return v_flex()
+      .p(SPACE[3])
       .gap(SPACE[2])
+      .rounded(SIZE.control)
+      .bg(c.well)
       .text_size(TYPE.sm)
       .text_color(c.muted)
       .child(div().child([t.id, started && `started ${started}`].filter(Boolean).join(" · ")))
       .when(Boolean(t.git?.branch), (el) => el.child(h_flex().gap(SPACE[2]).items_center()
         .child(svg(ICON("folder")).flex_none().size(GLYPH.md).text_color(c.faint))
         .child(div().min_w(0).truncate().child(t.git.mode === "worktree" ? `Worktree ${t.git.path} · branch ${t.git.branch}` : `Branch ${t.git.branch}${t.git.from ? ` (from ${t.git.from})` : ""}`))))
+      .when(Boolean(triage), (el) => el.child(div().child(`Triage: ${triage}`)))
+      .when(Boolean(skills), (el) => el.child(div().child(`Skills: ${skills}`)))
+      .when(Boolean(lastCheck), (el) => el.child(div().child(this.checkLine(lastCheck))))
       .when(Boolean(req), (el) => el.child(this.requestText(c, t, req)));
+  }
+
+  /** The last task-level `bh check` as one line: exit, tests and when. */
+  checkLine(receipt) {
+    const counts = receipt?.counts ?? {};
+    const tests = counts.total ? `${counts.pass ?? 0}/${counts.total} tests` : `${receipt?.ran?.tests ?? 0} tests`;
+    const when = receipt?.at ? ` · ${boardAge(receipt.at)}` : "";
+    return `Last bh check: ${Number(receipt?.exit ?? 0) === 0 ? "passed" : "failed"} · ${tests}${when}`;
+  }
+
+  /** Formats classifier triage object cleanly for the Details drawer. */
+  triageSummary(tr) {
+    if (!tr || typeof tr !== "object") return "";
+    const domains = tr.domains && typeof tr.domains === "object"
+      ? Object.entries(tr.domains).filter(([, p]) => p && p !== "none").map(([d, p]) => `${d} (${p})`).join(", ")
+      : "";
+    return [tr.size && `size ${tr.size}`, tr.kind, domains && `domains ${domains}`, tr.research && `research ${tr.research}`].filter(Boolean).join(" · ");
   }
 
   /** The request as Markdown, shortened to a few lines with Show more. */
@@ -1132,88 +1477,181 @@ export class Work {
     const text = long && !open ? req.slice(0, 200).replace(/\s+\S*$/, "") + "…" : req;
     return v_flex()
       .gap(SPACE[2])
-      .child(div().text_size(TYPE.md).line_height(`${LINE.md}px`).child(TextView.markdown(`bh-task-req-${t.id}-${open ? "o" : "c"}`, text)))
+      .child(div().text_size(TYPE.md).line_height(`${LINE.md}px`).text_color(c.ink).child(TextView.markdown(`bh-task-req-${t.id}-${open ? "o" : "c"}`, text)))
       .when(long, (el) => el.child(textLink(c, `bh-task-req-more-${t.id}`, open ? "Show less" : "Show more", (_e, cx) => this.toggleDesc(key, cx), c.accent)));
   }
 
-  /** Pips with "k of n steps", the paused task's waiting box, and under them how long the task has been worked. */
-  taskProgress(c, t) {
-    const steps = t.steps ?? [];
-    const done = steps.filter((s) => s.status === "done" || s.status === "skipped").length;
-    return v_flex()
+  /** Detail tabs (`Steps`, `Board`, `Comments`, `Full plan`) + Expand/Collapse all on Steps tab. */
+  taskDetailTabs(c, t) {
+    const counts = detailTabCounts(t);
+    const activeTab = this.detailTab === "plan" && !counts.hasPlan ? "steps" : this.detailTab;
+    const items = [
+      { id: "steps", label: "Steps", count: counts.stepsText, on: activeTab === "steps" },
+      { id: "board", label: "Board", count: counts.boardCount || null, on: activeTab === "board" },
+      { id: "comments", label: "Comments", count: counts.openCommentsCount || counts.commentsCount || null, on: activeTab === "comments" },
+      ...(counts.hasPlan ? [{ id: "plan", label: "Full plan", on: activeTab === "plan" }] : []),
+    ];
+    const steps = Array.isArray(t.steps) ? t.steps : [];
+    const allOpen = steps.length > 0 && steps.every((s) => this.expandedSteps.has(s.n));
+    return h_flex()
+      .flex_none()
+      .py(SPACE[3])
       .gap(SPACE[2])
-      .when(steps.length > 0, (el) => el.child(h_flex().gap(SPACE[3]).items_center()
-        .child(pips(c, steps))
-        .child(mutedLine(c, `${done} of ${steps.length} steps`))))
-      .when(t.status === "paused", (el) => el.child(this.waitingBox(c, t)))
-      .child(mutedLine(c, `worked ${duration(workedOf(t))}`));
+      .items_center()
+      .justify_between()
+      .child(segmented(c, {
+        id: "bh-task-detail-tabs",
+        items,
+        onPick: (id, cx) => {
+          this.detailTab = id;
+          cx.notify();
+        },
+      }))
+      .when(activeTab === "steps" && steps.length > 0, (el) => el.child(
+        actionButton(c, "bh-steps-toggle-all", allOpen ? "Collapse all" : "Expand all", (_e, cx) => {
+          this.expandedSteps = allOpen ? new Set() : new Set(steps.map((s) => s.n));
+          cx.notify();
+        }, { tone: "quiet" }),
+      ));
   }
 
-  /** A paused task waits: a tinted box under the pips that says so and holds Resume. */
-  waitingBox(c, t) {
-    return v_flex()
-      .gap(SPACE[3])
-      .py(SPACE[2])
-      .child(sectionLabel(c, "Waiting on"))
-      .child(v_flex()
-        .gap(SPACE[3])
-        .p(SPACE[4])
-        .rounded(SIZE.control)
-        .bg(c.well)
-        .border_1()
-        .border_color(c.edge)
-        .child(div().text_size(TYPE.sm).text_color(c.muted).child("Paused"))
-        .child(this.resumeButton(c, t)));
+  /** Renders the currently active detail tab inside the single scroll container. */
+  taskTabBody(c, t) {
+    const loadingDetail = this.taskDetailId !== t.id;
+    if (loadingDetail && this.detailTab !== "plan") {
+      return stateView(c, { id: "bh-task-detail-loading", title: "Loading task details…", loading: true });
+    }
+    if (this.detailTab === "board") return this.taskBoardTab(c, t);
+    if (this.detailTab === "comments") return this.taskCommentsTab(c, t);
+    if (this.detailTab === "plan" && t.plan) return this.taskPlanTab(c, t);
+    return this.taskStepsTab(c, t);
   }
 
-  taskSteps(c, t, comments) {
-    const steps = t.steps ?? [];
+  /** Steps tab: interactive expandable step cards with live terminals, timeline events, and transitions. */
+  taskStepsTab(c, t) {
+    const steps = Array.isArray(t.steps) ? t.steps : [];
+    if (!steps.length) return mutedLine(c, "No steps yet.");
+    const comments = openFirst(t.comments);
+    const liveTerminals = terminals();
     const next = steps.find((s) => !["done", "skipped", "active", "blocked"].includes(s.status));
     return v_flex()
-      .gap(SPACE[1])
-      .child(sectionLabel(c, "Steps"))
-      .when(!steps.length, (el) => el.child(mutedLine(c, "No steps yet.")))
-      .children(steps.map((s) => this.stepRow(c, t, s, { next: s === next, comments })));
+      .gap(SPACE[2])
+      .children(steps.map((s) => this.stepCard(c, t, s, { next: s === next, comments, liveTerminals })));
   }
 
-  /** A step: its line, then (for several agents) one line per agent, its comments and the box being written. */
-  stepRow(c, t, s, { next, comments }) {
+  /** Toggles one step card's expanded state. */
+  toggleStep(n, cx) {
+    const next = new Set(this.expandedSteps);
+    if (next.has(n)) next.delete(n);
+    else next.add(n);
+    this.expandedSteps = next;
+    cx.notify();
+  }
+
+  /** One expandable step card: clickable header + expanded events, comments, and action controls. */
+  stepCard(c, t, s, { next, comments, liveTerminals }) {
+    const expanded = this.expandedSteps.has(s.n);
     const notes = comments.filter((x) => x.step === s.n);
-    const on = this.addingAt("task", t.id, s.n);
-    const who = stepAgents(s);
-    const skills = skillsLine(s.skills);
-    return v_flex()
-      .flex_none()
-      .child(this.stepLine(c, t, s, { next, on, who, live: notes.filter((x) => x.open !== false).length }))
-      // What the step's spawn was allowed to use.
-      .when(Boolean(skills), (el) => el.child(div().pl(STEP_TEXT).pr(SPACE[3]).pb(SPACE[1]).text_size(TYPE.xs).text_color(c.muted).truncate().child(skills)))
-      // What the step's report says, under the step's title.
-      .when(Boolean(s.report?.summary), (el) => el.child(
-        div().pl(STEP_TEXT).pr(SPACE[3]).pb(SPACE[1]).text_size(TYPE.sm).text_color(c.muted).truncate().child(s.report.summary),
-      ))
-      .when(who.length > 1 && this.descOpen?.has(`step:${t.id}:${s.n}`), (el) => el.children(who.map((name) => this.agentLine(c, name, s.status === "active"))))
-      .children(notes.map((x) => this.commentNote(c, x, this.commentActions("task", t.id, x), STEP_TEXT)))
-      .when(on, (el) => el.child(this.inlineBox(c).ml(STEP_TEXT)));
-  }
-
-  stepLine(c, t, s, { next, on, who, live }) {
+    const liveNotes = notes.filter((x) => x.open !== false).length;
+    const who = stepAgents(s.agentName && !s.agent ? { agent: s.agentName } : s);
+    const term = terminalForStep(s, t.children ?? [], liveTerminals);
+    const termWorking = Boolean(term && liveTerminals.find((x) => (x.address ?? x.id) === term.id)?.status === "working");
     const done = s.status === "done" || s.status === "skipped";
     const time = this.stepTime(s);
-    const usage = usageText(s.usage);
+    return v_flex()
+      .flex_none()
+      .rounded(SIZE.control)
+      .bg(c.fill)
+      .border_1()
+      .border_color(expanded ? alpha(c.accent, 0.45) : c.edge)
+      .px(SPACE[4])
+      .py(SPACE[3])
+      .gap(SPACE[3])
+      .child(this.stepCardHeader(c, t, s, { expanded, next, done, who, time, liveNotes, working: s.status === "active" || termWorking }))
+      .when(expanded, (el) => el.child(this.stepCardBody(c, t, s, { notes, term })));
+  }
+
+  /** Clickable header row of a step card. */
+  stepCardHeader(c, t, s, { expanded, next, done, who, time, liveNotes, working }) {
+    const first = who[0] ?? s.agentName ?? null;
     return clickable(
-      this.stepFrame(c, t, s, on)
+      h_flex()
+        .gap(SPACE[2])
+        .items_center()
+        .rounded(SIZE.nested)
+        .on_click((_e, cx) => this.toggleStep(s.n, cx))
+        .child(svg(ICON(expanded ? "chevron-down" : "chevron-right")).flex_none().size(GLYPH.sm).text_color(c.faint))
         .child(statusMark(c, s.status, MARK))
-        .child(div().flex_none().w(SPACE[5] + SPACE[3]).text_size(TYPE.sm).text_color(c.muted).child(`${s.n}.`))
-        .child(div().flex_1().min_w(0).text_size(TYPE.md).line_height(`${LINE.md}px`).text_color(done ? c.muted : c.ink).child(s.title))
+        .child(div().flex_none().w(SPACE[5] + SPACE[2]).text_size(TYPE.sm).text_color(c.muted).child(`${s.n}.`))
+        .child(div().flex_1().min_w(0).text_size(TYPE.md).font_medium().line_height(`${LINE.md}px`).text_color(done ? c.muted : c.ink).child(s.title))
         .when(next, (el) => el.child(pill(c, "next", c.accent)))
-        .when(who.length > 0 && (s.status === "active" || done), (el) => el.child(this.stepWho(c, t, s, who)))
-        .when(Boolean(s.report?.file), (el) => el.child(this.reportLink(c, s.report.file, `bh-step-report-${t.id}-${s.n}`)))
-        .when(Boolean(time), (el) => el.child(div().flex_none().text_size(TYPE.sm).text_color(c.muted).child(time)))
-        .when(Boolean(usage), (el) => el.child(div().flex_none().text_size(TYPE.xs).text_color(c.faint).child(usage)))
-        .when(live > 0, (el) => el.child(commentCount(c, live))),
+        .when(Boolean(first), (el) => el.child(h_flex().flex_none().gap(SPACE[2]).items_center().text_size(TYPE.sm)
+          .child(agentDot(c, first))
+          .child(div().font_medium().text_color(agentInk(c, first)).child(who.length > 1 ? `${who.length} agents` : first))))
+        .when(working, (el) => el.child(pill(c, "working", c.success, { pulse: true })))
+        .when(Boolean(time), (el) => el.child(div().flex_none().text_size(TYPE.sm).text_color(c.muted).child(`· ${time}`)))
+        .when(liveNotes > 0, (el) => el.child(commentCount(c, liveNotes)))
+        .when(Boolean(s.report?.file), (el) => el.child(this.reportLink(c, s.report.file, `bh-step-report-${t.id}-${s.n}`))),
       c,
       `bh-step-${t.id}-${s.n}`,
     );
+  }
+
+  /** Expanded body of a step card: note/summary, events timeline, step comments, actions, and usage. */
+  stepCardBody(c, t, s, { notes, term }) {
+    const events = Array.isArray(s.events) ? s.events : [];
+    const skills = skillsLine(s.skills);
+    const usage = usageText(s.usage);
+    const actions = stepActions(s);
+    return v_flex()
+      .ml(SPACE[5] + SPACE[3])
+      .pt(SPACE[3])
+      .gap(SPACE[3])
+      .border_t(HAIR)
+      .border_color(c.edge)
+      .when(Boolean(s.note), (el) => el.child(div().text_size(TYPE.sm).text_color(c.muted).child(s.note)))
+      .when(Boolean(s.report?.summary), (el) => el.child(div().text_size(TYPE.sm).text_color(c.muted).child(s.report.summary)))
+      .when(Boolean(skills), (el) => el.child(div().text_size(TYPE.xs).text_color(c.faint).child(skills)))
+      .when(events.length > 0, (el) => el.child(v_flex().gap(SPACE[2]).children(events.map((ev, idx) => this.stepEventRow(c, ev, idx)))))
+      .when(notes.length > 0, (el) => el.child(v_flex().gap(SPACE[2]).children(notes.map((x) => this.commentNote(c, x, this.commentActions("task", t.id, x), 0)))))
+      .child(h_flex().flex_wrap().gap(SPACE[2]).items_center().justify_between().pt(SPACE[1])
+        .child(h_flex().flex_wrap().gap(SPACE[2]).items_center()
+          .when(Boolean(term), (el) => el.child(actionButton(c, `bh-step-term-${t.id}-${s.n}`, "Open terminal", (_e, cx) => {
+            cx.stop_propagation();
+            openTerminal(term.id);
+          }, { icon: "page-terminals" })))
+          .child(actionButton(c, `bh-step-comment-${t.id}-${s.n}`, "Comment", (_e, cx) => {
+            cx.stop_propagation();
+            this.commentStep = { n: s.n, title: s.title };
+            this.taskComposer.expanded = true;
+            this.taskComposer.focus();
+            cx.notify();
+          }, { icon: "comment" }))
+          .children(actions.map((a) => actionButton(c, `bh-step-act-${t.id}-${s.n}-${a.id}`, a.label, (_e, cx) => {
+            cx.stop_propagation();
+            this.actTask(["task", "step", t.id, String(s.n), a.to], cx, (r, cx) => {
+              if (r.code === 0) this.taskComposer.say(`Step ${s.n}: ${a.label}`, cx);
+            }, t.updated);
+          }, { tone: a.tone }))))
+        .when(Boolean(usage), (el) => el.child(div().flex_none().text_size(TYPE.xs).text_color(c.faint).child(usage))));
+  }
+
+  /** One event row in an expanded step's inline timeline (checks, board posts, reports, merges). */
+  stepEventRow(c, ev, idx) {
+    const label = ev.kind === "board" && ev.detail ? String(ev.detail) : String(ev.kind ?? "event");
+    const tone = toneColor(c, stepEventTone(ev));
+    const head = ev.kind === "board" ? (ev.from || "team") : (ev.text || ev.from || label);
+    const tail = ev.kind === "board" ? ev.text : ev.detail;
+    const when = boardAge(ev.at);
+    return h_flex()
+      .id(`bh-ev-${idx}-${hash(`${ev.at}${ev.text}`)}`)
+      .gap(SPACE[2])
+      .items_center()
+      .text_size(TYPE.sm)
+      .child(pill(c, label, tone))
+      .child(div().flex_none().font_medium().text_color(c.ink).child(String(head ?? "")))
+      .when(Boolean(tail), (el) => el.child(div().flex_1().min_w(0).truncate().text_color(c.muted).child(`— ${tail}`)))
+      .when(Boolean(when), (el) => el.child(div().flex_none().text_size(TYPE.xs).text_color(c.faint).child(when)));
   }
 
   /** A quiet Report link: the file opens over the page, from the project folder; the click stays its own. */
@@ -1229,60 +1667,48 @@ export class Work {
       id, c);
   }
 
-  /** The board: the newest entries first (its whole length once asked), each with its kind, who and when. */
-  taskBoard(c, t) {
+  /** Board tab: kind filter chips + live newest-first board entries. */
+  taskBoardTab(c, t) {
     const board = Array.isArray(t.board) ? t.board : [];
-    const all = Boolean(this.boardAll?.has(t.id));
-    const { rows, rest } = boardRows(board, all);
+    const { items, counts } = filterBoard(board, this.boardKind);
+    const rows = [...items].reverse();
     return v_flex()
-      .gap(SPACE[2])
-      .child(sectionLabel(c, board.length ? `Board · ${board.length}` : "Board"))
-      .when(!board.length, (el) => el.child(mutedLine(c, "Nothing on the board yet.")))
-      .children(rows.map((e, i) => this.boardRow(c, t, e, i)))
-      .when(rest > 0 || (all && board.length > 10), (el) => el.child(this.boardMore(c, t, board.length, all)));
+      .gap(SPACE[3])
+      .child(h_flex().role("tab_list").flex_wrap().gap(SPACE[2]).items_center().children(BOARD_KINDS.map((kind) => filterChip(c, {
+        id: `bh-board-kind-${kind}`,
+        label: kind === "all" ? "All" : kind,
+        count: counts[kind],
+        on: this.boardKind === kind,
+        onClick: (_e, cx) => {
+          this.boardKind = kind;
+          cx.notify();
+        },
+      }))))
+      .when(!rows.length, (el) => el.child(mutedLine(c, board.length ? `No ${this.boardKind} entries on the board.` : "Nothing on the board yet.")))
+      .children(rows.map((e, i) => this.boardRow(c, t, e, i)));
   }
 
-  /** One board entry: its kind, who posted it and when, then what it says. */
+  /** One board entry: its number, kind, who posted it and when, then what it says. */
   boardRow(c, t, e, i) {
     const text = linkFiles(String(e.text ?? ""));
     return v_flex()
       .flex_none()
-      .gap(SPACE[1])
-      .py(SPACE[1])
+      .gap(SPACE[2])
+      .p(SPACE[3])
+      .rounded(SIZE.control)
+      .bg(c.fill)
+      .border_1()
+      .border_color(c.edge)
       .opacity(this.rowsIn === false ? 0 : 1)
       .transition("opacity", { ...MOTION.row, delay: Math.min(i, 8) * MOTION.stagger })
       .child(h_flex().flex_wrap().gap(SPACE[2]).items_center()
+        .when(e.n != null, (el) => el.child(div().text_size(TYPE.xs).text_color(c.faint).child(`#${e.n}`)))
         .child(pill(c, String(e.kind ?? "note"), c[boardTone(e.kind)] ?? c.muted))
         .child(div().text_size(TYPE.sm).font_medium().text_color(agentInk(c, e.from ?? "the team")).child(e.from ?? "the team"))
         .when(Boolean(e.to), (el) => el.child(div().text_size(TYPE.sm).text_color(c.muted).child(`→ ${e.to}`)))
-        .child(div().text_size(TYPE.sm).text_color(c.faint).child(boardAge(e.at)))
+        .child(div().text_size(TYPE.xs).text_color(c.faint).child(boardAge(e.at)))
         .when(Boolean(e.file), (el) => el.child(this.reportLink(c, e.file, `bh-board-report-${t.id}-${e.n}`))))
       .child(TextView.markdown(`bh-board-text-${t.id}-${e.n}`, text).on_link_click((url) => openLink(url, projectDir())));
-  }
-
-  /** The board's "Show all N", or the way back to the newest ten. */
-  boardMore(c, t, n, all) {
-    return actionButton(c, `bh-board-more-${t.id}`, all ? "Show the newest 10" : `Show all ${n}`, (_e, cx) => {
-      const next = new Set(this.boardAll ?? []);
-      if (all) next.delete(t.id);
-      else next.add(t.id);
-      this.boardAll = next;
-      cx.notify();
-    }, { tone: "quiet" });
-  }
-
-  /** A step's line box: its padding, the hover fill while its comment box is open, and a click that starts a comment. */
-  stepFrame(c, t, s, on) {
-    return h_flex()
-      .px(SPACE[2])
-      .py(SPACE[2])
-      .gap(SPACE[3])
-      .items_center()
-      .rounded(SIZE.nested)
-      .when(on, (el) => el.bg(c.hover))
-      .opacity(this.rowsIn === false ? 0 : 1)
-      .transition("opacity", { ...MOTION.row, delay: Math.min(s.n, 8) * MOTION.stagger })
-      .on_click((_e, cx) => this.startInline("task", t.id, s.n, cx));
   }
 
   /** A step's recorded time (its `timeMs`, else its stored `workedMs`); "" for one not started. */
@@ -1292,69 +1718,27 @@ export class Work {
     return duration(ms);
   }
 
-  /** Who works on an active or done step: the first agent, or how many; a working dot while it runs; a chevron when several. */
-  stepWho(c, t, s, who) {
-    const active = s.status === "active";
-    const key = `step:${t.id}:${s.n}`;
-    const first = who[0];
-    return h_flex().flex_none().gap(SPACE[2]).items_center().text_size(TYPE.sm)
-      .child(agentDot(c, first))
-      .child(div().text_color(agentInk(c, first)).font_medium().child(who.length > 1 ? `${who.length} ${active ? "working" : "agents"}` : first))
-      .when(active && who.length === 1, (el) => el.child(h_flex().gap(SPACE[1]).items_center()
-        .child(div().size(DOT).rounded_full().bg(c.success))
-        .child(div().text_color(c.muted).child("working"))))
-      .when(who.length > 1, (el) => el.child(this.chevron(c, key)));
-  }
-
-  /** The disclosure for a step's several agents; its click does not open the step's comment box. */
-  chevron(c, key) {
-    const open = this.descOpen?.has(key);
-    return focusable(
-      pressable(div()
-        .size(CHIP)
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(SIZE.nested)
-        .text_color(c.muted)
-        .hover((s) => s.bg(c.hover).text_color(c.ink))
-        .on_click((_e, cx) => {
-          cx.stop_propagation();
-          this.toggleDesc(key, cx);
-        })
-        .child(svg(ICON(open ? "chevron-down" : "chevron-right")).size(GLYPH.sm))),
-      `bh-chevron-${key}`,
-      c,
-    );
-  }
-
-  /** One agent on a step: its initial, its name and, while it works, a dot and "working". */
-  agentLine(c, name, working) {
-    return h_flex().pl(STEP_TEXT).py(SPACE[1]).gap(SPACE[2]).items_center().text_size(TYPE.sm)
-      .child(agentDot(c, name))
-      .child(div().text_color(agentInk(c, name)).child(name))
-      .when(working, (el) => el.child(div().size(DOT).rounded_full().bg(c.success)).child(div().text_color(c.muted).child("working")));
-  }
-
-  /** A task made from a plan: a section whose row opens that plan's sheet. */
-  taskFullPlan(c, t) {
+  /** Full plan tab: displays plan id and quick actions to open the plan sheet or switch to Plans tab. */
+  taskPlanTab(c, t) {
     return v_flex()
-      .gap(SPACE[1])
-      .child(sectionLabel(c, "Full plan"))
-      .child(clickable(
-        h_flex()
-          .flex_none()
-          .px(SPACE[2])
-          .py(SPACE[2])
-          .gap(SPACE[3])
-          .items_center()
-          .rounded(SIZE.nested)
-          .on_click((_e, cx) => this.openFullPlan(t, cx))
-          .child(svg(ICON("chevron-right")).size(GLYPH.md).text_color(c.muted))
-          .child(div().text_size(TYPE.md).child("Read the details of each step")),
-        c,
-        `bh-task-plan-${t.id}`,
-      ));
+      .p(SPACE[4])
+      .gap(SPACE[3])
+      .rounded(SIZE.control)
+      .bg(c.fill)
+      .border_1()
+      .border_color(c.edge)
+      .child(h_flex().gap(SPACE[2]).items_center()
+        .child(svg(ICON("page-plans")).flex_none().size(GLYPH.lg).text_color(c.accent))
+        .child(div().text_size(TYPE.md).font_semibold().child(`Plan ${t.plan}`)))
+      .child(mutedLine(c, "This task was created from an agreed plan. Open the full plan sheet to inspect step details or jump to the Plans tab."))
+      .child(h_flex().flex_wrap().gap(SPACE[2]).items_center()
+        .child(actionButton(c, `bh-task-plan-open-${t.id}`, "Open full plan", (_e, cx) => this.openFullPlan(t, cx), { icon: "file", tone: "primary" }))
+        .child(actionButton(c, `bh-task-plan-tab-${t.id}`, "View in Plans tab", (_e, cx) => {
+          this.planId = t.plan;
+          keep("plan", t.plan);
+          if (this.fixed) showPage("plans");
+          else this.show("plans", cx);
+        }, { icon: "page-plans" })));
   }
 
   /** Reads the plan the task came from, then opens it in the plan sheet. */
@@ -1372,17 +1756,85 @@ export class Work {
     });
   }
 
-  /** The task's own comments under Comments, with the add box or its button; the step's comments stay under their steps. */
-  taskComments(c, t, comments) {
-    const adding = this.addingAt("task", t.id, null);
+  /** Comments tab: all open and resolved comments with step badges and `--if-updated` actions. */
+  taskCommentsTab(c, t) {
+    const comments = openFirst(t.comments);
+    if (!comments.length) {
+      return mutedLine(c, "No comments yet. Click the bar below to write a comment — Markdown and images work there, and the Orchestrator takes it into account.");
+    }
     return v_flex()
-      .gap(SPACE[3])
-      .child(sectionLabel(c, "Comments"))
-      .when(!comments.length, (el) => el.child(mutedLine(c, "No comments yet. Comment here or in the box below (Markdown and images work there); the Orchestrator takes it into account.")))
-      .children(comments.filter((x) => !x.step).map((x) => this.commentNote(c, x, this.commentActions("task", t.id, x), 0)))
-      .child(adding
-        ? this.inlineBox(c)
-        : actionButton(c, `bh-task-add-comment-${t.id}`, "Add comment", (_e, cx) => this.startInline("task", t.id, null, cx), { icon: "comment" }));
+      .gap(SPACE[2])
+      .children(comments.map((x) => v_flex()
+        .flex_none()
+        .p(SPACE[3])
+        .gap(SPACE[2])
+        .rounded(SIZE.control)
+        .bg(c.fill)
+        .border_1()
+        .border_color(c.edge)
+        .when(x.step != null, (el) => el.child(h_flex().gap(SPACE[2]).items_center()
+          .child(pill(c, `Step ${x.step}`, c.accent))
+          .when(Boolean(x.at), (el2) => el2.child(div().text_size(TYPE.xs).text_color(c.faint).child(boardAge(x.at))))))
+        .child(this.commentNote(c, x, this.commentActions("task", t.id, x), 0))));
+  }
+
+  /** Foldable composer dock at the foot of the task detail pane: sleek bar when folded, bounded Composer when open. */
+  taskComposerDock(c, t, inner, height) {
+    const folded = this.taskComposer.isFolded() && !this.taskComposer.toast;
+    if (folded) {
+      const label = this.commentStep
+        ? `Comment on step ${this.commentStep.n}… (click to write)`
+        : `Comment on ${t.title ?? t.id}… (click to write)`;
+      return div()
+        .flex_none()
+        .pt(SPACE[2])
+        .pb(SIZE.foot)
+        .child(clickable(
+          h_flex()
+            .w_full()
+            .h(CONTROL + SPACE[4])
+            .px(SPACE[4])
+            .gap(SPACE[3])
+            .items_center()
+            .justify_between()
+            .bg(c.fill)
+            .border_1()
+            .border_color(c.edge)
+            .rounded(SIZE.radius)
+            .shadow_sm()
+            .cursor_text()
+            .on_click((_e, cx) => {
+              this.taskComposer.expanded = true;
+              this.taskComposer.focus();
+              cx.notify();
+            })
+            .child(div().flex_1().min_w(0).truncate().text_size(TYPE.md).text_color(c.faint).child(label))
+            .child(div().flex_none().text_size(TYPE.xs).font_medium().text_color(c.accent).child("↵ Send")),
+          c,
+          "bh-task-composer-bar",
+        ));
+    }
+    const compW = Math.min(SIZE.maxWidth, Math.max(320, inner));
+    return v_flex()
+      .flex_none()
+      .pt(SPACE[2])
+      .pb(SIZE.foot)
+      .gap(SPACE[2])
+      .items_center()
+      // The header belongs to the open box: a toast over the folded slim bar must not bring it back.
+      .when(!this.taskComposer.isFolded(), (el) => el.child(h_flex().w(Math.min(compW, inner)).items_center().justify_between().gap(SPACE[2])
+        .child(h_flex().gap(SPACE[2]).items_center()
+          .when(Boolean(this.commentStep), (el2) => el2.child(pill(c, `Commenting on step ${this.commentStep.n}`, c.accent))
+            .child(actionButton(c, "bh-task-step-clear", null, (_e, cx) => {
+              this.commentStep = null;
+              cx.notify();
+            }, { icon: "x", tone: "quiet", tooltip: "Comment on whole task", a11y: "Clear step target" }))))
+        .child(actionButton(c, "bh-task-composer-hide", "Hide", (_e, cx) => {
+          this.taskComposer.expanded = false;
+          this.commentStep = null;
+          cx.notify();
+        }, { tone: "quiet" }))))
+      .child(this.taskComposer.render(this.cx, compW + SIZE.gutter * 2, height));
   }
 
   /**

@@ -15,6 +15,7 @@
 - Reply logs (DATA/replies/<key>.jsonl) are the single append-only chat event log ({id,at,kind,name,space,text}); kind:'asked' clears waits without a bubble; logReply trims atomically only past REPLY_LOG_MAX.
 - Claude Code headless can exit 0 with a single-line synthetic quota message (anthropics/claude-code#79500); classify only whole-line anchored matches <=220 chars, never prose.
 - runner.turn() must refresh the live Acp instance agent each turn, and resumeState() resets state.harness to the roster harness so fallback reuse checks state.sessions[harness].
+- Per-task locks must live beside the task folder (tasks/<id>.lock), never inside tasks/<id>/task.json, so deleteTask never removes an open lock fd and missing ids never create ghost directories.
 
 ## Standards
 - team.hc never runs hc through a shell (a brief is one argument); tests stand in for hc with a script named by BH_HC
