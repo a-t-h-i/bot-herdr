@@ -240,7 +240,7 @@ function resilienceStatus(root, flags) {
  * The engine's own limits on spawning: how many children may be open, how deep spawns may nest,
  * the task's budget, and git isolation in autonomous mode. Returns { ok, reason, depth }.
  */
-function guardSpawn(root, taskId, config = RZ.resilienceConfig()) {
+function guardSpawn(root, taskId, config = RZ.resilienceConfig(), { readOnly = false } = {}) {
   // A non-numeric or negative depth is no depth: it must never turn into NaN and slip past the limit.
   const carried = Number(process.env.BH_SPAWN_DEPTH);
   const depth = (Number.isFinite(carried) && carried >= 0 ? Math.floor(carried) : 0) + 1;
@@ -256,8 +256,10 @@ function guardSpawn(root, taskId, config = RZ.resilienceConfig()) {
       return { ok: false, reason: `${task.id} is paused: ${budget.reason}. Raise the ceiling in Settings → Resilience (or fix the check), then bh task status ${task.id} active.` };
     }
   }
-  const isolation = RZ.checkAutonomousIsolation(root, config, task);
-  if (!isolation.ok) return { ok: false, reason: isolation.reason };
+  if (!readOnly) {
+    const isolation = RZ.checkAutonomousIsolation(root, config, task);
+    if (!isolation.ok) return { ok: false, reason: isolation.reason };
+  }
   return { ok: true, depth };
 }
 
@@ -880,9 +882,11 @@ async function main(argv) {
       const task = flags.task ?? null;
       const text = need(bodyText(flags, args), 'bh spawn <agent> --name <short> "<brief>"');
       const mode = flags.panel ? "panel" : flags.review ? "review" : "child";
-      const plan = flags.panel ?? flags.plan ?? null;
+      const plan = typeof flags.panel === "string" ? flags.panel : flags.plan ?? null;
       // The engine's own limits, checked before any work is started (and before a worktree is made).
-      const guard = guardSpawn(root, task);
+      // Read-only panel/review/scout spawns do not edit the main tree, so they do not require git isolation.
+      const readOnly = mode !== "child" || (!roleOf(a.role)?.edits && a.role !== "custom");
+      const guard = guardSpawn(root, task, undefined, { readOnly });
       if (!guard.ok) throw new Error(guard.reason);
       process.env.BH_SPAWN_DEPTH = String(guard.depth); // every child it starts sees one level deeper
       const id = team.knowledgeName(a);
