@@ -29,6 +29,37 @@ async function questionAt(name) {
   }
 }
 
+/** Shared key for question IDs dismissed or answered on any page, suppressing stale cards immediately. */
+export const DISMISSED_QUESTIONS = "bot-herdr.dismissed-questions";
+
+function readDismissed() {
+  const raw = shared(DISMISSED_QUESTIONS);
+  return new Set(Array.isArray(raw) ? raw : []);
+}
+
+function writeDismissed(set) {
+  const next = [...set];
+  const prev = shared(DISMISSED_QUESTIONS);
+  if (Array.isArray(prev) && prev.length === next.length && prev.every((v, i) => v === next[i])) return;
+  setShared(DISMISSED_QUESTIONS, next);
+}
+
+function markDismissed(id) {
+  if (!id) return;
+  const set = readDismissed();
+  if (set.has(id)) return;
+  set.add(id);
+  writeDismissed(set);
+}
+
+function unmarkDismissed(id) {
+  if (!id) return;
+  const set = readDismissed();
+  if (!set.has(id)) return;
+  set.delete(id);
+  writeDismissed(set);
+}
+
 /**
  * The open questions of a window, oldest first: `poll()` reads the folder on a timer, `drop(q)`
  * takes a card off every page straight away, and `send(q, answers, file)` posts it back.
@@ -36,7 +67,15 @@ async function questionAt(name) {
 export class OpenQuestions {
   constructor() {
     this.files = {}; // file name → its question, or null once it is answered or closed
-    this.list = []; // the open ones, oldest first
+    this.fileIds = {}; // file name → question id, to prune shared dismissals once the file leaves disk
+    this.raw = []; // open questions from disk, oldest first
+    this.shownSig = "";
+  }
+
+  /** Open questions not dismissed on any page, oldest first. */
+  get list() {
+    const dismissed = readDismissed();
+    return dismissed.size ? this.raw.filter((q) => !dismissed.has(q.id)) : this.raw;
   }
 
   /** Reads the folder: true when what is open changed. */
@@ -50,24 +89,38 @@ export class OpenQuestions {
     let changed = false;
     for (const name of names) {
       if (name in this.files) continue;
-      this.files[name] = await questionAt(name);
+      const q = await questionAt(name);
+      this.files[name] = q;
+      if (q?.id) this.fileIds[name] = q.id;
       changed = true;
     }
     for (const name of Object.keys(this.files)) {
       if (names.includes(name)) continue;
+      const goneId = this.fileIds[name];
       delete this.files[name];
+      delete this.fileIds[name];
+      if (goneId) unmarkDismissed(goneId);
       changed = true;
     }
-    if (!changed) return false;
-    this.list = Object.values(this.files).filter(Boolean).sort((a, b) => String(a.created).localeCompare(String(b.created)));
-    return true;
+    if (changed) {
+      this.raw = Object.values(this.files).filter(Boolean).sort((a, b) => String(a.created).localeCompare(String(b.created)));
+    }
+    const sig = this.list.map((q) => q.id).join(",");
+    if (sig !== this.shownSig) {
+      this.shownSig = sig;
+      changed = true;
+    }
+    return changed;
   }
 
-  /** Takes a question off the list now; returns its file, for `send` to read again if it cannot go. */
+  /** Takes a question off every page's list now; returns its file, for `send` to read again if it cannot go. */
   drop(q) {
-    const file = Object.keys(this.files).find((name) => this.files[name]?.id === q.id);
+    markDismissed(q?.id);
+    const file = Object.keys(this.files).find((name) => this.files[name]?.id === q?.id);
     if (file) this.files[file] = null;
-    this.list = this.list.filter((x) => x.id !== q.id);
+    this.raw = this.raw.filter((x) => x.id !== q?.id);
+    this.shownSig = this.list.map((x) => x.id).join(",");
+    publishCounts(this.list);
     return file;
   }
 
@@ -81,6 +134,7 @@ export class OpenQuestions {
       sent = null;
     }
     if (r.code !== 0 || !sent) {
+      unmarkDismissed(q?.id);
       if (file) delete this.files[file];
       return { sent: false, ok: false, why: (r.stderr || r.stdout || "node didn't run").trim().split("\n")[0] };
     }

@@ -12,6 +12,7 @@
 - Headless Claude Code compacts a saved session with: claude -p "/compact" --resume <session-id> --output-format stream-json --verbose (verified on 2.1.328); success prints a system event with subtype compact_boundary, and the session id is unchanged.
 - Bundled binaries (rg, fd, ast-grep) cache under appHome/cache/bot-herdr-bin/ and install to engine/bin/ via install.mjs; BH_BIN_DIR overrides it for tests.
 - Retrieval tiers in engine/scripts/lib/common.mjs: files fd -> rg --files -> git ls-files -> Node; search rg -> git grep --untracked -> Node; .bot-herdr/ excluded unless includeMeta.
+- Reply logs (DATA/replies/<key>.jsonl) are the single append-only chat event log ({id,at,kind,name,space,text}); kind:'asked' clears waits without a bubble; logReply trims atomically only past REPLY_LOG_MAX.
 
 ## Standards
 - team.hc never runs hc through a shell (a brief is one argument); tests stand in for hc with a script named by BH_HC

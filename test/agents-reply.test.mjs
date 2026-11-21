@@ -17,8 +17,13 @@ test("AskUserQuestion becomes bh ask's questions", () => {
 test("a child agent's answer is written for the chat too, and a turn with no words leaves a note", () => {
   const src = readFileSync(fileURLToPath(new URL("../mods/bot-herdr/engine/lib/agent.mjs", import.meta.url)), "utf8");
   assert.match(src, /export const NO_REPLY = "\(finished without a reply\)"/);
-  assert.match(src, /const chat = toChat\(input, reply, \{ asked: r\.asked \}\);\r?\n\s*if \(address && chat\) \{\r?\n\s*writeText\(join\(DATA, "replies"/);
-  assert.match(src, /logReply\(join\(DATA, "replies", `\$\{fileKey\(address\)\}\.jsonl`\), \{ at: now\(\), name: who, text: chat \}\)/);
+  assert.match(src, /const chat = toChat\(input, reply, \{ asked: r\.asked \}\);/);
+  assert.match(src, /const log = join\(DATA, "replies", `\$\{fileKey\(address\)\}\.jsonl`\);/);
+  // The log first, the display copy after: a reader never misses the turn the `.md` already shows.
+  const logged = src.indexOf("logReply(log, { at: now(), kind, name: who, text: chat });");
+  const shown = src.indexOf('writeText(join(DATA, "replies", `${fileKey(address)}.md`), replyText(chat));');
+  assert.ok(logged >= 0, "the turn is logged");
+  assert.ok(shown > logged, "the `.md` is written after the log");
 });
 
 test("every turn's reply is logged, and past its cap the log keeps the newest half", async () => {

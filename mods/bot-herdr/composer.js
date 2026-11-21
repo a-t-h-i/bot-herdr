@@ -39,6 +39,7 @@ import { ROSTER_KEY, HEADLESS_KEY, roster, argvOf, runnable, runningAs, slug, he
 import { harnessMark } from "./pick.js";
 import { mentionTone } from "./indicators.js";
 import { withQuiet, isQuiet } from "./live.js";
+import { enqueueOutbox, nextOutbox, matchAdopted } from "./feed.js";
 import { BRIEFED, teamBrief, orchestratorBrief, briefed } from "./brief.js";
 import { bh, bhJson, bhPath, enc, projectDir, ROUTING_KEY } from "./bh.js";
 import { queue, push as pushToast, dismiss as dismissToast, stayFor, toastSize, noteText, TOAST_KEY } from "./toasts.js";
@@ -193,6 +194,7 @@ export class Composer {
     this.shownPane = null; // the pane drawn last, so a new one opens with its animation
     this.pageHeight = 700;
     this.sending = false;
+    this.outboxQueue = []; // cross-page sendText items queued while a send is in flight
     this.sendFx = { n: 0, phase: "rest" }; // the send key's arrow: "rest" | "launch" | "land" | "rise"
     this.width = SIZE.maxWidth;
     this.justBriefed = new Set(); // briefed this session; the label can take a moment to show
@@ -540,16 +542,20 @@ export class Composer {
 
   /** Agents we started carry the brief in their task: once one shows up, mark it as briefed. */
   adopt() {
-    if (!this.starts.length) return;
+    if (!this.starts.length) return false;
     const now = Date.now();
     this.starts = this.starts.filter((s) => now - s.at < 60000);
+    const all = agents();
+    let adopted = false;
     for (const s of [...this.starts]) {
-      const born = agents().find((a) => a.space === s.space && !s.before.has(a.address) && !this.justBriefed.has(a.address));
+      const born = matchAdopted(s, all, this.justBriefed);
       if (!born) continue;
       this.starts.splice(this.starts.indexOf(s), 1);
       this.markBriefed(born.address);
-      this.hooks.born?.(born.address, s.name);
+      this.hooks.born?.(born.address, s.name, born.space ?? s.space);
+      adopted = true;
     }
+    return adopted;
   }
 
   /** Live child agents that have no pane of their own (those with one are in agents()). */
@@ -1123,16 +1129,20 @@ export class Composer {
 
   // ── Sending ────────────────────────────────────────────────────────────────────────────────
 
-  /** Sends text from another page (Resume on a task, a plan comment) as if typed here; a draft stays. */
+  /**
+   * Sends text from another page (Resume on a task, a plan comment) without mutating the user's
+   * draft textarea or routing into an open question card; queued sequentially while sending.
+   */
   sendText(text, cx) {
-    const draft = this.input.value();
-    this.input.set_value(text);
-    this.text = text;
-    this.send(cx);
-    if (draft) {
-      this.input.set_value(draft);
-      this.text = draft;
-    }
+    if (!enqueueOutbox(this.outboxQueue, text)) return;
+    if (!this.sending) this.flushOutbox(cx);
+  }
+
+  /** Dispatches the next queued cross-page message once the composer is idle. */
+  flushOutbox(cx) {
+    const text = nextOutbox(this.outboxQueue, this.sending);
+    if (text === null) return;
+    this.dispatchContent({ text, tokens: [] }, [], { fromInput: false }, cx);
   }
 
   send(cx) {
@@ -1151,7 +1161,11 @@ export class Composer {
       if (option) return at.question.multi ? this.toggleAsk(q, option.label, cx) : this.answerAsk(q, { picks: [option.label] }, cx);
       return this.answerAsk(q, { text: typed }, cx);
     }
-    const content = this.input.content();
+    this.dispatchContent(this.input.content(), this.files, { fromInput: true }, cx);
+  }
+
+  /** Plans and dispatches one message (`fromInput: false` for queued cross-page sends). */
+  dispatchContent(content, keptFiles, { fromInput = false } = {}, cx) {
     const all = agents();
     const target = this.target();
     const result = plan(content, {
@@ -1161,26 +1175,42 @@ export class Composer {
       target: target?.address ?? null,
       lead: this.lead(),
       starting: this.starts.some((s) => s.lead && s.space === (this.space()?.id ?? null)),
-      files: this.files.map((f) => f.path),
+      files: keptFiles.map((f) => f.path),
     });
-    if (result.error) return this.say(result.error, cx, "warning");
-    if (!result.steps.length) return;
+    if (result.error) {
+      this.say(result.error, cx, "warning");
+      if (!fromInput) this.flushOutbox(cx);
+      return;
+    }
+    if (!result.steps.length) {
+      if (!fromInput) this.flushOutbox(cx);
+      return;
+    }
     if (result.steps[0].do === "settings") {
+      if (fromInput) {
+        this.input.set_value("");
+        this.text = "";
+      }
+      showPage("settings");
+      cx.notify();
+      if (!fromInput) this.flushOutbox(cx);
+      return;
+    }
+    if (result.steps[0].do === "knowledge") {
+      this.askKnowledge(result.steps[0].question, cx, { fromInput });
+      if (!fromInput) this.flushOutbox(cx);
+      return;
+    }
+    const sentText = result.steps.find((s) => s.text !== undefined)?.text;
+    if (fromInput) {
+      this.files = [];
       this.input.set_value("");
       this.text = "";
-      showPage("settings");
-      return cx.notify();
+      this.pane = null;
+      this.trigger = null;
+      this.mode = null;
+      this.dismissed = null;
     }
-    if (result.steps[0].do === "knowledge") return this.askKnowledge(result.steps[0].question, cx);
-    const keptFiles = this.files;
-    const sentText = result.steps.find((s) => s.text !== undefined)?.text;
-    this.files = [];
-    this.input.set_value("");
-    this.text = "";
-    this.pane = null;
-    this.trigger = null;
-    this.mode = null;
-    this.dismissed = null;
     this.sending = true;
     // The arrow shoots up out of the key as the message goes.
     this.sendFx = { n: this.sendFx.n, phase: "launch" };
@@ -1214,15 +1244,16 @@ export class Composer {
       this.landSend(cx);
       if (failed.length) {
         // Put the message back so nothing typed is lost.
-        if (!this.input.value()) {
+        if (fromInput && !this.input.value()) {
           this.input.set_value(content);
           this.text = this.input.value();
           this.files = keptFiles;
         }
         this.say(failed[0], cx, "error");
       }
-      this.input.focus();
+      if (fromInput) this.input.focus();
       cx.notify();
+      this.flushOutbox(cx);
     });
   }
 
@@ -1230,11 +1261,13 @@ export class Composer {
    * /bh-info: the question goes in the feed as yours, to "knowledge-scout" until the call returns
    * the project's Scout by its real name; Scout's answer arrives as a reply.
    */
-  askKnowledge(question, cx) {
-    this.input.set_value("");
-    this.text = "";
-    this.trigger = null;
-    this.mode = null;
+  askKnowledge(question, cx, { fromInput = true } = {}) {
+    if (fromInput) {
+      this.input.set_value("");
+      this.text = "";
+      this.trigger = null;
+      this.mode = null;
+    }
     const id = this.hooks.sent?.({ text: question, files: [], paths: [], to: [{ address: null, name: "knowledge-scout" }] }, cx);
     cx.notify();
     cx.spawn(async (cx) => {
@@ -1262,7 +1295,7 @@ export class Composer {
       const entry = lead ? this.leadEntry() : step.entry ? this.roster().find((a) => a.id === step.entry) ?? null : null;
       const headlessly = this.runsHeadless(entry);
       const brief = headlessly ? "" : await this.briefFor(entry, this.briefing({ role: step.role }));
-      this.starts.push({ space: space?.id ?? null, before: new Set(agents().map((a) => a.address)), at: Date.now(), lead, name: step.tab ?? step.name });
+      this.starts.push({ space: space?.id ?? null, before: new Set(agents().map((a) => a.address)), at: Date.now(), lead, name: step.tab ?? step.name, tab: step.tab ?? null });
       const task = headlessly ? messageText(step.text, step.files) : `${brief}\n\n${messageText(step.text, step.files)}`.trimEnd();
       // Starting a tab moves herdr's focus; tell the page switch this was us, so it stays on Chat.
       hold();
@@ -1428,7 +1461,6 @@ export class Composer {
 
   /** The bubble, for the foot of a page `pageWidth` wide. Its pane grows upward from it. */
   render(cx, pageWidth, pageHeight = this.pageHeight) {
-    this.adopt();
     this.cx = cx; // mockups start drawing while the questions are drawn
     this.width = pageWidth;
     this.pageHeight = pageHeight;
@@ -1504,6 +1536,7 @@ export class Composer {
         cx.stop_propagation(); // the box keeps its own presses: the scrim behind must not see them
         this.expanded = true;
         this.input.focus();
+        cx.notify();
       })
       .on_scroll_wheel((_e, cx) => cx.stop_propagation())
       // The bevel: a lit top edge inside the outline. Not while a pane is joined on top: it

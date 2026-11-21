@@ -1,0 +1,32 @@
+{
+  "id": "p-20261121-0hfk",
+  "title": "Autonomous resilient harness, Tasks workbench and chat stability",
+  "idea": "Improve the harness for continual self-improvement, autonomous operation, fallback options when usage runs out, and better guardrails; redesign the Tasks page to be more presentable and interactive; and investigate and fix intermittent chat glitches.",
+  "status": "task",
+  "round": 3,
+  "task": "t-20261121-l4ki",
+  "created": "2026-11-21T00:10:58.270Z",
+  "skills": {
+    "design": {
+      "picked": null,
+      "added": []
+    },
+    "dev": {
+      "picked": null,
+      "added": []
+    },
+    "qa": {
+      "picked": null,
+      "added": []
+    },
+    "research": {
+      "picked": null,
+      "added": []
+    },
+    "advisor": {
+      "picked": null,
+      "added": []
+    }
+  },
+  "updated": "2026-11-21T00:53:52.848Z"
+}

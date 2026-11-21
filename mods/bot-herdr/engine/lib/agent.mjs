@@ -10,7 +10,7 @@
 // harness's full interactive CLI on the same conversation; /new starts a fresh one; /team
 // sends the brief again.
 
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { slug } from "../../roster.js";
@@ -60,14 +60,32 @@ export function replyText(text) {
 /** The most turns a reply log keeps; past it the oldest half goes. */
 export const REPLY_LOG_MAX = 400;
 
+/** An event's id: two events in the same millisecond still differ. */
+const replyId = () => `${Date.now().toString(36)}-${randomBytes(4).toString("hex")}`;
+
 /**
- * Every turn's reply, one JSON line each (`replies/<key>.jsonl`: `{ at, name, text }`), so the chat
- * can show each one even when two turns end between its polls or the agent exits first.
+ * One event in an agent's reply log (`replies/<key>.jsonl`): `{ id, at, kind, name, space, text }`,
+ * so the chat can show each turn even when two end between its polls or the agent exits first.
+ * The log is appended to, never rewritten, so a reader between two turns sees every turn once;
+ * only past REPLY_LOG_MAX lines is it rewritten, whole and under a temporary name, then renamed.
  */
 export function logReply(file, entry) {
+  appendJsonl(file, {
+    id: entry.id ?? replyId(),
+    at: entry.at ?? now(),
+    kind: entry.kind ?? "reply",
+    name: entry.name ?? null,
+    space: entry.space ?? (process.env.HERDR_SPACE || null),
+    text: String(entry.text ?? ""),
+  });
+  trimLog(file);
+}
+
+/** Keeps the newest half of a log past its cap: the rewrite lands whole, or not at all. */
+function trimLog(file) {
   const lines = readText(file).split("\n").filter(Boolean);
-  const kept = lines.length >= REPLY_LOG_MAX ? lines.slice(-(REPLY_LOG_MAX / 2)) : lines;
-  writeText(file, [...kept, JSON.stringify(entry)].join("\n") + "\n");
+  if (lines.length <= REPLY_LOG_MAX) return;
+  writeText(file, [...lines.slice(-(REPLY_LOG_MAX / 2)), ""].join("\n"));
 }
 
 /**
@@ -179,6 +197,25 @@ export class Keys {
   }
 }
 
+// OSC and DCS, 7-bit (`ESC ]`, `ESC P`) or 8-bit C1 (`\x9d`, `\x90`), up to their terminator (BEL,
+// ST, C1 ST) or the end of the string: a lazy body, so one nested inside another is taken with it.
+const UNSAFE_SEQUENCE = /(?:\x1b[\]P]|[\x9d\x90])[\s\S]*?(?:\x07|\x1b\\|\x9c|$)/g;
+
+/**
+ * A harness's words with the control sequences it could use to drive the terminal itself removed:
+ * OSC (herdr's own 7501 status, a clipboard write) and DCS, nested or split by another one too.
+ * Ordinary text and SGR styling stay.
+ */
+export function stripUnsafeEscapes(text) {
+  let out = String(text ?? "");
+  for (;;) {
+    const next = out.replace(UNSAFE_SEQUENCE, "");
+    if (next === out) break;
+    out = next;
+  }
+  return out.replace(/\x1b[\]P]|[\x9d\x90]/g, "");
+}
+
 /** OSC 7501: what herdr shows for this terminal, and what `hc wait` waits on. */
 export function statusReport(state, { app, title, msg } = {}) {
   const b64 = (s) => Buffer.from(String(s)).toString("base64");
@@ -207,9 +244,9 @@ function askCard(e, { address, who, cwd, say }) {
     const q = Q.ask({ title: e.title ?? "Questions", questions: e.questions, from: address, fromName: who, cwd });
     const { failed } = Q.drawMockups(q);
     say(`${DIM}  · Asked the user (${q.questions.length} question${q.questions.length === 1 ? "" : "s"}); the answers come as the next message.${OFF}`);
-    for (const f of failed) say(`${DIM}  · Couldn't draw question ${f.question}, option "${f.option}": ${f.error}${OFF}`);
+    for (const f of failed) say(`${DIM}  · ${stripUnsafeEscapes(`Couldn't draw question ${f.question}, option "${f.option}": ${f.error}`)}${OFF}`);
   } catch (err) {
-    say(`${DIM}  · Couldn't ask: ${err.message}${OFF}`);
+    say(`${DIM}  · ${stripUnsafeEscapes(`Couldn't ask: ${err.message}`)}${OFF}`);
   }
 }
 
@@ -359,7 +396,7 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
         save();
         return "";
       }
-      say(`${DIM}Couldn't compact (${done.error || "no session"}): a new conversation with a handoff.${OFF}`);
+      say(`${DIM}Couldn't compact (${stripUnsafeEscapes(done.error || "no session")}): a new conversation with a handoff.${OFF}`);
     }
     acp.current?.close();
     acp.current = null;
@@ -425,7 +462,7 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
     const started = Date.now();
     const on = (e) => {
       if (e.kind === "tool") {
-        say(`${DIM}  · ${e.line}${OFF}`);
+        say(`${DIM}  · ${stripUnsafeEscapes(e.line)}${OFF}`);
         status("working", e.line);
         activity(e.line);
       } else if (e.kind === "usage") {
@@ -436,7 +473,7 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
         askCard(e, { address, who, cwd, say });
       } else if (e.kind === "text" && e.text.trim() && e.text !== shown) {
         shown = e.text;
-        say(`\n${e.text.trim()}\n`);
+        say(`\n${stripUnsafeEscapes(e.text.trim())}\n`);
       }
     };
     try {
@@ -450,7 +487,7 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
     state.seen = seenNow(); // the next turn's update starts from here
     save();
     recordUsage(usage, Date.now() - started);
-    if (r.text && r.text !== shown) say(`\n${r.text.trim()}\n`);
+    if (r.text && r.text !== shown) say(`\n${stripUnsafeEscapes(r.text.trim())}\n`);
     return finish(r, text);
   }
 
@@ -461,15 +498,24 @@ export async function runAgent({ word, mode = "lead", name = null, parent = null
       say(`${DIM}Stopped.${OFF}`);
       reply = reply ? `${reply}\n\n_Stopped before finishing._` : "_Stopped._";
     } else if (r.error) {
-      say(`${RED}${r.error}${OFF}`);
+      say(`${RED}${stripUnsafeEscapes(r.error)}${OFF}`);
       reply = `${reply ? `${reply}\n\n` : ""}**Couldn't finish:**\n\n\`\`\`\n${String(r.error).slice(-1500)}\n\`\`\``;
     }
     // Every agent's answer reaches the chat, a child's too (it also reports to its parent); toChat
     // says when a turn leaves nothing there.
     const chat = toChat(input, reply, { asked: r.asked });
-    if (address && chat) {
-      writeText(join(DATA, "replies", `${fileKey(address)}.md`), replyText(chat));
-      logReply(join(DATA, "replies", `${fileKey(address)}.jsonl`), { at: now(), name: who, text: chat });
+    if (address) {
+      // The log first, the display copy after: a reader of the log never misses the turn the
+      // `.md` already shows. A turn that ended on a question card logs that, so the chat stops
+      // waiting for a reply that is not coming.
+      const log = join(DATA, "replies", `${fileKey(address)}.jsonl`);
+      if (chat) {
+        const kind = r.cancelled ? "stopped" : r.error ? "error" : "reply";
+        logReply(log, { at: now(), kind, name: who, text: chat });
+        writeText(join(DATA, "replies", `${fileKey(address)}.md`), replyText(chat));
+      } else if (r.asked) {
+        logReply(log, { at: now(), kind: "asked", name: who, text: "" });
+      }
     }
     status(r.error ? "error" : "done", r.error ? String(r.error).split("\n")[0] : undefined);
   }

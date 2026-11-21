@@ -22,7 +22,7 @@ import * as W from "./lib/workspace.mjs";
 import * as C from "./classifier/index.mjs";
 import { fileKind } from "./classifier/qa-risk.mjs";
 import { tail, testCommand, testCounts, listProjectFiles } from "./scripts/lib/common.mjs";
-import { fileKey, replyText } from "./lib/agent.mjs";
+import { fileKey, logReply, replyText } from "./lib/agent.mjs";
 
 const HELP = `bh: bot-herdr's tools. Run from the project folder. Add --json for machine-readable output.
 
@@ -714,7 +714,11 @@ async function main(argv) {
       const text = need(bodyText(flags, rest), 'bh reply "<markdown>"  or  bh reply --file reply.md');
       const who = flags.as ?? myAddress();
       if (!who) throw new Error("bh reply needs HC_TERMINAL_ID (run it in a herdr terminal) or --as <address>.");
-      const file = join(DATA, "replies", `${String(who).replace(/[\\/]/g, "_")}.md`);
+      const key = fileKey(who);
+      // The log is the chat's source of truth and is written first: a reply typed by hand is never
+      // shadowed by an older log, and the `.md` stays as the display copy it has always been.
+      logReply(join(DATA, "replies", `${key}.jsonl`), { at: now(), kind: "reply", name: flags.from ?? flags.name ?? null, text: text.trim() });
+      const file = join(DATA, "replies", `${key}.md`);
       writeText(file, replyText(text));
       return out(flags, { file }, "Saved: the chat shows it as your reply.");
     }

@@ -5,6 +5,7 @@
 // `quiet`, idle as far as anyone can tell. Pure, so `npm test` checks it without herdr.
 
 import { QUIET } from "./roster.js";
+import { fileKey } from "./feed.js";
 
 /** Whether a terminal (or pane) runs a harness that never reports its status. */
 export const isQuiet = (t, quiet = QUIET) => Boolean(t?.program && !t.program.shell && quiet.has(t.program.key));
@@ -51,4 +52,30 @@ export const QUIET_WORK_MS = 15 * 60 * 1000;
 /** A quiet agent's status for the chat: working from our message until its reply (or a while). */
 export function quietStatus(wait, now, limit = QUIET_WORK_MS) {
   return wait && now - (wait.at ?? now) < limit ? "working" : "idle";
+}
+
+/** Finds a wait entry matching `address` (or reply log `key`), including remote/quiet fileKey matches. */
+export function findWait(waits, address, key = null) {
+  if (!waits) return null;
+  if (address && waits[address]) return waits[address];
+  const target = key ?? (address ? fileKey(address) : null);
+  if (!target) return null;
+  for (const [addr, wait] of Object.entries(waits)) {
+    if (fileKey(addr) === target) return wait;
+  }
+  return null;
+}
+
+/** Deletes all wait entries matching `address` (or reply log `key`), including remote/quiet fileKey matches. */
+export function clearWait(waits, address, key = null) {
+  if (!waits) return false;
+  let removed = false;
+  const target = key ?? (address ? fileKey(address) : null);
+  for (const addr of Object.keys(waits)) {
+    if (addr === address || (target && fileKey(addr) === target)) {
+      delete waits[addr];
+      removed = true;
+    }
+  }
+  return removed;
 }

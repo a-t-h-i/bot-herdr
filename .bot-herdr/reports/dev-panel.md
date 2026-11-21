@@ -2,42 +2,58 @@
 OPEN
 
 ## Questions
-1. [DEV] When the classifier picks skills for an agent from its role and the task, how should that picked set apply?
-   - Restrict where possible — on Claude Code the picked skills and MCP servers become an allowlist (the rest denied at launch) and Codex gets the same for MCP servers; every other harness only gets the picks named in its brief.
-   - Name them in the brief — the picks are written into the agent's brief; every installed skill stays usable, so a wrong pick costs nothing but narrows nothing.
-   - Suggest in Settings — nothing applies automatically: the classifier proposes a set per agent and task, the user ticks it to apply.
-2. [DEV] Some harnesses report no token or cost numbers (omp, opencode, Gemini, Qwen). What should the dashboard show for those agents?
-   - Show a dash — tokens and cost stay empty (—) where a harness reports none; agents rank by time worked, which every harness records.
-   - Estimate from time — tokens and cost estimated from minutes worked for harnesses that report nothing, every agent gets a number, marked as an estimate.
-   - Hide them — the table lists only harnesses that report tokens and cost; omp, opencode, Gemini and Qwen agents are left out.
 
-Mockups for question 2 are drawn and ask-ready, one per option, in `.bot-herdr/tmp/plan-questions-dev.md` (parsed clean by `bh ask`'s own parser, 0 warnings) — hand it to the user as-is; question 1 has none.
+1. When an agent's model hits its usage limit mid-message, what should the harness do?
+   - Same harness, next model — the conversation continues on the next model of the same CLI; nothing is re-explained.
+   - Another harness, handoff — a new conversation on a different CLI, started from a short handoff of the task, step and its last reply.
+   - Both, in order — the harness's next model first, then another harness; if none is left, hold the message until the limit resets.
+   - Hold until reset — no model or harness switches; the message runs when the limit resets, and the chat says when.
+
+2. What must happen before the harness applies a self-improvement tweak to itself?
+   - Nothing without you — it collects lessons and proposals; you accept each batch before anything changes.
+   - Gate, then apply — `bh check` plus a review must pass; the change applies with a receipt and a one-click revert.
+   - Numbers, then revert — it applies by itself and auto-reverts any change that worsens the next window (cost, failures, gate rounds).
+   - Never changes itself — it only writes lessons for the team to read; behaviour changes stay ordinary tasks.
 
 ## Notes
-**How skills are discovered and assigned today (engine side)**
-- Discovery covers three harnesses only: `SUPPORTED = ["claude","codex","opencode"]` (`mods/bot-herdr/engine/lib/tools.mjs:16`), read from disk in `readClaude` / `readCodex` / `readOpencode` (`tools.mjs:92,104,134-140`) including Claude plugin skills (`pluginSkillDirs`, depth 5, `tools.mjs:61-71`); only `name` + first `description` line of each SKILL.md is kept (`tools.mjs:39-57`). Cached 24 h per harness+project (`tools.mjs:165-175`). pi, omp, gemini, qwen, antigravity get `supported: false` and nothing else (`tools.mjs:166`) — "every selected harness" is a real build item, not a toggle.
-- Assignment is manual only: Settings ticks live in `agents.json` (`roster.js:129-130`), reach the agent as one brief line (`team.mjs:84-88`, pushed at `team.mjs:109`), and are enforced only by `limitArgs` (`roster.js:200-213`): Claude Code a session `--settings` deny list for skills+MCP, Codex `-c mcp_servers.x.enabled=false`; every other harness and Codex skills are brief words only.
-- There is no skills feature in the classifier: `features: { lobby, triage, effort, qa, scripts }` (`classifier/index.mjs:46`). The reusable shape already exists in `pickScripts` (`index.mjs:288-307`: name+one-line purpose list, capped, top-3 by probability) — a skills pick can be the same call with skill names+descriptions, cached per task+role so it is one call per task, not per spawn (each harness-backed classify starts a CLI process, `classifier/harness.mjs:1-9,108-131`).
 
-**Token findings (measured on this checkout)**
-- Brief size: dev child 15,547 B (~4.3k tok), dev panel 15,278, dev review 18,035, orchestrator lead 20,307 (~5.6k), qa child 11,841. Composition of the dev child brief: global 3,106 + dev 3,783 + worker 2,569 + tools 1,363 + child agents 1,684 + reporting 719 + knowledge 2,120.
-- Two sections a child cannot use are always there: the whole `## Child agents` block (`team.mjs:126,161-186`, 1.7 kB) that tells a child it may spawn "only when your brief says you may", and the knowledge pointer in `briefUpdate` (`agent.mjs:293-309`) telling it to `bh knowledge …` read text already embedded in the brief.
-- 94.7 % of all tokens ever recorded here are cache reads: 13.53 M of 14.28 M tokens over 18 turns; one QA turn re-read 2.76 M cached tokens for $1.79, another 3.65 M. The lever is iterations × context per turn (and a permanent session that only grows), not the brief alone. Sessions reset only when harness or project root changes (`resumeState`, `agent.mjs:196-201`).
-- Per turn the engine re-reads task.json, plan.json and board.jsonl 2-3× each: `seenNow`, `newComments`, `briefUpdate` (`agent.mjs:272-309`) plus `state.seen = seenNow()` after the turn — one read can serve all three.
+### 1. Quota / rate limit: nothing detects it today
 
-**Latency findings**
-- Fixed per-command cost 0.12-0.28 s (measured: `bh board read` 0.12, `bh task show` 0.23, `bh scripts` 0.28, `bh brief` 0.67 incl. `git rev-parse` at `core.mjs:44` + knowledge read). Agents run many of these per step; nothing is batched.
-- Every chat message with the classifier on spawns `bh classify route` as a subprocess (`composer.js:515`, timeout 70 s) — node cold start plus, on a harness-backed classifier, a whole CLI start per question set (`classifier/harness.mjs:1-9`). Two cold starts before the user sees a routing decision.
-- `withInstalled` refreshes the disk scan on every `team()` call for an agent with picks (`team.mjs:34-37`, `refresh: true`), and `team()` runs per turn via `current()` (`agent.mjs:226`): 0.29 s vs 0.20 s for `bh tools claude` here with 13 skills — small now, grows with installed plugins on WSL/Windows paths.
-- `triage`'s `layout` argument is never supplied (`index.mjs:214`; caller `bh.mjs:304`) — either dead code or a missing piece of repository context for triage.
+- `rg -i "rate.?limit|quota|429|usage limit|exhaust|retry"` over `engine/lib/*.mjs` and `bh.mjs` finds nothing (only `limitArgs`, which is skills/MCP deny flags). Every harness failure is free text: Claude `result.is_error/subtype` (`runner.mjs:311-318`), Codex `turn.failed.error.message` (`:396-400`), pi `message.stopReason === "error"` (`:434-437`), ACP `r.error.message` (`:602-606`); `agent.mjs:454-472` turns it into a "**Couldn't finish:**" chat reply.
+- It really happens here: `data/bot-herdr/replies/t4z.jsonl` holds a live Claude failure, `You've hit your 5-hour limit · resets 7:10pm (Africa/Johannesburg)` — the same words arrive as assistant text *and* as the result error, so detection must read both.
+- Detection belongs in one pure module (e.g. `engine/lib/failures.mjs`) returning `{ kind: "quota"|"auth"|"unavailable"|"timeout"|"crash"|"unknown", resetAt, retryAfterMs }`, keyed by harness. Claude's reset is time-of-day plus a timezone in brackets, no date: resolve it to the next occurrence, and fall back to a fixed conservative window when it can't be parsed. The existing fake harnesses (`test/headless.test.mjs` `FAKES.claude|codex|pi|gemini`, plus `test/acp-reply.test.mjs`) can prove every branch without a real limit.
+- The switch point is `agent.mjs runTurn` (`:398-459`): it re-reads the agent from Settings every turn (`current()`, `:355`), owns the queued message, the session state and the reply write. One fallback attempt per message (never a loop), and a persisted per harness+model "limited until" in DATA so a restart honours it.
+- Session consequence that shapes the chain: `resumeState` (`agent.mjs:203-209`) drops the session whenever the harness changes, so a cross-harness fallback is always a new conversation and needs a handoff (task, step, open board entries, its own last reply). A same-harness model switch keeps the conversation (`--resume` and `--model` coexist for Claude Code), so that tier loses nothing.
+- `DATA/sessions/<key>.json` is `{ harness, session, root }` today and a harness change writes a fresh object (`agent.mjs:441-446`): keep per-harness sessions additive beside `session`, or fallbacks will make agents forget their conversation on every resume.
+- If the chain is per agent, it must be added to `roster.clean` (`roster.js:114-126`, which drops unknown fields) and to the `bh team save` validation (`bh.mjs:723-731`); otherwise every Settings save silently erases it.
 
-**Metrics data that exists (new tab's source)**
-- `DATA/usage/<agent>-<terminal>.jsonl`, one line per turn: `at, agent (spawn name), harness, model, effort, task, step, input, output, cacheRead, cacheWrite, costUsd, ms` (`agent.mjs:311-327`); mirrored in `.bot-herdr/tasks/<id>/usage.jsonl`.
-- Per task: `checks.jsonl` receipts (`tasks.mjs:278-289`), `board.jsonl` (reports, gates, decisions), `task.json` steps with status/agent/report. `bh usage` already aggregates turns/tokens/cache/cost/minutes by agent+model (`bh.mjs:240-259,427-430`) and is the natural base for a `bh metrics --json` the tab reads.
-- Gaps to close in the plan: usage records carry no role or agent id (grouping "Dev" vs "dev-tools" is a spawn-name string match); steps-completed needs a scan of every `task.json`; and **no token/cost data at all** from pi/omp (`runner.mjs:371-388`), and ACP harnesses (Gemini, Qwen, opencode — `Acp.turn`, `runner.mjs:~600-650`): only `claudeTurn` (`runner.mjs:294-318`) and `codexTurn` (`runner.mjs:356-360`) emit usage. Records from omp/opencode here carry `input: 0, costUsd: 0` — a dashboard that reads them as "free" is wrong, which is why question 2 exists.
+### 2. Self-improvement and guardrails: the inputs exist, the loop does not
 
-**What the plan must respect from my seat**
-- Never present unreported tokens or cost as reported numbers; label per harness (question 2 decides how).
-- Auto skill picks must not break a turn silently: restricting needs a way for the agent to ask for more (report to the Orchestrator) and the deny list is per launch (`--settings` JSON, Claude only), so it can change without dropping the session.
-- Engine acceptance: pick cached per task+role, so cost is one classifier call per task, not per spawn or per turn; brief tokens stay equal or lower with no unused section; every usage record gains `role`; `bh metrics --json` exists with per-agent time, turns, tokens, cost, steps and tasks (and a `reported: true/false` flag per row).
-- Any session-reset policy (the big token lever) is a behaviour change for agents: keep it out of this task unless the user asks, or make it explicit in the plan.
+- Outcome data is recorded and never read back: `tasks/<id>/checks.jsonl` (`recordCheck`), `task.gates` rounds (`recordGate`), gate reports, board blockers/questions, and `DATA/usage/*.jsonl`. `metrics.mjs` only totals tokens, cost, minutes, tasks and steps (`metrics.mjs:239`). Nothing measures "did the last tweak help".
+- Knowledge is capped and degrades silently: `knowledge.LIMIT = 20000` and `forBrief(..., 8000)` mean a loop that keeps appending entries stops reaching briefs (whole sections are dropped first, then the tail). Any auto-improvement must fold/archive knowledge rather than append, and the plan should say who folds it.
+- A tweak half-applies by design: `bh` is a new process per call, so an engine edit is live for the next `bh` command, while every running agent terminal keeps the `agent.mjs`/`runner.mjs` it imported at start. A self-improvement step must state which half it changes, or the team runs two versions of itself mid-task.
+- Guardrails that fit the existing shapes: an experiment record (change, before/after window, verdict) written next to the knowledge it touches; a per-task budget ceiling from `usage.jsonl` that pauses a task instead of killing it; a bounded fallback/spawn count so a quota storm cannot fan out; and keeping every automatic change behind `updateTask`'s lock plus a `bh check` receipt.
+- The safe baseline already exists: agents propose (`## Knowledge Proposals` / `## Script Proposals`, `team.mjs` reportSection), the Orchestrator records, `bh gate` and `bh check` receipts prove work, `writeJson`/`writeText` are atomic (`core.mjs:80-94`). Build the loop on those, not a new store.
+
+### 3. Chat glitches: five concrete engine-side causes
+
+1. **A `bh reply` is invisible** for any agent that has ever run headless: `chat.js:367` skips `.md` whenever `replies/<key>.jsonl` exists, and `bh reply` writes only `.md` (`bh.mjs:717-721`). An agent switched from headless to its CLI keeps its old log and every later manual reply is shadowed.
+2. **A repeated reply is swallowed**: the `.md` path dedupes by exact text (`isNew`, `feed.js:165-167`), so "Done." twice shows once, while the log path (which carries `at`) shows both.
+3. **A false "finished without writing a reply" under every question card**: a turn that asked deliberately leaves no reply (`toChat`, `agent.mjs:36-44`), but the chat's `waits` entry is cleared only by a reply (`chat.js:447`) and never by `readQuestions` (`:484-487`), so `outcome` (`feed.js:174-180`) posts the 8 s silent note beside the card.
+4. **A first-turn double post**: `finish` writes `.md` before the log line (`agent.mjs:469-472`) and the chat reads logs first, then `.md` only for keys with no log; a poll landing between the two writes adds the same turn twice. Narrow window, but the only duplicate path I found.
+5. **Unhardened output and an unguarded handler**: harness text is printed to the terminal raw (`agent.mjs:433-438`), so a model's answer can carry OSC/DCS sequences and spoof herdr's own `\x1b]7501` status (fake "working"/"done", clipboard writes). And `on()` runs inside the child's stdout `data` handler (`runner.mjs:677-684`): any throw there (a failed write, `say` to a closed terminal) kills the agent mid-turn with no reply — exactly the intermittent "no reply" shape. Related dead output: `DATA/activity/*.json` is written per tool call (`agent.mjs:252`) and nothing reads it.
+
+Recommended shape: make the reply log the single source of truth — every path that talks to the chat (turn text, `bh reply`, an asked card, a stopped turn) appends one event line with `at`, a `kind` and an id; the chat consumes only that, and `.md` stays the last turn's file for display, not for dedupe. That also gives the chat the `kind: "asked"` hook it needs to clear a wait. `test/agents-reply.test.mjs` asserts the current source shape (`writeText` then `logReply`) and must be rewritten with it.
+
+### 4. Tasks page: what the engine contracts need
+
+- `bh task list --json` (`listTasks` → `withUsage`, `tasks.mjs:75-97`) ships every task with its steps and per-step usage — no done/total, no step events, no reports, checks, merges, gates or board. `bh task show --json` (`taskDetail`, `tasks.mjs:352-367`) has all of that, for one task. The page polls `task list --all` every 4 s (`work.js:76, 422`) and draws the open task from that same list record, so it cannot show a report, a receipt, a merge or the board without a second call.
+- A richer page therefore needs: (a) a cheap list contract for polling (id, title, status, track, done/total, blocked, open-comment count, needs-you flag, updated, who is running) with `--since <updated>` or `--active`, keeping steps/usage out of it; (b) `task show <id> --json` as the detail contract, fetched only for the open task; (c) an explicit allowed-actions list per task and step so the UI never invents a transition; (d) `updated` as a concurrency token on writes (`bh task step|status|comment … --if-updated <iso>`, refused with a clear error) — `updateTask` locks, but a stale screen can still overwrite a newer change; (e) a task-scoped "running / needs you" signal, since the engine has nothing today except `usage.jsonl` turn timestamps (task-level, not step-level).
+- Cost is real: `listTasks` stats and reads a usage file per task; on this repo `bh task list --all --json` is already 130 KB / 0.27 s and grows with history, at a 4 s poll.
+- Data contracts I should not break: comment ids (`nextCommentId`), `boardLine`/`taskLine` text output, `taskDetail.steps[].events` order, and `task.json`'s step shape (Design's tracker and `bh task show` both read it).
+
+### 5. Verification available for the plan's "done when"
+
+- `bh check` runs lint, typecheck and the suite; `test/headless.test.mjs` already drives `bh agent` end to end against fake harnesses with a `BH_APP_HOME` sandbox and asserts reply files — the natural home for quota-classifier and fallback tests (inject a failure, assert the second harness is called once and the chat says why).
+- `test/empty-reply.test.mjs`, `test/agents-reply.test.mjs`, `test/feed-items.test.mjs` and `test/store.test.mjs` cover the reply/watermark and watchdog paths today; a single-log change should move those assertions rather than add parallel ones.
+- No draft exists yet (`bh plan show p-20261121-0hfk` → "no draft yet"), so nothing in the plan currently contradicts these findings.

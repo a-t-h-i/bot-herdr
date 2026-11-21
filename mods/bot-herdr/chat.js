@@ -15,9 +15,13 @@ import { actionButton } from "./button.js";
 import { stateView } from "./switch.js";
 import { colors } from "./theme.js";
 import { Composer, outboxDir, liveAgents } from "./composer.js";
-import { isQuiet, quietStatus } from "./live.js";
+import { isQuiet, quietStatus, findWait, clearWait } from "./live.js";
 import { FOCUS, OUTGOING, OPEN_TASK, activePage, openTerminal, showPage } from "./pages.js";
-import { replyFile, replyBody, push, shown, scrollBy, clampScroll, isNew, isHandled, outcome, clock, segments, fold, linkFiles, linkTasks, taskTarget, addComment, editComment, resolveComment, deleteComment, fileKey, logNew, groupChildren, entryName } from "./feed.js";
+import {
+  replyFile, replyBody, push, shown, scrollBy, clampScroll, scrollOnAdd, resolveSpace, workerSignature,
+  shouldSuppressSilent, isDuplicateMd, isNew, isHandled, outcome, clock, segments, fold, linkFiles, linkTasks,
+  taskTarget, addComment, editComment, resolveComment, deleteComment, fileKey, logNew, groupChildren, entryName,
+} from "./feed.js";
 import { openFile, openLink } from "./viewer.js";
 import { projectDir } from "./bh.js";
 import { roleWord, roleTone, mentionTone, alpha } from "./indicators.js";
@@ -77,6 +81,15 @@ function openFeedLink(url) {
 }
 
 const lastId = (entries) => (entries?.length ? entries[entries.length - 1].id : null);
+const heightKey = (e) => (e.kind === "kids" ? `${e.id}:${e.children.length}` : e.id);
+
+function seenFor(seen, seenAt, address, key) {
+  if (address && address in seen) return { text: seen[address], at: seenAt?.[address] };
+  for (const addr of Object.keys(seen ?? {})) {
+    if (fileKey(addr) === key) return { text: seen[addr], at: seenAt?.[addr] };
+  }
+  return { text: null, at: NaN };
+}
 
 /** Whether two address→entry maps hold the same addresses, with the same lead. */
 function sameAddresses(before, after) {
@@ -127,20 +140,21 @@ export class Chat {
     this.size = { width: 960, height: 640 };
     this.entries = load("feed", []).filter((e) => !(e.kind === "agent" && isHandled(e.text)));
     this.seen = load("seen", {}); // address → the last reply text shown
-    this.logSeen = load("logSeen", {}); // a reply log's key → the last turn time shown from it
+    this.seenAt = {}; // address → ms timestamp when `.md` reply was ingested
+    this.logSeen = load("logSeen", {}); // a reply log's key → { at, ids } cursor (or legacy ISO string)
     this.logFloor = load("logFloor", null) ?? new Date().toISOString(); // turns before it are history
     save("logFloor", this.logFloor);
     this.kidsOpen = new Set(); // child groups opened in place (item ids)
-    this.kidsHeights = new Map(); // child group item id → its drawn height, so opening animates to it
-    this.waits = {}; // address → { name, worked, stopped, blocked }: agents we wrote to
+    this.kidsHeights = new Map(); // `${group.id}:${group.children.length}` → its drawn height
+    this.waits = {}; // address → { name, space, worked, stopped, blocked, at }: agents we wrote to
     this.back = 0; // whole entries scrolled up from the newest
     this.px = 0; // pixels scrolled into the entry `back` up from the newest
-    this.heights = new Map(); // entry id → its drawn height, gap included
+    this.heights = new Map(); // heightKey(item) → its drawn height, gap included
     this.feedCache = null; // the last items(space) built: reused while the feed and who runs where hold
     this.handle = cx.focus_handle(); // holds the keyboard while the composer is folded
     this.focusAt = shared(FOCUS) ?? 0;
     this.outAt = shared(OUTGOING)?.at ?? 0; // the last message another page asked us to send
-    this.page = null;
+    this.lastPage = null;
     this.reading = false;
     this.open = new OpenQuestions();
     this.unfolded = new Set(); // your long messages opened with Show more
@@ -148,16 +162,16 @@ export class Chat {
     this.turnShown = true; // the line's first frame is drawn low and clear, then slides up
     this.drawnFx = null; // the motion the working line showed last, to redraw when it changes
     this.verbShown = true; // false for the one frame before a new verb fades in
+    this.workerSig = ""; // signature of active workers, to redraw on any idle/working transition
     this.hovered = null; // entry id under the pointer: its actions show
-    this.arrived = new Set(); // entry ids already drawn once: new ones arrive with MOTION.arrive
-    this.primed = false; // the first draw is not an arrival
+    this.justAdded = new Set(); // newly added item ids waiting to animate their arrival
     this.arriving = new Set(); // ids drawn at rest for their one arrival frame
     this.commenting = null; // the reply with its comment box open: { entry, edit: cid | null }
     this.commentBoxes = new Map(); // agent name → its comment box (a placeholder is fixed when made)
     this.composer = new Composer({
       sent: (message, cx) => this.sent(message, cx),
       relabel: (id, from, name, cx) => this.relabel(id, from, name, cx),
-      born: (address, name) => this.expect(address, name),
+      born: (address, name, space) => this.expect(address, name, space),
       answered: (q, answers, cx, opts) => this.submit(q, answers, cx, opts),
     });
     this.composer.init(props, cx);
@@ -181,9 +195,21 @@ export class Chat {
   }
 
   add(entry, cx) {
-    this.entries = push(this.entries, { at: Date.now(), space: this.space(), ...entry });
-    this.back = 0;
-    this.px = 0;
+    const active = this.space();
+    const full = { at: Date.now(), space: active, ...entry };
+    const sameSpace = (full.space ?? null) === (active ?? null);
+    const beforeLast = sameSpace ? this.items(active).at(-1)?.id ?? null : null;
+    this.entries = push(this.entries, full);
+    const added = this.entries[this.entries.length - 1];
+    const afterLast = sameSpace ? this.items(active).at(-1)?.id ?? null : null;
+    const delta = sameSpace && afterLast !== beforeLast ? 1 : 0;
+    if (sameSpace) {
+      if (added?.id) this.justAdded.add(added.id);
+      if (delta && afterLast) this.justAdded.add(afterLast);
+    }
+    const next = scrollOnAdd({ back: this.back, px: this.px, kind: full.kind, sameSpace, delta });
+    this.back = next.back;
+    this.px = next.px;
     save("feed", this.entries);
     cx.notify();
   }
@@ -238,7 +264,7 @@ export class Chat {
     const address = e.from?.address;
     const name = e.from?.name ?? "Agent";
     if (!address || !liveAgents().some((a) => a.address === address)) return this.composer.sendText(`(${name} is no longer running) ${text}`, cx);
-    this.expect(address, name);
+    this.expect(address, name, e.space ?? null);
     cx.spawn(async (cx) => {
       try {
         await this.composer.runStep({ do: "send", address, text, files: [] }, liveAgents());
@@ -327,8 +353,9 @@ export class Chat {
   }
 
   /** We wrote to this agent: watch for its reply, or for it stopping without one. */
-  expect(address, name) {
-    this.waits[address] = { name: name ?? this.composer.nameOf(address), worked: false, stopped: null, blocked: false, at: Date.now() };
+  expect(address, name, space = null) {
+    const agentSpace = space ?? liveAgents().find((a) => a.address === address)?.space ?? this.space();
+    this.waits[address] = { name: name ?? this.composer.nameOf(address), space: agentSpace, worked: false, stopped: null, blocked: false, at: Date.now() };
   }
 
   // ── In ─────────────────────────────────────────────────────────────────────────────────────
@@ -341,7 +368,7 @@ export class Chat {
     const now = Date.now();
     const listed = liveAgents();
     const byAddress = new Map(listed.map((a) => [a.address, a]));
-    const statusOf = (a, quiet) => (quiet ? quietStatus(this.waits[a.address], now) : a.status ?? null);
+    const statusOf = (a, quiet) => (quiet ? quietStatus(findWait(this.waits, a.address), now) : a.status ?? null);
     const out = listed.map((a) => ({ address: a.address, space: a.space, status: statusOf(a, a.quiet), tile: a.program?.tile ?? null, quiet: Boolean(a.quiet) }));
     for (const t of terminals()) {
       if (t.state !== "live" || byAddress.has(t.address) || !t.parent) continue;
@@ -358,6 +385,7 @@ export class Chat {
     cx.spawn(async (cx) => {
       try {
         const now = Date.now();
+        this.composer.adopt();
         const live = this.live();
         // Every turn in every agent's reply log first, live or not: an agent killed right after
         // its turn still said what it said.
@@ -373,32 +401,45 @@ export class Chat {
           }
           if (!isNew(text, this.seen[a.address])) continue;
           this.seen[a.address] = text;
+          this.seenAt[a.address] = now;
           save("seen", this.seen);
-          delete this.waits[a.address];
+          clearWait(this.waits, a.address);
           if (isHandled(text)) continue;
           this.add({ kind: "agent", space: a.space, text: replyBody(text), from: { address: a.address, name: this.composer.nameOf(a.address), tile: a.tile } }, cx);
         }
+        // Read open questions before checking silent waits so an agent waiting on a question card
+        // never triggers a bogus "finished without writing a reply" note.
+        await this.readQuestions(cx);
         for (const [address, wait] of Object.entries(this.waits)) {
-          const status = live.find((a) => a.address === address)?.status ?? null;
+          const agent = live.find((a) => a.address === address);
+          const status = agent?.status ?? null;
           if (status === "working") {
             wait.worked = true;
             wait.stopped = null;
           } else if (wait.worked && wait.stopped === null) wait.stopped = now;
           const what = outcome(wait, status, now);
-          if (what === "gone") delete this.waits[address];
+          const space = resolveSpace({ agentSpace: agent?.space, waitSpace: wait.space, activeSpace: this.space() });
+          if (what === "gone") clearWait(this.waits, address);
           if (what === "blocked") {
             wait.blocked = true;
-            this.add({ kind: "note", text: `${wait.name} is waiting for you in its terminal.`, address }, cx);
+            this.add({ kind: "note", space, text: `${wait.name} is waiting for you in its terminal.`, address }, cx);
           }
           if (what === "silent") {
-            delete this.waits[address];
+            clearWait(this.waits, address);
+            if (shouldSuppressSilent(address, this.open.list)) continue;
             // One that reports no status may still be at it: we only know no reply came.
-            const quiet = live.find((a) => a.address === address)?.quiet;
-            this.add({ kind: "note", text: quiet ? `No reply from ${wait.name} yet. Its terminal shows where it is.` : `${wait.name} finished without writing a reply.`, address }, cx);
+            const quiet = agent?.quiet;
+            this.add({ kind: "note", space, text: quiet ? `No reply from ${wait.name} yet. Its terminal shows where it is.` : `${wait.name} finished without writing a reply.`, address }, cx);
           }
           if (status !== "blocked") wait.blocked = false;
         }
-        await this.readQuestions(cx);
+        const working = this.workers();
+        const sig = workerSignature(working);
+        if (sig !== this.workerSig) {
+          this.workerSig = sig;
+          if (!working.length) this.drawnFx = null;
+          cx.notify();
+        }
       } finally {
         this.reading = false;
       }
@@ -421,9 +462,11 @@ export class Chat {
     }
     for (const name of names) {
       const key = name.slice(0, -".jsonl".length);
-      const { entries, at } = logNew(await this.logText(key), this.logSeen[key], this.logFloor);
-      if (at !== this.logSeen[key]) {
-        this.logSeen[key] = at;
+      const prev = this.logSeen[key] ?? null;
+      const { entries, at, ids = [] } = logNew(await this.logText(key), prev, this.logFloor);
+      const next = at ? { at, ids } : prev;
+      if (JSON.stringify(next) !== JSON.stringify(prev)) {
+        this.logSeen[key] = next;
         save("logSeen", this.logSeen);
       }
       for (const line of entries) this.addLogged(key, line, live, cx);
@@ -440,23 +483,38 @@ export class Chat {
     }
   }
 
-  /** One turn of a reply log, added as a reply is: in the agent's space while it is still live. */
+  /** One turn of a reply log, added as a reply is: in its recorded or live space. */
   addLogged(key, line, live, cx) {
     const agent = live.find((a) => fileKey(a.address) === key);
     const address = agent?.address ?? key;
-    delete this.waits[address];
+    const wait = findWait(this.waits, address, key);
+    clearWait(this.waits, address, key);
+    if (line.kind === "asked") return;
     const text = replyBody(String(line.text ?? ""));
     if (!text || isHandled(text)) return;
+    const prior = seenFor(this.seen, this.seenAt, address, key);
+    if (isDuplicateMd(text, prior.text, prior.at, line.at)) return;
     const name = line.name ?? this.composer.nameOf(address);
-    this.add({ kind: "agent", space: agent?.space ?? this.space(), text, from: { address, name, tile: agent?.tile ?? null } }, cx);
+    const space = resolveSpace({ lineSpace: line.space, agentSpace: agent?.space, waitSpace: wait?.space, activeSpace: this.space() });
+    this.add({ kind: "agent", space, text, from: { address, name, tile: agent?.tile ?? null } }, cx);
   }
 
   /** The working line moves to the next agent (with more than one at work), or shows a new word. */
   nextTurn(cx) {
     const list = this.workers();
+    if (!list.length) {
+      if (this.drawnFx !== null || this.workerSig !== "") {
+        this.drawnFx = null;
+        this.workerSig = "";
+        cx.notify();
+      }
+      return;
+    }
     if (list.length > 1) {
       const next = onTurn(list, this.turn, 1);
       this.turn = next.agent.address;
+      this.drawnFx = indicatorFor(roleOf(next.agent.role)).fx;
+      this.verbShown = true;
       this.turnShown = false;
       cx.notify();
       cx.timer.after(16, (cx) => {
@@ -465,7 +523,16 @@ export class Chat {
       });
       return;
     }
-    if (list.length === 1 && indicatorFor(roleOf(list[0].role)).fx !== this.drawnFx) cx.notify();
+    const fx = indicatorFor(roleOf(list[0].role)).fx;
+    if (fx !== this.drawnFx) {
+      this.drawnFx = fx;
+      this.verbShown = false;
+      cx.notify();
+      cx.timer.after(16, (cx) => {
+        this.verbShown = true;
+        cx.notify();
+      });
+    }
   }
 
   /** Who works in this space now, and in what role. */
@@ -476,7 +543,7 @@ export class Chat {
     return this.live().filter((a) => a.space === space && a.status === "working").map((a) => {
       const name = this.composer.nameOf(a.address);
       const role = byAddress.get(a.address)?.role ?? findAgent(team, name)?.role ?? (/(^|[-_ ])(dev|design|qa|scout|research|planner|panel)/i.exec(name)?.[2] ?? "agent");
-      return { address: a.address, name, tile: a.tile, role };
+      return { address: a.address, name, tile: a.tile, role, status: a.status };
     });
   }
 
@@ -506,9 +573,9 @@ export class Chat {
     // Take the keyboard when asked (ctrl+shift+m, the Chat pill) or when this page comes up.
     const stamp = shared(FOCUS) ?? 0;
     const page = activePage();
-    if (stamp !== this.focusAt || (page === "chat" && this.page !== "chat" && this.page !== null)) this.composer.focus();
+    if (stamp !== this.focusAt || (page === "chat" && this.lastPage !== "chat" && this.lastPage !== null)) this.composer.focus();
     this.focusAt = stamp;
-    this.page = page;
+    this.lastPage = page;
     const out = shared(OUTGOING);
     if (out?.at > this.outAt) {
       this.outAt = out.at;
@@ -532,17 +599,23 @@ export class Chat {
     const view = shown(this.items(space), space, this.back);
     this.back = view.back;
     if (view.total === 0) this.px = 0;
-    // A new message lands rather than appears: drawn at rest for one frame, then faded in.
-    const fresh = view.list.filter((e) => !this.arrived.has(e.id));
-    for (const e of fresh) this.arrived.add(e.id);
-    if (!this.primed) this.primed = true;
-    this.arriving = this.primed && fresh.length ? new Set(fresh.map((e) => e.id)) : new Set();
-    if (this.arriving.size) cx.timer.after(16, (cx) => {
-      this.arriving = new Set();
-      cx.notify();
-    });
+    // Only entries newly added via add() animate their arrival; scrolling into history never flashes,
+    // and unrelated re-renders never clobber an in-flight arrival set.
+    const fresh = view.list.filter((e) => this.justAdded.has(e.id));
+    if (fresh.length) {
+      const ids = fresh.map((e) => e.id);
+      for (const id of ids) {
+        this.justAdded.delete(id);
+        this.arriving.add(id);
+      }
+      cx.timer.after(16, (cx) => {
+        for (const id of ids) this.arriving.delete(id);
+        cx.notify();
+      });
+    }
     const up = this.back > 0 || this.px > 0;
     const working = this.workers();
+    if (!working.length) this.drawnFx = null;
     this.composer.questions = this.open.list;
     // A pane with nothing to draw (a suggestion list that matches nothing) dims nothing either.
     const pane = this.composer.paneShown() ? this.composer.paneNow() : null;
@@ -581,10 +654,11 @@ export class Chat {
           .overflow_hidden()
           .justify_end()
           .items_center()
-          .on_mouse_down("left", () => {
+          .on_mouse_down("left", (_e, cx) => {
             if (this.commenting) return; // a comment box open takes the click
             this.composer.expanded = false; // the slim bar; a click on it or typing grows it back
             this.handle.focus(); // the text box is not drawn while folded: typing comes here
+            cx.notify();
           })
           .on_scroll_wheel((e, cx) => this.scroll(e, view.total, cx))
           .when(view.total === 0, (el) => el.child(this.empty(c, width)))
@@ -693,7 +767,7 @@ export class Chat {
   /** This space's entries' drawn heights (gap included), newest first; undefined until measured. */
   feedHeights(space) {
     const mine = this.items(space);
-    return mine.map((_, i) => this.heights.get(mine[mine.length - 1 - i].id));
+    return mine.map((_, i) => this.heights.get(heightKey(mine[mine.length - 1 - i])));
   }
 
   empty(c, width) {
@@ -714,6 +788,7 @@ export class Chat {
   entry(c, e, width) {
     const el = e.kind === "me" ? this.mine(c, e, width) : e.kind === "kids" ? this.kids(c, e) : e.kind === "agent" ? this.reply(c, e, width) : this.note(c, e);
     const arriving = this.arriving.has(e.id);
+    const hKey = heightKey(e);
     // Measured for the pixel scroll: its height plus the column's gap.
     return el
       .relative()
@@ -724,8 +799,8 @@ export class Chat {
       .on_size_change((size, cx) => {
         const zoom = Number(settings().zoom) || 1;
         const h = size.height / zoom + SPACE[4];
-        if (this.heights.get(e.id) === h) return;
-        this.heights.set(e.id, h);
+        if (this.heights.get(hKey) === h) return;
+        this.heights.set(hKey, h);
         // Scrolled up, a new height can move the top limit (render clamps to it).
         if (this.back > 0 || this.px > 0) cx?.notify();
       });
@@ -813,9 +888,13 @@ export class Chat {
       .flex_none()
       .gap(SPACE[2])
       .on_hover((hovered, cx) => {
-        const next = hovered ? e.id : null;
-        if (this.hovered !== next) {
-          this.hovered = next;
+        if (hovered) {
+          if (this.hovered !== e.id) {
+            this.hovered = e.id;
+            cx.notify();
+          }
+        } else if (this.hovered === e.id) {
+          this.hovered = null;
           cx.notify();
         }
       })
@@ -966,17 +1045,18 @@ export class Chat {
 
   /** The group's reports, in a box whose height grows to what they measured and folds to nothing. */
   kidsBody(c, e, open) {
+    const hKey = heightKey(e);
     return div()
       .overflow_hidden()
       .opacity(open ? 1 : 0)
-      .h(open ? this.kidsHeights.get(e.id) || e.children.length * 120 : 0)
+      .h(open ? this.kidsHeights.get(hKey) || e.children.length * 120 : 0)
       .transition("height", MOTION.row)
       .transition("opacity", MOTION.row)
       .child(v_flex()
         .id(`bh-kids-body-${e.id}`)
         .gap(SPACE[3])
         .pl(SPACE[4])
-        .on_size_change((size, cx) => this.measureKids(e.id, size, cx))
+        .on_size_change((size, cx) => this.measureKids(hKey, size, cx))
         .children(e.children.map((k) => this.kidReport(c, k))));
   }
 
@@ -1038,16 +1118,7 @@ export class Chat {
     const a = now.agent;
     // Coloured by the agent's type, so a glance says who is at work.
     const tone = roleTone(c, a.role);
-    const fx = indicatorFor(roleOf(a.role)).fx;
-    if (fx !== this.drawnFx) {
-      // A new verb: drawn clear for one frame, then faded in.
-      this.verbShown = false;
-      this.cx.timer.after(16, (cx) => {
-        this.verbShown = true;
-        cx.notify();
-      });
-    }
-    this.drawnFx = fx;
+    this.drawnFx = indicatorFor(roleOf(a.role)).fx;
     const line = h_flex()
       .id(`bh-working-${a.address}`)
       .absolute()

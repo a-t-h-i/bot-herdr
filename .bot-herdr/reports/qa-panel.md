@@ -2,56 +2,44 @@
 OPEN
 
 ## Questions
-1. [QA] When an external search binary (such as `rg`) is missing — or the project is not a git repository — what should code reading and retrieval do?
-   - Auto-detect with Node fallback — use `rg` when available, fall back cleanly to `git` and pure Node.js so Windows and Unix work with zero setup and one consistent output format.
-   - Bundle ripgrep per OS — ship or fetch platform `rg` binaries with the mod and fail fast if unavailable.
-   - Require tool on PATH — expect `rg` (or `git`) to be installed and return an actionable error when missing.
-2. [QA] If the classifier triages relevant scripts and files for a task or step, how should those picks apply — and what happens when it is off or unsure?
-   - Advisory hints with rules — add picked scripts and files to the brief as starting pointers (never restrict reading), falling back to deterministic keyword/path rules when the classifier is off or fails.
-   - Advisory when classifier runs — add picked scripts and files only when the classifier is enabled and confident; omit them otherwise.
-   - Auto-pick scripts only — wire script picking into tasks/steps and leave file selection to Scout and the search scripts.
+1. When the harness self-improves (editing prompts, shared scripts, engine code, or guardrails), what gate must pass before a tweak takes effect?
+   - Approve every self-edit — stage tweaks as proposals and wait for you before activating them
+   - Auto-apply with test rollback — activate tweaks automatically once `bh check` and guardrail tests pass, reverting on failure
+   - Tiered by risk — auto-apply knowledge and helper scripts after checks; require approval for engine, role prompts, and check/guardrail rules
+2. When an agent hits a usage limit mid-turn after editing files, how should fallback recover?
+   - Revert turn and retry — roll back the incomplete turn's edits to a pre-turn snapshot, then retry on the fallback
+   - Continue from dirty tree — keep the partial edits and pass the fallback agent the current diff plus a handoff summary
+   - Pause for user — stop the step, leave partial edits intact in the worktree, and ask you whether to continue on a fallback
 
 ## Notes
-**Current classifier state (files & scripts)**
-- File triage does not exist today: `classifier/index.mjs:46` defines `features: { lobby, triage, effort, qa, scripts, skills }`. `triageState` (`index.mjs:228`) accepts a `layout` list, but `bh task new` (`bh.mjs:362`) never passes it (`C.triageAndSkills(c, request, { roles })`).
-- Script triage exists (`pickScripts`, `index.mjs:374-393`, fallback `S.keywordPick` in `lib/scripts.mjs:69-77`), but is only called by the manual CLI `bh scripts pick "<step>"` (`bh.mjs:642`) — never automatically during `bh task new`, `bh plan new`, or `bh spawn`.
-- `bh knowledge ask` (`bh.mjs:583`) dumps the first 500 `git ls-files` lines straight into Scout's prompt without filtering noise; in this repo `.bot-herdr/` is 602 of 902 tracked files (67%).
 
-**Existing Windows & cross-platform bugs in `mods/bot-herdr/engine/scripts/`**
-- Unix-only binaries and `.cmd` shim failures:
-  - `check_changed.mjs:29` invokes `sh("cat", ["pyproject.toml"])` (missing on native Windows).
-  - `failure_digest.mjs:13` hardcodes `sh("bash", ["-lc", flags.run])` for `--run`.
-  - `check_changed.mjs:28-29`, `run_changed_tests.mjs:34`, `scripts/lib/common.mjs:153` hardcode `python3` (Windows commonly provides `python` or `py`).
-  - `check_changed.mjs:20,23-24` and `run_changed_tests.mjs:39-42` run `sh("npx", ...)` via `execFileSync` (`lib/core.mjs:314`, no `shell: true`), which fails with `ENOENT` on Windows because `npx` is `npx.cmd`.
-  - `lib/scripts.mjs:42-43` mutates the module-level `RUNNERS[".py"]` array in place on `win32`.
-- Path separator & Windows drive-letter breakage:
-  - `check_contract_breakage.mjs:78` compares `normalize(join(dirname(hit), spec))` (backslashes on Windows) against git's forward-slash `target`, silently missing relative importers on Windows.
-  - `affected_packages.mjs:40,45-46,80` builds package dirs with `join()` (backslashes on Windows) and checks `file.startsWith(p.dir + "/")` against git's forward-slash paths.
-  - `find_symbol.mjs:29,66` and `scripts/lib/common.mjs:115` parse grep lines with `hit.split(":")` / `/^(.+?):\d+:/` — absolute Windows paths (`C:\foo:12:bar`) break `:` splitting.
-  - `failure_digest.mjs:29-31,51,58-59,66-68` strips `file://` (leaving `/C:/...` on Windows) and uses `[^():\s]+` / Unix-only path regexes that fail on drive-letter colons and backslashes.
-  - `repo_map.mjs:10`, `common.mjs:100,134`, `find_tests_for.mjs` assume `/` when a caller passes Windows `\` paths.
-- CRLF, encoding & git-only assumptions:
-  - `outline_file.mjs:23,38,60`, `common.mjs:258`, `code_duplication_check.mjs:25`, `find_generated_files.mjs:19,39` split on `\n` without stripping `\r`, breaking `$`-anchored regexes on CRLF files.
-  - `git ls-files` / `git diff` without `-c core.quotepath=false` octal-escape non-ASCII filenames, causing `existsSync` / `readFileSync` misses.
-  - `find_symbol.mjs:13,55` searches only git-tracked files (misses untracked files, fails outside git repos) and does not exclude `.bot-herdr/` (running `find_symbol pickScripts` here returned 17 `.bot-herdr/` noise hits vs 2 code/test hits).
-  - Avoid Windows `findstr` as a fallback: it has a 254-char search limit, 8 KB line limit, non-standard regexes, no `.gitignore` awareness, and codepage/UTF-8 issues. Pure Node.js fallback is far more reliable.
+### 1. Safety & regression risks in self-improvement and higher autonomy
+- **Built-in check shadowing (`mods/bot-herdr/engine/bh.mjs:200-209`, `mods/bot-herdr/engine/lib/scripts.mjs:26-31`)**: `bh check` invokes `check_changed` and `run_changed_tests` via `S.run`, which resolves `.bot-herdr/scripts/` ahead of built-in engine scripts. A self-edit writing `.bot-herdr/scripts/check_changed.mjs` or `run_changed_tests.mjs` can silently neuter `bh check`. Built-in gate scripts must not be shadowable by agent-written project scripts (or must require explicit user approval).
+- **`personOnly` bypass (`bh.mjs:93-95`, `runner.mjs:263-268`, `runner.mjs:477-484`)**: `personOnly` only checks `BH_AGENT` inside `bh` commands. Because `Edit`/`Write` are allowed even under `standard` access, an autonomous agent can edit `data/bot-herdr/config.json`, `agents.json`, role files, or `.bot-herdr/scripts/` directly. Self-improvement needs explicit protected paths / integrity checks, plus an immutable verification baseline (existing `npm test` + guardrail invariants) and atomic rollback on failure.
+- **No hard runtime circuit breakers (`runner.mjs:231`, `agent.mjs:517-537`, `tasks.mjs:397`, `bh.mjs:781-782`)**: Only a 30-minute per-turn idle watchdog exists (`TURN_IDLE_MS`). Queue draining (`agent.mjs:521`), QA review rounds (3-round cap in `roles/orchestrator.md:206` is prose-only), spawn concurrency ("four at once" in `team.mjs:191` is prose-only), and child recursion depth have no engine-enforced limits. Autonomy needs hard caps: max turns/retries per step, max QA/self-improve rounds, global concurrency/depth cap, and cost/token ceiling with clean pause-and-report on trip.
+- **Destructive merge cleanup (`bh.mjs:850-859`, `workspace.mjs:329-352`)**: `bh merge` squash-merges uncommitted into the task tree and immediately deletes the child worktree and branch. Autonomous merges should verify `bh check` against the merged tree (or retain a rollback ref/commit) before discarding the child branch.
 
-**Security & argument injection risks**
-- Live argument injection bug: `find_symbol.mjs:8,13,55` allows leading `-` in `name` (`/^[\w$.-]+$/`) and passes `escaped` to `git grep -n -I -w -E <escaped>` without `-e` (same missing `-e` in `common.mjs:114` and `check_contract_breakage.mjs:67`). Any retrieval wrapper calling `rg` or `git grep` must pass `-e <pattern>` and `-- <path>` (or `--regexp`), and never pass untrusted queries through `shell: true` / `cmd.exe` (note `runner.mjs:35-37` `winQuote` leaves `%VAR%` unescaped for `cmd.exe`).
-- Standard-access compatibility: `runner.mjs:252-255` (`standardCommands()`) only allows `node "<bh>"`, `hc`, and `git status/diff/log/show` in `standard` access. Exposing retrieval through `bh` / `bh scripts` works for all harnesses without widening shell permissions.
+### 2. Failure modes in usage-exhaustion fallbacks
+- **Lost brief updates on failed turns (`agent.mjs:449-450`)**: `state.seen = seenNow()` runs unconditionally even when `r.error` is set. On a usage-exhausted turn, unread `## Brief update` items (board posts, user comments, step/knowledge changes) are marked seen and silently dropped on fallback/retry. `state.seen` must only advance on a completed turn (or be rolled back on retry).
+- **Session & diff discontinuity (`agent.mjs:408-413`, `runner.mjs:399-420`)**: Switching harnesses clears `state.session` and closes ACP with no handoff of prior conversation, failed-turn tool trace, or dirty worktree state. Also `agent.mjs:449` saves `state.session` if partial `r.text` was emitted alongside `r.error`.
+- **Silent permission / allowlist escalation (`runner.mjs:10-20`, `team.mjs:88-93`)**: `pi` and `omp` have no permission system of their own, and `withAllowlist` only enforces skill/MCP denies on `SUPPORTED` harnesses. A fallback chain must never silently downgrade from a restricted harness (`standard` access / allowlisted skills) to an unrestricted one without explicit user consent or flagging.
+- **False-positive / false-negative rate-limit detection (`runner.mjs:315, 394, 418, 465, 676`)**: Each harness reports errors differently (free-text JSON results, JSON-RPC errors, or last 6 stderr lines). Naive substring matching (`429`, `limit`, `quota`) risks false positives when agent output/stderr quotes logs or tests, or confusing transient burst backoff / auth (`401`/`403`) / invalid-model errors with quota exhaustion. Detection must inspect structured harness error fields (not assistant text), distinguish transient retryable 429s from hard exhaustion, and enforce a visited-set + cooldown so fallback chains cannot ping-pong.
 
-**Classifier failure modes & limits**
-- Budget cliff: `classifier/limits.mjs:1-5` caps `choiceOptions: 250` and `requestChars: 110_000`. Raw file lists on medium/large repos exceed both — file triage needs a bounded, noise-filtered candidate set (e.g. directories/modules or pre-ranked files, excluding `.bot-herdr/`, lockfiles, build dirs).
-- Harness/Clef multi-pick collapse: `pickScripts` (`index.mjs:386-391`) and `skillsFrom` (`index.mjs:305-311`) pick secondary items using `probabilities >= 0.6`, but `classifier/harness.mjs:75` defaults missing probability maps to `{ [choice]: 0.8 }` — so harness and Clef classifiers effectively return at most 1 item unless probabilities or a multi-select contract are handled.
-- Hallucinated or out-of-root paths: any file/script picked by the classifier must be validated against the real candidate list (never trusting raw model strings), and callers must distinguish classifier-off/error (`null` → fallback) from confident `none` (`[]`).
-- Latency/cost: batch new triage questions into the existing `triageAndSkills` call (`bh.mjs:362`) rather than adding another 8–60 s classifier round-trip per spawn.
+### 3. Concrete bug & race suspects behind intermittent chat glitches
+- **Runtime crash on Page Up / Page Down (`mods/bot-herdr/chat.js:143, 511, 564-565, 657`)**: `this.page` is assigned the active page string (`"chat"`) in `init`/`render`, shadowing the `page(sign, total, cx)` method. `bot_herdr_page_up` and `bot_herdr_page_down` throw `TypeError: this.page is not a function`.
+- **Duplicate entry IDs past 300 messages (`mods/bot-herdr/feed.js:4, 64-67`, `chat.js:184, 429`)**: `push()` builds `id` from `${entry.at.toString(36)}-${entries.length.toString(36)}`. Once `entries.length === KEEP` (300), any two entries added in the same millisecond (e.g., `readLogs` looping over batched replies) receive identical IDs, colliding GPUI element keys, `this.heights`, `hovered`, `arrived`, and `unfolded`.
+- **Duplicate or dropped replies (`agent.mjs:67-71, 471-472`, `chat.js:364-380, 415-452`, `feed.js:39-46`)**:
+  - `agent.mjs:471-472` writes `<key>.md` then `<key>.jsonl`. A poll landing between the two on an agent's first turn ingests `.md` on poll N and re-ingests the same turn from `.jsonl` on poll N+1.
+  - `feed.js:45` uses strict `Date.parse(line.at) > since`, dropping same-ms log entries; `logReply` (`agent.mjs:67-71`) does unlocked read-modify-write.
+  - `chat.js:451` defaults `space` to `this.space()` when a finished child is no longer live, leaking replies from another space into the active chat.
+- **Dropped / misrouted cross-page sends (`chat.js:512-516`, `mods/bot-herdr/composer.js:1127-1153`)**: `OUTGOING` invokes `sendText()` -> `send()`, which silently drops the message if `this.sending` is true (`composer.js:1139`) or submits it as an answer to an open question card (`composer.js:1141`).
+- **Scroll yanking & animation flicker (`chat.js:183-189, 536-543, 724-731, 972-989, 1042-1050`)**:
+  - `add()` unconditionally resets `this.back = 0; this.px = 0`, yanking scrolled-up users to the bottom whenever a reply/note polls in.
+  - `render()` mutates `this.arriving` / `this.verbShown` and spawns 16ms timers; any intervening re-render (`on_size_change`, `measureKids`, hover) clears `this.arriving` immediately, snapping animations. `kids` group IDs (`kids-${first.id}`) also keep stale cached heights as new children append.
+- **Tasks page stale refresh race (`mods/bot-herdr/work.js:391-406, 516-525`)**: `reload()` exits early while `this.busy` is true; if a 4s poll is in flight when an action (`act`/`remove`) finishes, the post-mutation `reload()` is skipped and the in-flight pre-mutation payload can overwrite the UI until the next 4s tick.
 
-**Testability & what "done" means for QA**
-- Current coverage gap: 0 tests in `test/` cover `find_symbol.mjs`, `repo_map.mjs`, `outline_file.mjs`, or `lib/scripts.mjs` (only 1 test for `testsFor` in `test/verify.test.mjs:44-48`), and there is no CI workflow (`.github/` absent) running Windows tests.
-- Design for Linux + Windows testability: isolate platform detection, path normalization, binary probing (`rg` / `git` / Node fallback), and command resolution behind injectable helpers (`platform`, `env`, `probe`/fake binaries in `PATH`) so `node --test` on Linux exercises Windows paths, missing-binary fallbacks, and injection guards deterministically.
-- QA acceptance matrix for implementation:
-  1. Retrieval backend parity: `rg` vs `git grep` vs Node fallback produce identical normalized `/` paths, line numbers, exit codes, and truncation caps on tracked, untracked, non-git, `.gitignore`'d, binary, CRLF, UTF-8 BOM, spaces-in-path, and non-ASCII filenames.
-  2. Security: patterns starting with `-` (e.g. `-e`, `--help`, `--pre=...`), shell metacharacters (`&|;$\`%PATH%`), regex metacharacters, and `../` paths cannot inject flags, execute commands, or escape the repo root.
-  3. Existing Windows script fixes: no `cat`/`bash` hardcodes without Windows equivalents, no `npx` ENOENT on Windows, no `\` vs `/` comparison mismatches, no `RUNNERS` mutation.
-  4. Classifier triage tests: bounded candidate list under `LIMITS`, noise exclusion (`.bot-herdr/`), hallucinated/out-of-scope picks dropped, multi-pick behavior verified on both System One and harness/Clef shapes, and clean fallback when classifier is off, errors, times out, or returns `none`.
-  5. Note explicitly in the plan if real Windows host verification is required before closing, since local `node --test` runs on Linux only.
+### 4. Testability strategy & what "done" means for QA
+- **Tasks UI (`work.js`)**: Keep new interactivity state (filtering, sorting, step actions, selection, optimistic updates, refresh queuing) in pure JS modules (following `steps.js` / `signals.js` / `plandoc.js`) tested with `node --test test/*.test.mjs`; build task/timeline/board fixtures through real `bh` commands (`T.report`, `bh merge`, `bh board post`), never hand-written JSON; verify layout/render with `herdr-app check`.
+- **Chat state (`chat.js`, `feed.js`, `composer.js`)**: Extract pure state reducers/machines for ID generation, `.jsonl`/`.md` deduplication, scroll-anchor preservation when `back > 0`, outgoing message queuing (vs open question card / `sending`), and `page()` scrolling; cover each confirmed glitch above with a targeted regression test.
+- **Autonomy guardrails & fallback (`runner.mjs`, `agent.mjs`, `bh.mjs`, `workspace.mjs`)**: Extend the fake-harness end-to-end pattern in `test/headless.test.mjs` and temp git worktree tests in `test/worktree.test.mjs` to simulate: (a) mid-turn quota exhaustion after file edits, (b) non-quota errors (`401`, assistant text mentioning "429") confirming no false fallback, (c) exhausted fallback chain + loop/budget circuit breaker firing cleanly, (d) `state.seen` preservation across failed turns, (e) permission/allowlist non-escalation across fallback, and (f) self-edit verification + automatic rollback when checks fail or protected scripts are targeted.
+- **QA "Done" criteria**: `npm test` (`node --test test/*.test.mjs`) passes with zero regressions; every chat glitch suspect fixed has a behaviour test that would have failed before the fix; every autonomy/fallback guardrail is enforced in engine code (not only in role prose) and verified by deterministic fake-harness/worktree tests.

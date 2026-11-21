@@ -15,14 +15,25 @@ export const fileKey = (address) => String(address).replace(/[\\/]/g, "_");
 /** A directory entry's name, whether `readdir` hands back a name or a Dirent. */
 export const entryName = (entry) => (typeof entry === "string" ? entry : String(entry?.name ?? ""));
 
-/** An agent's reply log (`replies/<key>.jsonl`): one { at, name, text } per turn, oldest first; unreadable lines dropped. */
+/** An agent's reply log (`replies/<key>.jsonl`): one { id, at, kind, name, space, text } per turn, oldest first; unreadable lines dropped. */
 export function logEntries(text) {
   const out = [];
   for (const line of String(text ?? "").split("\n")) {
     if (!line.trim()) continue;
     try {
       const got = JSON.parse(line);
-      if (got && typeof got.text === "string" && Number.isFinite(Date.parse(got.at))) out.push({ at: got.at, name: got.name ?? null, text: got.text });
+      if (!got || !Number.isFinite(Date.parse(got.at))) continue;
+      const kind = typeof got.kind === "string" && got.kind ? got.kind : "reply";
+      const hasText = typeof got.text === "string";
+      if (!hasText && kind !== "asked") continue;
+      out.push({
+        id: typeof got.id === "string" && got.id ? got.id : null,
+        at: got.at,
+        kind,
+        name: got.name ?? null,
+        space: got.space ?? null,
+        text: hasText ? got.text : "",
+      });
     } catch {
       // half a line the engine had not finished writing, or one that was never one
     }
@@ -31,18 +42,56 @@ export function logEntries(text) {
 }
 
 /**
- * What a reply log adds to the feed: the turns later than `sinceAt` (an ISO time), and the newest
- * time the log holds, for the caller to keep. A log never read before (`sinceAt` null or empty)
- * adds its turns later than `floorAt`, the time the chat began watching logs, so a new agent's
- * first reply shows while older history stays out; with no floor either it adds nothing.
+ * What a reply log adds to the feed: the turns later than `cursor` (an ISO string or `{ at, ids }`),
+ * and the newest time (plus seen IDs at that time) for the caller to keep. Never rewinds `at`
+ * backwards on a partial read, and never drops or replays same-millisecond entries with distinct IDs.
+ * A log never read before adds its turns since `floorAt`; with no floor either it adds nothing.
  */
-export function logNew(text, sinceAt, floorAt = null) {
+export function logNew(text, cursor, floorAt = null) {
+  const isObj = Boolean(cursor && typeof cursor === "object");
+  const prevAt = isObj ? (cursor.at ?? null) : (cursor ?? null);
+  const prevIds = isObj && cursor.ids ? [...cursor.ids].filter(Boolean) : [];
+  const prevMs = prevAt ? Date.parse(prevAt) : NaN;
   const lines = logEntries(text);
-  const newest = lines.length ? lines[lines.length - 1].at : sinceAt ?? null;
-  const cutoff = sinceAt || floorAt;
-  if (!cutoff) return { entries: [], at: newest };
+
+  let newestAt = null;
+  let newestMs = NaN;
+  for (const line of lines) {
+    const ms = Date.parse(line.at);
+    if (!Number.isFinite(newestMs) || ms > newestMs) {
+      newestMs = ms;
+      newestAt = line.at;
+    }
+  }
+
+  let nextAt = prevAt;
+  let nextIds = [...prevIds];
+  if (Number.isFinite(newestMs) && (!Number.isFinite(prevMs) || newestMs > prevMs)) {
+    nextAt = newestAt;
+    nextIds = [...new Set(lines.filter((l) => Date.parse(l.at) === newestMs && l.id).map((l) => l.id))];
+  } else if (Number.isFinite(newestMs) && Number.isFinite(prevMs) && newestMs === prevMs) {
+    const merged = new Set(prevIds);
+    for (const l of lines) if (Date.parse(l.at) === prevMs && l.id) merged.add(l.id);
+    nextIds = [...merged];
+  }
+
+  const extra = isObj || nextIds.length > 0 ? { ids: nextIds } : {};
+  const cutoff = prevAt || floorAt;
+  if (!cutoff) return { entries: [], at: nextAt, ...extra };
   const since = Date.parse(cutoff);
-  return { entries: lines.filter((line) => Date.parse(line.at) > since), at: newest };
+  const seenIds = new Set(prevAt ? prevIds : []);
+  const entries = [];
+  for (const line of lines) {
+    const ms = Date.parse(line.at);
+    if (ms > since) {
+      entries.push(line);
+      if (line.id) seenIds.add(line.id);
+    } else if (ms === since && line.id && !seenIds.has(line.id)) {
+      entries.push(line);
+      seenIds.add(line.id);
+    }
+  }
+  return { entries, at: nextAt, ...extra };
 }
 
 /**
@@ -60,9 +109,12 @@ export function groupChildren(list, isChild) {
   return out;
 }
 
+let entrySeq = 0;
+
 /** Adds an entry, dropping the oldest beyond KEEP. */
 export function push(entries, entry) {
-  const next = [...entries, { id: `${entry.at.toString(36)}-${entries.length.toString(36)}`, ...entry }];
+  entrySeq += 1;
+  const next = [...entries, { id: `${Number(entry.at ?? 0).toString(36)}-${entrySeq.toString(36)}`, ...entry }];
   return next.length > KEEP ? next.slice(next.length - KEEP) : next;
 }
 
@@ -298,3 +350,94 @@ export function linkTasks(markdown) {
 
 /** The task id a TASK_LINK points at, or null for any other link. */
 export const taskTarget = (url) => (String(url ?? "").startsWith(TASK_LINK) ? String(url).slice(TASK_LINK.length) : null);
+
+/**
+ * How scroll position changes when a feed entry arrives: snaps to the bottom on your own message
+ * or when already at the bottom; while scrolled up, keeps the same entry anchored in view.
+ */
+export function scrollOnAdd({ back = 0, px = 0, kind = "agent", sameSpace = true, delta = 1 } = {}) {
+  if (kind === "me" || (back === 0 && px === 0)) return { back: 0, px: 0 };
+  if (!sameSpace) return { back, px };
+  return { back: back + delta, px };
+}
+
+/** The space a reply or note belongs to: explicit log space, live agent, recorded wait, or active space. */
+export function resolveSpace({ lineSpace = null, agentSpace = null, waitSpace = null, activeSpace = null } = {}) {
+  return lineSpace ?? agentSpace ?? waitSpace ?? activeSpace ?? null;
+}
+
+/** Stable signature of currently working agents in a space: changes on start, stop, or status change. */
+export function workerSignature(list) {
+  return (list ?? [])
+    .map((a) => `${a.address}:${a.status ?? "working"}`)
+    .sort()
+    .join("|");
+}
+
+/** Whether two addresses refer to the same agent (exact match or matching fileKey). */
+export function sameAddress(a, b) {
+  if (!a || !b) return false;
+  return a === b || fileKey(a) === fileKey(b);
+}
+
+/** Whether any open question card belongs to `address`. */
+export function hasOpenQuestion(questions, address) {
+  return (questions ?? []).some((q) => sameAddress(q?.from, address));
+}
+
+/** Whether a "silent" wait note should be suppressed because the agent has an open question card. */
+export function shouldSuppressSilent(address, openQuestions) {
+  return hasOpenQuestion(openQuestions, address);
+}
+
+/** Whether a `.jsonl` reply duplicates a `.md` reply just ingested for the same agent. */
+export function isDuplicateMd(text, seenMd, seenAt, lineAt, windowMs = 15000) {
+  if (!seenMd || replyBody(seenMd) !== text) return false;
+  const lineMs = Date.parse(lineAt ?? "");
+  if (Number.isFinite(seenAt) && Number.isFinite(lineMs) && Math.abs(lineMs - seenAt) <= windowMs) return true;
+  const stamp = /<!--\s*bh ([^>]+?)\s*-->/.exec(String(seenMd))?.[1];
+  const stampMs = stamp ? Date.parse(stamp) : NaN;
+  return Number.isFinite(stampMs) && Number.isFinite(lineMs) && Math.abs(lineMs - stampMs) <= windowMs;
+}
+
+/** Queues a cross-page programmatic message (`sendText`) without touching the user's draft. */
+export function enqueueOutbox(queue, text) {
+  const s = String(text ?? "").trim();
+  if (!s) return false;
+  queue.push(s);
+  return true;
+}
+
+/** Pops the next queued cross-page message when the composer is idle, else null. */
+export function nextOutbox(queue, sending) {
+  if (sending || !queue?.length) return null;
+  return queue.shift();
+}
+
+/**
+ * Matches a newly started agent to a pending `start` record by tab/agent name rather than
+ * blindly adopting any unrelated terminal in the space.
+ */
+export function matchAdopted(start, agents, justBriefed = new Set()) {
+  const candidates = (agents ?? []).filter(
+    (a) => a.space === start.space && !start.before?.has(a.address) && !justBriefed.has(a.address),
+  );
+  if (!candidates.length) return null;
+  const wantTab = String(start.tab ?? "").trim().toLowerCase();
+  if (wantTab) {
+    const byTab = candidates.find((a) => String(a.tab_name ?? "").trim().toLowerCase() === wantTab);
+    if (byTab) return byTab;
+  }
+  const wantName = String(start.name ?? "").trim().toLowerCase();
+  if (wantName) {
+    const byName = candidates.find((a) => {
+      const tab = String(a.tab_name ?? "").trim().toLowerCase();
+      const prog = String(a.program?.name ?? a.program?.key ?? "").trim().toLowerCase();
+      const title = String(a.title ?? "").trim().toLowerCase();
+      return tab === wantName || prog === wantName || title === wantName;
+    });
+    if (byName) return byName;
+  }
+  if (wantTab) return null;
+  return candidates.length === 1 ? candidates[0] : null;
+}

@@ -1,0 +1,204 @@
+{
+  "id": "t-20261121-l4ki",
+  "title": "Autonomous resilient harness, Tasks workbench and chat stability",
+  "request": "Improve the harness for continual self-improvement, autonomous operation, fallback options when usage runs out, and better guardrails; redesign the Tasks page to be more presentable and interactive; and investigate and fix intermittent chat glitches.\n\nThe agreed plan: bh plan show p-20261121-0hfk",
+  "status": "active",
+  "track": "planned",
+  "plan": "p-20261121-0hfk",
+  "by": "t7t",
+  "created": "2026-11-21T00:53:52.840Z",
+  "updated": "2026-11-21T01:26:16.534Z",
+  "archived": false,
+  "steps": [
+    {
+      "n": 1,
+      "title": "Task 1 — Chat stability (engine): Make `replies/<key>.jsonl` the single atomic/append-only chat event log (`at`, `kind`, `id`, `space`, plus `kind: \"asked\"` so `bh ask` clears waits without a false 8 s silent note), wire `bh reply` into the same log, sanitize OSC/DCS escape sequences from harness stdout, guard the `on()` stdout handler against mid-turn throws, and update reply/log tests (`test/agents-reply.test.mjs`, `test/empty-reply.test.mjs`, `test/feed-items.test.mjs`).",
+      "agent": "dev-chat-fix",
+      "status": "done",
+      "started": null,
+      "finished": "2026-11-21T01:23:37.092Z",
+      "workedMs": 657359,
+      "note": "",
+      "skills": {
+        "pinned": [],
+        "picked": [],
+        "added": [],
+        "fallback": true
+      },
+      "report": {
+        "file": ".bot-herdr/tasks/t-20261121-l4ki/reports/dev-chat-fix.md",
+        "summary": "Fixed stripUnsafeEscapes fixed-point OSC/DCS + C1 stripping, applied it to 3 say() error paths, added 4 bypass regression assertions; chat-engine tests + bh check PASS",
+        "from": "dev-chat-fix",
+        "at": "2026-11-21T01:23:15.692Z"
+      }
+    },
+    {
+      "n": 2,
+      "title": "Task 1 — Chat stability (UI & gate): Fix all 9 verified chat UI glitches (`chat.js` `this.page` method shadowing, monotonic `feed.js` IDs past 300 entries, scroll-anchor preservation when `back > 0`, worker-status change notifications, arrival/hover/composer-collapse races, queued cross-page `sendText` that never routes into open question cards, `adopt()` in `poll()`, shared `OpenQuestions` dismissals, and quiet-harness key cleanup) with pure-module regression tests; pass QA gate, commit, push to `origin/main`, and run `node install.mjs`.",
+      "agent": "design-chat",
+      "status": "done",
+      "started": "2026-11-21T00:56:06.763Z",
+      "finished": "2026-11-21T01:09:12.242Z",
+      "workedMs": 785479,
+      "note": "",
+      "skills": {
+        "pinned": [],
+        "picked": [],
+        "added": [],
+        "fallback": true
+      }
+    },
+    {
+      "n": 3,
+      "title": "Task 2 — Failure classification & fallback engine: Add `mods/bot-herdr/engine/lib/failures.mjs` classifying permanent quota exhaustion (with parsed reset time), transient 429, auth, timeout, and crash across Claude Code (including headless exit-0 JSON `result`), Codex (`turn.failed`), OpenCode (ACP `_meta[\"opencode/retry\"]` + non-ACP 429), Gemini CLI, Qwen Code, Antigravity, and pi; build ordered fallback chains (same-CLI next model first preserving the live session, then fallback harness continuing from the dirty worktree with `git diff --stat` + handoff digest, then hold until reset), shared `DATA/cooldowns.json`, additive per-harness `DATA/sessions/`, `state.seen` preservation on failed turns, permission/allowlist non-escalation guards, and `roster.clean` / `bh team save` persistence.",
+      "agent": null,
+      "status": "todo",
+      "started": null,
+      "finished": null,
+      "workedMs": 0,
+      "note": ""
+    },
+    {
+      "n": 4,
+      "title": "Task 2 — Engine guardrails & Resilience UI (gate): Enforce hard engine guardrails — block `.bot-herdr/scripts/` from shadowing built-in `bh check` scripts, enforce `personOnly` and protected-path checks, add runtime circuit breakers (per-task spend/turn/retry ceilings, 3× identical-failure thrash breaker, max QA/spawn/recursion caps), require git branch/worktree isolation in autonomous mode, and verify merged trees before discarding child branches; build the Resilience tab in Settings (fallback chains, provider cooldown health with `Retry now`/`Reset all`, guardrail budgets) plus the slim live status strip above the composer and on Tasks (with `Pause`/`Reset`) backed by JSON `bh` commands; pass fake-harness/worktree/UI tests, QA gate, commit, push, and `node install.mjs`.",
+      "agent": null,
+      "status": "todo",
+      "started": null,
+      "finished": null,
+      "workedMs": 0,
+      "note": ""
+    },
+    {
+      "n": 5,
+      "title": "Task 3 — Tasks engine contracts & interactive workbench (gate): Add lightweight Tasks engine contracts (`bh task list --summary`, `bh task show <id> --json` for the open task's live board/step events/checks/gates, explicit allowed actions, `--if-updated` optimistic concurrency guard, live step-level running/fallback status) and rebuild `mods/bot-herdr/work.js`, `steps.js`, and `signals.js` in the Split list with detail tabs layout (search + status filter chips, `+ New task`, compact progress bars replacing wide pips, `Steps` · `Board` · `Comments` · `Full plan` detail tabs, expandable interactive step cards with events/checks/reports/`Open terminal`/step actions, QA gate badge, single-scroll desktop & narrow layout, foldable `taskComposer`, race-free refresh queuing); pass pure-module tests, gpui-kit `tsc`, QA gate, commit, push, and `node install.mjs`.",
+      "agent": null,
+      "status": "todo",
+      "started": null,
+      "finished": null,
+      "workedMs": 0,
+      "note": ""
+    },
+    {
+      "n": 6,
+      "title": "Task 4 — Eval-gated continual self-improvement & auto-install (gate): Build `mods/bot-herdr/engine/lib/improve.mjs` and `bh improve` to mine post-task telemetry (`checks.jsonl`, `gates`, `board.jsonl`, `usage.jsonl`, refused commands, idle timeouts), fold/archive knowledge below the 20k/8k cap, apply eval-gated tweaks across project learning, role prompts, and mod engine/UI code on an isolated branch (permanently blocking edits that weaken or shadow `personOnly`, access checks, or built-in `bh check` scripts), run `npm test`, `bh check`, gpui-kit `tsc`, and guardrail invariants before merging and running `node install.mjs`, record before/after experiment verdicts, and perform validated automatic rollback (never keep-after-rejection) if checks fail or next-window metrics regress; pass rollback/invariant tests, QA gate, commit, push, and `node install.mjs`.",
+      "agent": null,
+      "status": "todo",
+      "started": null,
+      "finished": null,
+      "workedMs": 0,
+      "note": ""
+    }
+  ],
+  "triage": null,
+  "qa": {
+    "risk": "high",
+    "qaRequired": true,
+    "testBudget": {
+      "min": 0,
+      "max": 6
+    },
+    "focusAreas": [
+      "security boundaries: the wrong user, no user and an expired session are refused, and no secret leaks",
+      "concurrency: races, ordering, double runs, and a lock or claim that is never released",
+      "state transitions and recovery: no illegal or stuck state, and a crash or failed step recovers",
+      "isolation: work stays inside its branch, worktree and permission boundaries",
+      "data integrity: what is saved reads back the same, a migration runs on real data, and a failure halfway loses or corrupts nothing"
+    ],
+    "riskFactors": [
+      "security: .bot-herdr/tasks/t-20261121-l4ki/task.json (\"sanitiz\")",
+      "concurrency: .bot-herdr/tasks/t-20261121-l4ki/task.json (\"concurren\")",
+      "orchestration and state: .bot-herdr/tasks/t-20261121-l4ki/task.json (\"rollback\")",
+      "isolation: .bot-herdr/tasks/t-20261121-l4ki/task.json (\"worktree\")",
+      "12 files, 702 changed lines in mods/bot-herdr, mods/bot-herdr/engine, .bot-herdr/tasks/t-20261121-l4ki",
+      "tests changed with it: test/agents-reply.test.mjs, test/chat-engine.test.mjs, test/chat-ui.test.mjs and 1 more",
+      "persistent data: Jev reads it in the diff (0.68)",
+      "a public contract: Jev reads it in the diff (0.63)"
+    ],
+    "existingTestsLikelySufficient": true,
+    "reasoning": "HIGH: security: .bot-herdr/tasks/t-20261121-l4ki/task.json (\"sanitiz\"); concurrency: .bot-herdr/tasks/t-20261121-l4ki/task.json (\"concurren\"); orchestration and state: .bot-herdr/tasks/t-20261121-l4ki/task.json (\"rollback\"). Jev read the diff as high (0.86).",
+    "source": "classifier",
+    "at": "2026-11-21T01:09:43.095Z"
+  },
+  "summary": "",
+  "skills": {
+    "design": {
+      "picked": null,
+      "added": []
+    },
+    "dev": {
+      "picked": null,
+      "added": []
+    },
+    "qa": {
+      "picked": null,
+      "added": []
+    },
+    "research": {
+      "picked": null,
+      "added": []
+    },
+    "scout": {
+      "picked": null,
+      "added": []
+    },
+    "advisor": {
+      "picked": null,
+      "added": []
+    }
+  },
+  "base": "0904171c33b92187ec44784c96b254545ad6e220",
+  "children": [
+    {
+      "name": "dev-chat",
+      "agent": "Dev",
+      "step": 1,
+      "branch": "bh/t-20261121-l4ki-dev-chat",
+      "path": "/home/athi/bot-herdr/.bot-herdr/worktrees/t-20261121-l4ki-dev-chat",
+      "base": "0904171c33b92187ec44784c96b254545ad6e220",
+      "state": "merged",
+      "at": "2026-11-21T00:55:49.681Z",
+      "mergedAt": "2026-11-21T01:03:38.361Z",
+      "stat": {
+        "files": 6,
+        "added": 267,
+        "removed": 32
+      }
+    },
+    {
+      "name": "design-chat",
+      "agent": "Design",
+      "step": 2,
+      "branch": "bh/t-20261121-l4ki-design-chat",
+      "path": "/home/athi/bot-herdr/.bot-herdr/worktrees/t-20261121-l4ki-design-chat",
+      "base": "0904171c33b92187ec44784c96b254545ad6e220",
+      "state": "merged",
+      "at": "2026-11-21T00:56:06.718Z",
+      "mergedAt": "2026-11-21T01:08:52.173Z",
+      "stat": {
+        "files": 8,
+        "added": 678,
+        "removed": 121
+      }
+    }
+  ],
+  "gates": [
+    {
+      "round": 1,
+      "verdict": "CHANGES_REQUIRED",
+      "file": ".bot-herdr/tasks/t-20261121-l4ki/reports/qa-phase1.md",
+      "summary": "Phase 1 CHANGES_REQUIRED: stripUnsafeEscapes has nested-OSC/DCS and C1 security bypass; all other engine/UI fixes and checks pass",
+      "from": "qa-phase1",
+      "at": "2026-11-21T01:19:35.288Z",
+      "head": "0904171c33b92187ec44784c96b254545ad6e220"
+    },
+    {
+      "round": 2,
+      "verdict": "PASS",
+      "file": ".bot-herdr/tasks/t-20261121-l4ki/reports/qa-phase1-r2.md",
+      "summary": "Phase 1 PASS: stripUnsafeEscapes fixed-point OSC/DCS + C1 fix and say() error paths verified; all 398/399 tests and tsc check pass",
+      "from": "qa-phase1-r2",
+      "at": "2026-11-21T01:26:07.143Z",
+      "head": "0904171c33b92187ec44784c96b254545ad6e220"
+    }
+  ]
+}

@@ -92,3 +92,45 @@ test("the feed comes back once, and is built again when a reply arrives", () => 
   assert.notEqual(next, first);
   assert.deepEqual(next[0].children.map((e) => e.id), ["d1", "d2"]);
 });
+
+test("Chat.page is not shadowed and kids height cache invalidates when a child reply appends", () => {
+  const chat = Object.assign(Object.create(Chat.prototype), {
+    entries: [entry("d1", "Dev", "dev")],
+    composer: stub(new Map([["dev", { name: "Dev" }]])),
+    feedCache: null,
+    heights: new Map([["kids-d1:1", 96]]),
+    back: 0,
+    px: 0,
+    room: 400,
+    lastPage: "chat",
+    space: () => "s1",
+  });
+  assert.equal(typeof chat.page, "function");
+  assert.deepEqual(chat.feedHeights("s1"), [96]);
+  chat.entries = [...chat.entries, entry("d2", "Dev", "dev")];
+  assert.deepEqual(chat.feedHeights("s1"), [undefined]);
+});
+
+test("Chat.addLogged clears remote/quiet waits by fileKey, skips kind: asked, and preserves line.space", () => {
+  const added = [];
+  const chat = Object.assign(Object.create(Chat.prototype), {
+    waits: { "host/t4w": { name: "Design", space: "s-wait", at: Date.now() } },
+    seen: {},
+    seenAt: {},
+    composer: { nameOf: () => "Design" },
+    space: () => "s-active",
+    add(item) {
+      added.push(item);
+    },
+  });
+  chat.addLogged("host_t4w", { id: "q1", at: "2026-11-21T10:00:00.000Z", kind: "asked", name: "Design", space: "s-line", text: "" }, [], {});
+  assert.equal(Object.keys(chat.waits).length, 0);
+  assert.equal(added.length, 0);
+
+  chat.waits["host/t4w"] = { name: "Design", space: "s-wait", at: Date.now() };
+  chat.addLogged("host_t4w", { id: "r1", at: "2026-11-21T10:00:05.000Z", kind: "reply", name: "Design", space: "s-line", text: "Ready" }, [], {});
+  assert.equal(Object.keys(chat.waits).length, 0);
+  assert.equal(added.length, 1);
+  assert.equal(added[0].space, "s-line");
+  assert.equal(added[0].text, "Ready");
+});

@@ -227,6 +227,18 @@ function collectErr(child) {
 const textOf = (content) => (Array.isArray(content) ? content : []).filter((b) => b?.type === "text" && typeof b.text === "string").map((b) => b.text).join("");
 const extra = (agent) => (agent.args ? agent.args.split(/\s+/).filter(Boolean) : []);
 
+/**
+ * What a turn tells its listener, once per turn. A listener is only how the turn is shown: one
+ * that throws (a closed pipe) must never take the turn, and the reply it ends with, with it.
+ */
+const safeOn = (on) => (event) => {
+  try {
+    on?.(event);
+  } catch {
+    // ignore output listener errors
+  }
+};
+
 /** A turn whose harness says nothing for this long is over; tests pass a smaller `idleMs`. */
 export const TURN_IDLE_MS = 30 * 60 * 1000;
 
@@ -275,6 +287,7 @@ export function claudeEnv(access, { root = asRoot() } = {}) {
 
 /** Claude Code: `claude -p --output-format stream-json`, the brief as an appended system prompt. */
 function claudeTurn({ agent, known, state, briefFile, prompt, cwd, on, access, allow, idleMs }) {
+  const emit = safeOn(on);
   const first = !state.session;
   const id = state.session ?? randomUUID();
   const root = asRoot(cwd);
@@ -292,18 +305,18 @@ function claudeTurn({ agent, known, state, briefFile, prompt, cwd, on, access, a
           // so the model waits for the answers (the next message) instead of deciding alone.
           const asked = b.name === "AskUserQuestion" ? fromAskTool(b.input) : null;
           if (asked) {
-            on({ kind: "ask", ...asked });
+            emit({ kind: "ask", ...asked });
             turn.asked = true;
             return;
           }
-          on({ kind: "tool", line: toolLine(b.name, b.input) });
+          emit({ kind: "tool", line: toolLine(b.name, b.input) });
           // bh ask: the command writes the card itself, so the turn must outlive the call; it
           // ends when the call's result arrives (the user event below), not when it starts.
           if (asksPerson(b.name, b.input)) turn.askIds = [...(turn.askIds ?? []), b.id];
         }
         if (b.type === "text" && b.text?.trim()) {
           turn.text = b.text;
-          on({ kind: "text", text: b.text });
+          emit({ kind: "text", text: b.text });
         }
       }
     } else if (event.type === "user") {
@@ -315,7 +328,7 @@ function claudeTurn({ agent, known, state, briefFile, prompt, cwd, on, access, a
       if (event.is_error || (event.subtype && event.subtype !== "success")) turn.error = event.result?.trim() || (event.errors ?? []).join("; ") || `stopped: ${event.subtype}`;
       else if (typeof event.result === "string" && event.result.trim()) turn.text = event.result;
       const u = event.usage ?? {};
-      on({ kind: "usage", ...numbers({ input: u.input_tokens, output: u.output_tokens, cacheRead: u.cache_read_input_tokens, cacheWrite: u.cache_creation_input_tokens, costUsd: event.total_cost_usd, ms: event.duration_ms }) });
+      emit({ kind: "usage", ...numbers({ input: u.input_tokens, output: u.output_tokens, cacheRead: u.cache_read_input_tokens, cacheWrite: u.cache_creation_input_tokens, costUsd: event.total_cost_usd, ms: event.duration_ms }) });
     }
   }, { session: id, idleMs, env: claudeEnv(access, { root }) });
 }
@@ -357,6 +370,7 @@ function addUsage(total, u) {
 
 /** Codex: `codex exec --json`, resumed by thread id; the brief leads the first prompt. */
 function codexTurn({ agent, known, state, brief, prompt, cwd, on, access, idleMs }) {
+  const emit = safeOn(on);
   const run = known.find((k) => k.key === agent.harness)?.run ?? ["codex"];
   const effort = agent.effort && effortsOf("codex", agent.model).includes(agent.effort) ? ["-c", `model_reasoning_effort=${agent.effort}`] : [];
   const argv = [
@@ -370,7 +384,7 @@ function codexTurn({ agent, known, state, brief, prompt, cwd, on, access, idleMs
     if (event.type === "thread.started" && event.thread_id) turn.session = event.thread_id;
     const item = event.item ?? {};
     if (event.type === "item.started" && item.type === "command_execution") {
-      on({ kind: "tool", line: toolLine("bash", { command: item.command }) });
+      emit({ kind: "tool", line: toolLine("bash", { command: item.command }) });
       // bh ask: the command writes the card itself; the turn ends when the command completes.
       if (asksPerson("bash", { command: item.command })) turn.askCmd = item.command;
     }
@@ -378,18 +392,18 @@ function codexTurn({ agent, known, state, brief, prompt, cwd, on, access, idleMs
     if (event.type === "item.completed") {
       if (item.type === "agent_message" && item.text?.trim()) {
         turn.text = item.text;
-        on({ kind: "text", text: item.text });
+        emit({ kind: "text", text: item.text });
       }
-      if (item.type === "file_change") for (const ch of item.changes ?? []) on({ kind: "tool", line: toolLine(ch.kind === "add" ? "write" : "edit", { path: ch.path }) });
-      if (item.type === "web_search") on({ kind: "tool", line: toolLine("WebSearch", { query: item.query }) });
-      if (item.type === "mcp_tool_call") on({ kind: "tool", line: `${item.server ?? "mcp"}: ${item.tool ?? "tool"}` });
+      if (item.type === "file_change") for (const ch of item.changes ?? []) emit({ kind: "tool", line: toolLine(ch.kind === "add" ? "write" : "edit", { path: ch.path }) });
+      if (item.type === "web_search") emit({ kind: "tool", line: toolLine("WebSearch", { query: item.query }) });
+      if (item.type === "mcp_tool_call") emit({ kind: "tool", line: `${item.server ?? "mcp"}: ${item.tool ?? "tool"}` });
     }
     if (event.type === "turn.completed") {
       const u = event.usage ?? {};
       const counts = numbers({ input: u.input_tokens, output: u.output_tokens, cacheRead: u.cached_input_tokens });
       // Codex counts cached input inside input_tokens: keeping both would count it twice.
       if (typeof counts.input === "number" && typeof counts.cacheRead === "number") counts.input = Math.max(0, counts.input - counts.cacheRead);
-      on({ kind: "usage", ...counts });
+      emit({ kind: "usage", ...counts });
     }
     if (event.type === "turn.failed") turn.error = event.error?.message ?? "Codex reported a failed turn";
   }, { session: state.session, idleMs });
@@ -397,13 +411,14 @@ function codexTurn({ agent, known, state, brief, prompt, cwd, on, access, idleMs
 
 /** pi and Oh My Pi: `-p --mode json`, one session folder per agent; the brief as a system prompt file. */
 function piTurn({ agent, known, state, key, briefFile, prompt, cwd, on, idleMs }) {
+  const emit = safeOn(on);
   const dir = ensureDir(join(DATA, "sessions", key));
   const argv = [...argvOf(agent, known), "-p", "--mode", "json", "--session-dir", dir, "--append-system-prompt", briefFile, ...(state.session ? ["--continue"] : [])];
   const usage = {}; // the turn's tokens and cost, summed over its assistant messages
   return oneShot(argv, prompt, cwd, (event, turn) => {
     if (event.type === "session" && event.id) turn.session = event.id;
     if (event.type === "tool_execution_start") {
-      on({ kind: "tool", line: toolLine(event.toolName, event.args ?? {}) });
+      emit({ kind: "tool", line: toolLine(event.toolName, event.args ?? {}) });
       // bh ask: the command writes the card itself; the turn ends when the tool call ends.
       if (asksPerson(event.toolName, event.args ?? {})) turn.askTool = { id: event.toolCallId ?? null, name: event.toolName };
     }
@@ -412,9 +427,9 @@ function piTurn({ agent, known, state, key, briefFile, prompt, cwd, on, idleMs }
       const text = textOf(event.message.content);
       if (text.trim()) {
         turn.text = text;
-        on({ kind: "text", text });
+        emit({ kind: "text", text });
       }
-      if (event.message.usage) on({ kind: "usage", ...numbers(addUsage(usage, event.message.usage)) });
+      if (event.message.usage) emit({ kind: "usage", ...numbers(addUsage(usage, event.message.usage)) });
       if (event.message.stopReason === "error") turn.error = event.message.errorMessage || "the model returned an error";
     }
   }, { session: state.session ?? "pi", idleMs });
@@ -645,7 +660,7 @@ export class Acp {
   }
 
   turn({ brief, prompt, on, idleMs = TURN_IDLE_MS }) {
-    this.on = on;
+    this.on = safeOn(on);
     this.text = "";
     this.block = "";
     this.usage = null;
@@ -670,12 +685,12 @@ export class Acp {
         });
         const r = await Promise.race([this.request("session/prompt", { sessionId: this.session, prompt: [{ type: "text", text: first ? `${brief}\n\n${prompt}` : prompt }] }), stopped]);
         const seen = turnUsage(this.usage, r?.result?.usage);
-        if (seen) on({ kind: "usage", ...seen });
+        if (seen) this.on({ kind: "usage", ...seen });
         if (this.idleLost) return { text: this.text, error: this.idleLost, session: this.session };
         if (this.asked) return { text: this.text, asked: true, error: null, session: this.session };
         if (r.error) return { text: this.text, error: r.error.message ?? "the agent refused the prompt", session: this.session };
         if (r.result?.stopReason === "cancelled") return { text: this.text, cancelled: true, session: this.session };
-        if (this.text.trim()) on({ kind: "text", text: this.text });
+        if (this.text.trim()) this.on({ kind: "text", text: this.text });
         return { text: this.text, error: null, session: this.session };
       } catch (e) {
         return { text: "", error: e.message, session: null };

@@ -361,6 +361,7 @@ export class Work {
     this.noteAddedAt = shared(NOTE_ADDED)?.at ?? 0;
     this.handle = cx.focus_handle(); // holds the keyboard while the Plans box is folded
     this.open = new OpenQuestions(); // the agents' open questions, read here as the chat reads them
+    this.wasActive = false;
     this.resumeAsks = {}; // task id → when Resume asked the Orchestrator (dropped when it is active)
     this.seatSig = ""; // the panel's seat states drawn last, so a change redraws the rail
     this.boardAll = new Set(); // task ids whose whole board is shown (else its newest ten)
@@ -379,7 +380,9 @@ export class Work {
       onAnswer: (q, answers, cx) => this.answerQuestion(this.taskComposer, q, answers, cx),
     });
     this.readQuestions(cx);
-    cx.timer.every(QUESTIONS_MS, (cx) => this.readQuestions(cx));
+    cx.timer.every(QUESTIONS_MS, (cx) => {
+      if (activePage() === (this.fixed ?? "work")) this.readQuestions(cx);
+    });
     this.reload(cx);
     cx.timer.every(REFRESH_MS, (cx) => {
       if (activePage() === (this.fixed ?? "work")) this.reload(cx);
@@ -718,6 +721,9 @@ export class Work {
       this.noteAddedAt = added.at;
       cx.timer.after(1, (cx) => this.reload(cx));
     }
+    const active = activePage() === (this.fixed ?? "work");
+    if (active && !this.wasActive) cx.timer.after(1, (cx) => this.readQuestions(cx));
+    this.wasActive = active;
     const want = shared(OPEN_TASK);
     if (want?.at > (this.openAt ?? 0)) {
       this.openAt = want.at;
