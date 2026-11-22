@@ -1,9 +1,15 @@
 // bot-herdr: one mod, several views, picked by the layout block's props.
-//   { "view": "chat" }      the chat page: every agent's replies and the composer (chat.js)
-//   { "view": "switch" }    the Chat / Terminals / Settings switch in the top bar (switch.js)
+//   { "view": "switch" }    the top bar: Home, Threads, Agents, Library and the Settings gear (switch.js)
+//   { "view": "home" }      what needs you, then the fleet and today's spend (home.js)
+//   { "view": "threads" }   the thread list, and a thread's Conversation | Plan | Steps | Changes (threads.js)
+//   { "view": "status" }    the status bar: machine, branch, agent count, palette key (statusbar.js)
+//   { "view": "agents" }    Agents › Fleet, or (props.sub "terminals") the strip above herdr's panes (agents.js)
+//   { "view": "library" }   Library › Knowledge | Learning | Scripts | Issues (library.js)
+//   { "view": "scripts" }   Library › Scripts on its own
+//   { "view": "chat" }      the Orchestrator's chat used on its own (chat.js)
 //   { "view": "work", "tab": "tasks" | "plans" | "knowledge" }   the team's work (work.js)
 //   { "view": "pick" }      a dropdown list, opened as a popup by Settings (pick.js)
-//   { "view": "settings" }  the agents: harness, model, effort (settings.js)
+//   { "view": "settings" }  the agents, run mode, resilience, harnesses and usage (settings.js)
 //   { "view": "settings-more" }  a settings card's More, as a dialog (settings.js)
 //   { "view": "lightbox" }  a picture opened large, as a dialog (lightbox.js)
 //   { "view": "file" }      a file named in a message, opened read only, as a dialog (viewer.js)
@@ -13,10 +19,13 @@
 
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { props, settings } from "herdr";
-import { SIZE, TYPE, LINE, SPACE, palette } from "./look.js";
+import { props, settings, shared, setShared } from "herdr";
+import { SIZE, TYPE, LINE, SPACE, palette, setMotionSource, motionReduced, REDUCE_MOTION_KEY, clickable, RADIUS, TYPE_SCALE } from "./look.js";
 import { colors } from "./theme.js";
 import { actionButton } from "./button.js";
+import { KEYMAP_OPEN, overlayRows } from "./keymap.js";
+import { activePage, activeStage } from "./pages.js";
+import { keyName, opensKeymap } from "./rowkeys.js";
 import { safeInit, safeRender, formatRenderError, errorSignature } from "./render-safe.js";
 import { Chat } from "./chat.js";
 import { Switch } from "./switch.js";
@@ -30,9 +39,18 @@ import { FileView } from "./viewer.js";
 import { PlanDoc } from "./plandoc.js";
 import { Metrics } from "./metrics.js";
 import { Learning, LearningDoc } from "./learning.js";
+import { Home } from "./home.js";
+import { Threads } from "./threads.js";
+import { Agents } from "./agents.js";
+import { Library } from "./library.js";
+import { Scripts } from "./scripts.js";
 import Issues from "./issues.js";
+import { StatusBar } from "./statusbar.js";
 
-export const VIEWS = { chat: Chat, switch: Switch, work: Work, issues: Issues, learning: Learning, "learning-doc": LearningDoc, settings: Settings, pick: Pick, lightbox: Lightbox, toast: Toast, file: FileView, plan: PlanDoc, note: NoteForm, metrics: Metrics, "settings-more": MoreSheet };
+// Reduce motion: Settings › General's toggle, or herdr's own setting once it has one.
+setMotionSource(() => motionReduced(shared(REDUCE_MOTION_KEY), settings()));
+
+export const VIEWS = { home: Home, threads: Threads, status: StatusBar, agents: Agents, library: Library, scripts: Scripts, chat: Chat, switch: Switch, work: Work, issues: Issues, learning: Learning, "learning-doc": LearningDoc, settings: Settings, pick: Pick, lightbox: Lightbox, toast: Toast, file: FileView, plan: PlanDoc, note: NoteForm, metrics: Metrics, "settings-more": MoreSheet };
 
 /** Resolves theme tokens safely so even a broken theme lookup keeps the fallback readable. */
 function safeColors() {
@@ -145,6 +163,9 @@ function fallbackCard(c, err, showDetails, onRetry, onToggle) {
     .child(card);
 }
 
+/** Full-page views that may draw the keyboard map overlay (never top/bottom bars, toasts or popups). */
+const MAIN_PAGES = new Set(["home", "threads", "agents", "library", "settings", "chat", "work", "issues", "learning", "scripts", "metrics"]);
+
 export class BotHerdr extends View {
   init(given, cx) {
     this.loggedErrors = new Set();
@@ -153,7 +174,18 @@ export class BotHerdr extends View {
     this.page = null;
     this.viewName = "chat";
     this.initProps = {};
+    this.keymapHandle = cx.focus_handle();
+    this.keymapWasOpen = false;
     this.mountPage(given, cx);
+  }
+
+  /** Whether this BotHerdr block is the active main page view (not switch, status, toast or a popup). */
+  isMainPage() {
+    if (!MAIN_PAGES.has(this.viewName)) return false;
+    if (this.viewName === "agents" && this.initProps?.sub === "terminals") return false;
+    const active = activePage();
+    if (!active) return true;
+    return activeStage() !== "terminals" && active === this.viewName;
   }
 
   /** Reads view props without throwing if the host props lookup fails. */
@@ -245,8 +277,58 @@ export class BotHerdr extends View {
       this.lastError = error;
       return this.renderFallback(error);
     }
+    const mapOpen = this.isMainPage() && Boolean(shared(KEYMAP_OPEN));
+    if (mapOpen && !this.keymapWasOpen) {
+      this.keymapWasOpen = true;
+      cx.timer.after(1, () => this.keymapHandle?.focus());
+    } else if (!mapOpen && this.keymapWasOpen) {
+      this.keymapWasOpen = false;
+    }
+    if (mapOpen) return keymapOverlayCard(safeColors(), node, this.keymapHandle);
     return node;
   }
+}
+
+/** The map overlay over the active main page while KEYMAP_OPEN: focused on open, Esc or `?` closes it. */
+function keymapOverlayCard(c, node, handle) {
+  const rows = overlayRows();
+  const card = clickable(
+    v_flex()
+      .id("bh-keymap")
+      .role("dialog")
+      .accessibility_label("Keyboard map")
+      .track_focus(handle)
+      .absolute()
+      .bottom(SPACE[5])
+      .left(SPACE[5])
+      .right(SPACE[5])
+      .max_w(480)
+      .gap(SPACE[2])
+      .py(SPACE[3])
+      .px(SPACE[4])
+      .rounded(RADIUS.card)
+      .bg(c.fill)
+      .border_1()
+      .border_color(c.edge)
+      .on_click(() => setShared(KEYMAP_OPEN, false))
+      .on_key_down((e, cx) => {
+        if (keyName(e) !== "escape" && !opensKeymap(e)) return;
+        setShared(KEYMAP_OPEN, false);
+        cx.stop_propagation();
+        cx.notify();
+      })
+      .children(rows.map((r, i) =>
+        h_flex()
+          .id(`bh-keymap-row-${i}`)
+          .w_full()
+          .gap(SPACE[3])
+          .items_center()
+          .child(div().w(76).flex_none().text_size(TYPE_SCALE.metadata).font_semibold().text_color(c.textSecondary).child(r.keys.join(" / ")))
+          .child(div().flex_1().min_w(0).text_size(TYPE_SCALE.body).line_height(`${LINE.md}px`).text_color(c.textPrimary).child(r.action)))),
+    c,
+    "bh-keymap",
+  );
+  return div().relative().size_full().child(node).child(card);
 }
 
 export default BotHerdr;

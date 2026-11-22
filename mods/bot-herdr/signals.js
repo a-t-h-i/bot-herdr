@@ -33,6 +33,9 @@ export const RESUME_MS = 10 * 60000;
  */
 export const OPEN_COUNTS = "bot-herdr.open-questions";
 
+/** Home's needs-you snapshot `{ count, ids }`, kept beside OPEN_COUNTS so polls never clobber it. */
+export const HOME_NEEDS = "bot-herdr.home-needs";
+
 /**
  * Open questions split where the tabs show them: those asked for a plan go to the Plans tab, the
  * rest to the Chat.
@@ -45,6 +48,52 @@ export function openCounts(list) {
     else chat++;
   }
   return { chat, plans };
+}
+
+/** Total items that need you from a `bh home --json` payload. */
+export function needsYouCount(home) {
+  const header = Number(home?.header?.needsYou);
+  if (Number.isFinite(header) && header >= 0) return header;
+  return Array.isArray(home?.needsYou) ? home.needsYou.length : 0;
+}
+
+/** Stable ids of a `bh home` payload's needs-you items, to detect newly arrived ones. */
+export function needsYouIds(home) {
+  if (!Array.isArray(home?.needsYou)) return [];
+  return home.needsYou.map((n, i) => `${n?.kind ?? "need"}:${n?.thread ?? ""}:${n?.ref ?? n?.title ?? i}`);
+}
+
+/** Merges Home's needs-you total into an `OPEN_COUNTS` object without dropping chat/plans. */
+export function withHomeCount(counts, home) {
+  const n = Math.max(0, Number(home) || 0);
+  return { chat: Number(counts?.chat) || 0, plans: Number(counts?.plans) || 0, home: n };
+}
+
+/**
+ * Ids that arrived since `seen`: on the first load (`seen == null`), nothing counts as newly
+ * arrived so only real transitions trigger a one-shot pulse. Returns `{ arrived, seen }`.
+ */
+export function arrivedIds(ids, seen) {
+  const next = new Set((ids ?? []).filter(Boolean).map(String));
+  if (seen == null) return { arrived: [], seen: next };
+  return { arrived: [...next].filter((id) => !seen.has(id)), seen: next };
+}
+
+/**
+ * Items whose `done` flag just turned from false to true since `prev` (a Map of id -> boolean).
+ * On the first load (`prev == null`), nothing counts as newly finished. Returns `{ finished, seen }`.
+ */
+export function newlyDone(items, prev) {
+  const next = new Map();
+  const finished = [];
+  for (const item of items ?? []) {
+    if (!item?.id) continue;
+    const id = String(item.id);
+    const done = Boolean(item.done);
+    next.set(id, done);
+    if (prev != null && prev.get(id) === false && done) finished.push(id);
+  }
+  return { finished, seen: next };
 }
 
 /**
@@ -107,4 +156,114 @@ export function boardAge(at, now = Date.now()) {
 export function boardRows(board, all, limit = BOARD_SHOWN) {
   const newest = [...(board ?? [])].reverse();
   return { rows: all ? newest : newest.slice(0, limit), rest: Math.max(0, newest.length - limit) };
+}
+
+// ---- M6: Queue & steer + tiled agent panes --------------------------------------------------
+
+/** How the composer handles a submit: plain send while idle, queue on Enter while working, steer on Ctrl+Enter while working. */
+export function composerSendMode({ busy = false, steer = false } = {}) {
+  if (!busy) return "send";
+  return steer ? "steer" : "queue";
+}
+
+/** `hc` invocations for steering a working agent: interrupt first, then send. */
+export function steerCommands(address, text) {
+  const addr = String(address ?? "").trim();
+  const body = String(text ?? "").trim();
+  if (!addr || !body) return [];
+  return [["interrupt", addr], ["send", addr, body]];
+}
+
+/** `hc` invocation for delivering a queued message. */
+export function queueCommand(address, text) {
+  const addr = String(address ?? "").trim();
+  const body = String(text ?? "").trim();
+  return addr && body ? ["send", addr, body] : null;
+}
+
+/** The composer placeholder: names queue/steer while the target agent is working. */
+export function composerPlaceholder({ asking = false, busy = false, leadName = "Orchestrator", customPlaceholder = null, fallback = "" } = {}) {
+  if (asking) return "Or type your own reply…";
+  if (busy) return `${leadName || "Orchestrator"} is working. Enter queues, Ctrl+Enter steers…`;
+  return customPlaceholder ?? fallback;
+}
+
+const DEFAULT_MAIN_PANE = {
+  id: "main",
+  type: "block",
+  content: {
+    tab: "active",
+    pane: {
+      gap: 8,
+      radius: 10,
+      background: "background",
+      lone: true,
+      border: { width: 1, color: "border" },
+      focus: { width: 1, color: "accent" },
+      header: { content: { mod: "pane" }, height: 30, position: "top", reveal: "always" },
+    },
+  },
+};
+
+function findNode(node, id) {
+  if (!node || typeof node !== "object") return null;
+  if (node.id === id) return node;
+  for (const child of Array.isArray(node.children) ? node.children : []) {
+    const found = findNode(child, id);
+    if (found) return found;
+  }
+  return null;
+}
+
+/** Unique live agent terminal addresses (up to `max`, default 4) ready to tile side by side. */
+export function tileAddresses(agentList, terminalList = [], max = 4) {
+  const out = [];
+  const seen = new Set();
+  const add = (addr) => {
+    const a = String(addr ?? "").trim();
+    if (!a || seen.has(a) || out.length >= max) return;
+    seen.add(a);
+    out.push(a);
+  };
+  for (const a of Array.isArray(agentList) ? agentList : []) add(a?.address);
+  for (const t of Array.isArray(terminalList) ? terminalList : []) {
+    if (t?.state === "live" && (t?.program?.agent || t?.status)) add(t.address);
+  }
+  return out;
+}
+
+/** Whether the layout's `panes` row is currently showing tiled terminal blocks. */
+export function isTiledLayout(root) {
+  const panes = findNode(root, "panes");
+  if (!panes || !Array.isArray(panes.children)) return false;
+  return panes.children.some((c) => typeof c?.content?.terminal === "string" && !c.hidden);
+}
+
+/** Returns a cloned layout with `panes` tiled to `addresses` (>= 2), or restored to single `main` pane when < 2. */
+export function withTiledPanes(root, addresses = []) {
+  if (!root || typeof root !== "object") return null;
+  const copy = JSON.parse(JSON.stringify(root));
+  const panes = findNode(copy, "panes");
+  if (!panes || !Array.isArray(panes.children)) return copy;
+  const main = panes.children.find((c) => c?.id === "main") ?? JSON.parse(JSON.stringify(DEFAULT_MAIN_PANE));
+  const list = [...new Set((Array.isArray(addresses) ? addresses : []).map((a) => String(a ?? "").trim()).filter(Boolean))].slice(0, 4);
+  if (list.length < 2) {
+    delete main.hidden;
+    panes.children = [main];
+    return copy;
+  }
+  main.hidden = true;
+  panes.gap = panes.gap ?? 8;
+  const tiles = list.map((addr, i) => ({
+    id: `tile-${i}`,
+    type: "block",
+    size: { weight: 1 },
+    radius: 10,
+    background: "background",
+    border: { width: 1, color: "border" },
+    focus: { border: { width: 1, color: "accent" } },
+    content: { terminal: addr },
+  }));
+  panes.children = [main, ...tiles];
+  return copy;
 }

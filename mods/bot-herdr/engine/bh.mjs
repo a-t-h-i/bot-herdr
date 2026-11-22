@@ -78,8 +78,12 @@ Redesign foundation (Home and Threads are real; approvals and review land with M
                                   one task is one thread: state, agents, steps, conversation,
                                   plan, changes, and the one-line live summary (peek: output,
                                   question, reply target)
-  bh approvals                    approval cards for commands agents may not run on their own
-  bh review                       review comments on a change
+  bh thread fork <id> "<what to carry>" [--title T] [--json]
+                                  fork a thread into a new task carrying the given context
+  bh approvals list|answer <id> once|project|deny [--json]
+                                  list pending approval cards or answer one (project adds to allowlist)
+  bh review diff|list|add|remove|send <task> […] [--json]
+                                  view a task file diff, manage inline review comments, or send them to Dev
 
 GitHub issues (autonomous intake, triage/decline, bundling, screenshot proof & PR delivery)
   bh issues list [--state open|closed|all] [--label L] [--repo owner/repo]  cached issues, triage & local links (no network)

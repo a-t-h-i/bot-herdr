@@ -228,7 +228,7 @@ export function currentTask(root) {
   return tasks.find((t) => t.status === "active") ?? tasks[0] ?? null;
 }
 
-export function newTask(root, { request, title, plan = null, track = "full", by = null, steps = [], mode = "task", goal = null, github = null }) {
+export function newTask(root, { request, title, plan = null, track = "full", by = null, steps = [], mode = "task", goal = null, github = null, forkOf = null }) {
   const task = {
     id: newId("t"),
     title: title?.trim() || titleFrom(request),
@@ -237,6 +237,7 @@ export function newTask(root, { request, title, plan = null, track = "full", by 
     mode: mode === "goal" ? "goal" : "task",
     goal: goal ?? null,
     ...(github ? { github } : {}),
+    ...(forkOf ? { forkOf } : {}),
     track,
     plan,
     by,

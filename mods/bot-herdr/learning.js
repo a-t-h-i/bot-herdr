@@ -10,7 +10,7 @@ import { actionButton } from "./button.js";
 import { stateView, pill } from "./switch.js";
 import { sectionLabel } from "./plandoc.js";
 import { colors } from "./theme.js";
-import { activePage, sendFromChat } from "./pages.js";
+import { sendFromChat, viewShown } from "./pages.js";
 import { bh, bhJson, projectDir } from "./bh.js";
 import { alpha } from "./working.js";
 import {
@@ -69,21 +69,6 @@ function searchBox(c, state, { hasValue, onClear }) {
         a11y: "Clear search",
       }),
     ));
-}
-
-/** Quiet neutral metadata tag for a lesson's primary provenance source. */
-function sourcePill(c, label) {
-  return div()
-    .flex_none()
-    .px(SPACE[2])
-    .py(1)
-    .rounded_full()
-    .bg(c.well)
-    .border_1()
-    .border_color(alpha(c.edge, 0.7))
-    .text_size(TYPE.xs)
-    .text_color(c.muted)
-    .child(label);
 }
 
 /** Circular read-state indicator: green check when read, quiet hollow circle when unread. */
@@ -155,7 +140,7 @@ export class Learning {
   init(_given, cx) {
     this.dir = projectDir();
     this.width = 960;
-    this.shown = activePage() === "learning";
+    this.shown = viewShown("learning");
     this.updatedAt = Number(shared(LEARN_UPDATED) ?? 0);
     this.search = InputState.new({ placeholder: "Search concepts or decisions…" });
     this.search.on("change", (_e, cx) => cx.notify());
@@ -204,7 +189,7 @@ export class Learning {
 
   syncContext(cx) {
     const dir = projectDir();
-    const openNow = activePage() === "learning";
+    const openNow = viewShown("learning");
     const sharedAt = Number(shared(LEARN_UPDATED) ?? 0);
     if (dir !== this.dir) {
       this.resetState(dir);
@@ -265,7 +250,6 @@ export class Learning {
   heroCard(c, query) {
     const prog = readProgress(this.lessons);
     const pending = this.candidatesCount;
-    const pendingLabel = pending === 1 ? "1 new decision to explain" : `${pending} new decisions to explain`;
     return v_flex()
       .id("bh-learning-hero")
       .flex_none()
@@ -317,8 +301,7 @@ export class Learning {
           .gap(SPACE[3])
           .items_center()
           .flex_wrap()
-          .child(readProgressBar(c, prog))
-          .when(pending > 0, (el) => el.child(pill(c, pendingLabel, c.warning))),
+          .child(readProgressBar(c, prog)),
       )
       .child(searchBox(c, this.search, {
         hasValue: Boolean(query.trim()),
@@ -447,7 +430,6 @@ export class Learning {
               .flex_wrap()
               .child(div().text_size(TYPE.md).line_height(`${LINE.md}px`).font_semibold().text_color(c.ink)
                 .child(lesson.title || lesson.slug))
-              .child(sourcePill(c, primarySourceLabel(lesson)))
               .when(Boolean(lesson.stale), (el) => el.child(pill(c, "Stale", c.warning))),
           )
           .when(Boolean(lesson.summary), (el) => el.child(
@@ -460,8 +442,7 @@ export class Learning {
           .flex_none()
           .gap(SPACE[3])
           .items_center()
-          .child(div().flex_none().text_size(TYPE.xs).text_color(c.muted).child(meta))
-          .child(div().flex_none().text_size(TYPE.sm).font_medium().text_color(c.accent).child("Open →")),
+          .child(div().flex_none().text_size(TYPE.xs).text_color(c.muted).child(meta)),
       );
     return clickable(row, c, `bh-learn-row-${lesson.slug}`);
   }
@@ -772,7 +753,7 @@ export class LearningDoc {
                 div().text_size(TYPE.xs).text_color(c.muted).child(`· ${link.note}`),
               )),
             c,
-            `bh-learn-link-${i}`,
+            `bh-learn-link-${i}`, { edge: true },
           ))),
       );
   }

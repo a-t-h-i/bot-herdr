@@ -12,6 +12,7 @@ import { dirname, join } from "node:path";
 import { palette, agentHue } from "../mods/bot-herdr/look.js";
 import {
   PRESET_NAMES,
+  animationCounters,
   auditThemes,
   compositeOver,
   contrastRatio,
@@ -181,6 +182,18 @@ test("the Fix table fires on today's clutter and scores zero on a quiet page", (
   assert.equal(quiet.agentColourFills.value, 0);
 });
 
+test("a truncated body-size JSON line is raw machine text; a folded machineLine is not", () => {
+  const json = '{ \\"command\\": \\"ui-audit\\", \\"exit\\": { \\"pass\\": false }, \\"failures\\": [] }';
+  // M4's Conversation entry: the contract folded to one line, but at body size in the UI face.
+  const raw = spec('div .truncate .text_size[Number(13.0)] .text_color[Str("#eeeeef")]', `  text "${json}"`);
+  // machinetext.js machineLine: one muted metadata-size (mono when the app has a code face) line.
+  const folded = spec('div .truncate .text_size[Number(12.0)] .text_color[Str("#a1a2a3")]', `  text "${json}"`);
+  const mono = spec('div .truncate .text_size[Number(13.0)] .font_family[Str("Mono")]', `  text "${json}"`);
+  assert.equal(fixCounters({ "thread-conversation": raw }, { colors: graphite }).rawMachineText.value, 1);
+  assert.equal(fixCounters({ "thread-conversation": folded }, { colors: graphite }).rawMachineText.value, 0);
+  assert.equal(fixCounters({ "thread-conversation": mono }, { colors: graphite }).rawMachineText.value, 0);
+});
+
 test("each selection idiom is its own signature, so the counter cannot hide a second style", () => {
   const two = spec(
     'div :aria_selected[Bool(true)] .border_1 .border_color[Str("' + accent + '")]',
@@ -191,6 +204,45 @@ test("each selection idiom is its own signature, so the counter cannot hide a se
   const one = spec('div :aria_selected[Bool(true)] .border_1 .border_color[Str("' + accent + '")]', '  text "tab"');
   assert.equal(fixCounters({ two }, { colors: graphite }).selectionStyles.value, 2);
   assert.equal(fixCounters({ one }, { colors: graphite }).selectionStyles.value, 1);
+});
+
+test("tabs underline and segmented choices fill grey; one item doing both is two idioms", () => {
+  const well = graphite.well;
+  const underline = '.border_b[Number(2.0)] .border_color[Str("' + accent + '")] .text_color[Str("' + accent + '")]';
+  // M4: every strip drew its picked item underlined on a grey track.
+  const both = spec('h_flex .bg[Str("' + well + '")]', '  div :aria_selected[Bool(true)] ' + underline, '    text "Plan"');
+  const split = spec(
+    'h_flex',
+    '  div :aria_selected[Bool(true)] ' + underline,
+    '    text "Plan"',
+    'h_flex .bg[Str("' + well + '")]',
+    '  div :aria_selected[Bool(true)] .bg[Str("' + graphite.fill + '")]',
+    '    text "7 days"',
+  );
+  assert.equal(fixCounters({ both }, { colors: graphite }).selectionStyles.value, 2);
+  assert.equal(fixCounters({ split }, { colors: graphite }).selectionStyles.value, 1);
+});
+
+test("the animation counters read the activity glyphs from the printed spec: cycles, slots, ticks120, frozen", () => {
+  // A running cycle: the glyph has its width and a frames attr at the one 120 ms tick.
+  // A frozen cycle (Reduce motion): the glyph is still in its slot, its first frame a text child.
+  const glyphs = [
+    'div :id[Str("bh-agent-activity-1-glyph")] .w[Number(31.0)] :frames[Number(120.0), Str("⠁"), Str("⠂"), Str("⠄")]',
+    'div :id[Str("bh-agent-activity-2-glyph")] .w[Number(31.0)]',
+    '  text "⠁"',
+    'div :id[Str("bh-agent-activity-3-glyph")] .w[Number(31.0)] :frames[Number(60.0), Str("⠁")]',
+  ];
+  const anim = animationCounters(spec(glyphs.join("\n")));
+  assert.equal(anim.workingCycles, 3);
+  assert.equal(anim.glyphSlots, 3);
+  assert.equal(anim.ticks120, 1, "only the cycle on the one 120 ms tick counts");
+  assert.equal(anim.frozenGlyphs, 1, "the frozen cycle (first frame as a text child, no frames attr)");
+  // Anything that is not a -glyph is not a cycle, even with frames on it.
+  const none = animationCounters(spec('div :id[Str("plain-glyphless")] :frames[Number(120.0), Str("⠁")]'));
+  assert.equal(none.workingCycles, 0);
+  // A non-frozen cycle never counts as frozen, even though its idle form has no child text.
+  const live = animationCounters(spec('div :id[Str("bh-agent-activity-4-glyph")] .w[Number(31.0)]'));
+  assert.equal(live.frozenGlyphs, 0);
 });
 
 test("structural counters measure keyboard and label coverage per page", () => {
@@ -233,9 +285,10 @@ test("the shot plan is one page-theme PNG for every audited page and key theme",
   assert.equal(plan.pages.length, AUDIT_PAGES.length);
   assert.deepEqual(plan.themes, ["graphite", "paper", "plum-dark", "win98"]);
   assert.equal(plan.files.length, AUDIT_PAGES.length * SHOT_THEMES.length);
-  assert.deepEqual(plan.files.slice(0, 4).map((f) => f.file), SHOT_THEMES.map((t) => join("/shots", `chat-${t.name}.png`)));
-  assert.ok(plan.files.some((f) => f.file === join("/shots", "tasks-board-win98.png")));
-  assert.ok(plan.files.some((f) => f.file === join("/shots", "settings-general-paper.png")));
+  assert.deepEqual(plan.files.slice(0, 4).map((f) => f.file), SHOT_THEMES.map((t) => join("/shots", `home-${t.name}.png`)), "Home is the first audited page");
+  assert.ok(plan.files.some((f) => f.file === join("/shots", "library-issues-win98.png")));
+  assert.ok(plan.files.some((f) => f.file === join("/shots", "settings-usage-paper.png")));
+  assert.ok(plan.files.some((f) => f.file === join("/shots", "tasks-board-win98.png")), "a page the navigation replaced is still audited");
   assert.equal(new Set(plan.files.map((f) => f.file)).size, plan.files.length);
 });
 

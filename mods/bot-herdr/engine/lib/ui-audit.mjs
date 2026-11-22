@@ -12,7 +12,7 @@ import { dirname, join, relative } from "node:path";
 import { resolveHerdrAppBin } from "../../../../install.mjs";
 import { palette } from "../../look.js";
 import { AUDIT_PAGES, WRAPPER_MAIN, fixtureSource } from "./ui-audit-fixtures.mjs";
-import { PRESET_NAMES, a11yCapabilities, a11yMarkdown, auditThemes, featurePresence, fixCounters, flattenThemeFile, parseSpec, structuralCounters } from "./ui-audit-spec.mjs";
+import { PRESET_NAMES, a11yCapabilities, a11yMarkdown, auditThemes, featurePresence, fixCounters, flattenThemeFile, parseSpec, structuralCounters, animationTotals } from "./ui-audit-spec.mjs";
 import { shotsStage } from "./ui-audit-shots.mjs";
 
 const CHECK_TIMEOUT_MS = 180000;
@@ -60,6 +60,7 @@ function audit(root, flags) {
     accentButtonsPerView: measured.structural.accentButtonsPerView,
     keyboardPathCoverage: measured.structural.keyboardPathCoverage,
     accessibleLabelCoverage: measured.structural.accessibleLabelCoverage,
+    animation: measured.structural.animation,
     fixes: measured.counts,
     tokens: measured.tokens,
     contrast: { themes: setup.contrast, passed: setup.contrast.every((t) => !t.failures.length) },
@@ -246,6 +247,59 @@ function treeHash(root) {
   return hash.digest("hex");
 }
 
+/**
+ * New pages have no M1 baseline of their own. Each is compared against the M1 baseline of the
+ * page(s) it replaces — summed when one page takes over several — never a freshly written number,
+ * so extending the navigation cannot loosen the "fewer visible elements" check.
+ */
+export const REPLACES = {
+  // Home is the overview Tasks used to be: everything running, with what needs you on top.
+  home: ["tasks"],
+  // The thread list is the Tasks and Plans lists merged: one row per task, and per plan not yet a task.
+  threads: ["tasks", "plans"],
+  // The Orchestrator's thread is the chat page, moved under its breadcrumb.
+  "thread-chat": ["chat"],
+  // A thread's Conversation is the chat and the task board in one feed, with the goal row and composer.
+  "thread-conversation": ["chat", "tasks-board"],
+  // Plan is the Plans page's plan document; Steps the Tasks page's step cards.
+  "thread-plan": ["plans"],
+  "thread-steps": ["tasks"],
+  // Changes was herdr's own Changes panel (no spec tree of ours); the task page held its git state.
+  "thread-changes": ["tasks"],
+  // The peek drawer opens over the thread list, so it is that page plus the drawer.
+  peek: ["tasks", "plans"],
+  // The Fleet list is the live agents Tasks used to name per task, without the task detail.
+  "agents-fleet": ["tasks"],
+  // The old Terminals destination had no body spec; the bar (switch) was all the audit saw of it.
+  "agents-terminals": ["switch"],
+  // Library shows one sub-tab at a time, so each is compared with the one page it replaces;
+  // Scripts had no page of its own and takes Knowledge's, where scripts were listed.
+  "library-knowledge": ["knowledge"],
+  "library-learning": ["learning"],
+  "library-scripts": ["knowledge"],
+  "library-issues": ["issues"],
+  // Settings keeps its own baseline; Usage is the Metrics page moved inside it.
+  "settings-usage": ["metrics"],
+};
+
+/** A page's visible-element ceiling from the M1 baseline: its own, or the pages it replaces. */
+export function baselineCeiling(page, previous) {
+  const replaces = REPLACES[page];
+  if (!replaces) return previous?.[page];
+  const known = replaces.map((id) => previous?.[id]).filter((n) => typeof n === "number");
+  return known.length === replaces.length ? known.reduce((n, x) => n + x, 0) : undefined;
+}
+
+/** What each rendered page must come under, and which M1 page(s) set the bar. */
+function ceilingsFor(pages, previous) {
+  const out = {};
+  for (const page of Object.keys(pages)) {
+    const ceiling = baselineCeiling(page, previous);
+    if (ceiling !== undefined) out[page] = { elements: ceiling, from: REPLACES[page] ?? [page] };
+  }
+  return out;
+}
+
 /** Reads or writes the visible-element baseline; `--baseline write` records today's counts. */
 function baselineStage(root, flags, structural) {
   const file = join(root, BASELINE);
@@ -253,10 +307,10 @@ function baselineStage(root, flags, structural) {
   const previous = readBaseline(file);
   if (flags.baseline === "write" && !flags.norender && !flags.page) {
     writeFileSync(file, `${JSON.stringify({ at: new Date().toISOString(), treeHash: treeHash(root), pages }, null, 2)}\n`);
-    return { info: { file: BASELINE, written: true, pages }, page: pages };
+    return { info: { file: BASELINE, written: true, pages }, page: pages, ceilings: null };
   }
-  if (flags.baseline === "write") return { info: { file: BASELINE, written: false, note: "--baseline write needs every page (no --page or --norender)" }, page: pages };
-  return { info: { file: BASELINE, written: false, compared: previous ? previous.pages : null }, page: pages };
+  if (flags.baseline === "write") return { info: { file: BASELINE, written: false, note: "--baseline write needs every page (no --page or --norender)" }, page: pages, ceilings: null };
+  return { info: { file: BASELINE, written: false, compared: previous ? previous.pages : null, replaces: REPLACES }, page: pages, ceilings: previous ? ceilingsFor(pages, previous.pages) : null };
 }
 
 function readBaseline(file) {
@@ -324,8 +378,10 @@ function pageFailures(structural, baseline) {
   for (const [page, row] of Object.entries(structural.perPage)) {
     if (row.renderError) failures.push({ check: "renderErrors", page, value: 1, target: 0, message: `${page} did not render: ${row.renderError}` });
     if (row.accentButtons > 1) failures.push({ check: "accentButtonsPerView", page, value: row.accentButtons, target: 1, message: `${page} draws ${row.accentButtons} accent buttons` });
-    const before = baseline.info.compared?.[page];
-    if (before !== undefined && baseline.page[page] >= before) failures.push({ check: "visibleElements", page, value: baseline.page[page], target: before, message: `${page} draws ${baseline.page[page]} elements, not under the M1 baseline of ${before}` });
+    const ceiling = baseline.ceilings?.[page];
+    if (!ceiling || baseline.page[page] < ceiling.elements) continue;
+    const from = ceiling.from.includes(page) ? "the M1 baseline" : `the M1 baseline of what it replaces (${ceiling.from.join(" + ")})`;
+    failures.push({ check: "visibleElements", page, value: baseline.page[page], target: ceiling.elements, message: `${page} draws ${baseline.page[page]} elements, not under ${from} of ${ceiling.elements}` });
   }
   return failures;
 }
@@ -356,6 +412,9 @@ function reportText(result) {
     "",
     "Pages:",
     ...Object.entries(result.pages).map(([page, row]) => `  ${page.padEnd(16)} ${String(row.visibleElements).padStart(4)} elements · keyboard ${Math.round(row.keyboardPath * 100)}% · labels ${Math.round(row.accessibleLabel * 100)}%${row.renderError ? ` · render error: ${row.renderError}` : ""}`),
+    "",
+    "Animation (the activity glyphs):",
+    ...Object.entries(result.animation).map(([k, v]) => `  ${k.padEnd(14)} ${String(v)}`),
     "",
     `Contrast: ${result.contrast.themes.filter((t) => !t.failures.length).length}/${result.contrast.themes.length} themes clean`,
     `Hex outside look.js: ${result.tokens.hexOutsideTokens} · keyboard ${Math.round(result.keyboardPathCoverage * 100)}% · labels ${Math.round(result.accessibleLabelCoverage * 100)}% · primary buttons max ${result.accentButtonsPerView}/view`,

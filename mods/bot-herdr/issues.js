@@ -12,7 +12,7 @@ import { stateView, pill, filterChip, chipHasResults } from "./switch.js";
 import { markdownWithFoldedCode } from "./machinetext.js";
 import { openPlan, sectionLabel } from "./plandoc.js";
 import { colors } from "./theme.js";
-import { activePage, sendFromChat, showPage, OPEN_TASK } from "./pages.js";
+import { sendFromChat, showPage, viewShown, OPEN_TASK } from "./pages.js";
 import { bh, bhJson, projectDir } from "./bh.js";
 import { openLink } from "./viewer.js";
 import { alpha } from "./working.js";
@@ -154,7 +154,7 @@ export class Issues {
     this.dir = projectDir();
     this.width = 960;
     this.height = 720;
-    this.shown = activePage() === "issues";
+    this.shown = viewShown("issues");
     this.handle = cx.focus_handle();
     this.search = InputState.new({ placeholder: "Search issues, #number, or label..." });
     this.search.on("change", (_e, cx) => cx.notify());
@@ -462,7 +462,7 @@ export class Issues {
 
   render(cx) {
     const dir = projectDir();
-    const openNow = activePage() === "issues";
+    const openNow = viewShown("issues");
     if (dir !== this.dir) {
       this.switchTo(dir);
       cx.timer.after(1, (cx) => this.loadList(cx, dir, { allowAutoFetch: openNow }));
@@ -537,13 +537,10 @@ export class Issues {
       );
   }
 
-  /** Top status strip: repo name, transport, fetched age, auth badge, and explicit Refresh button. */
+  /** Top status strip: the repo's name, transport and the explicit Refresh button. */
   headerStrip(c) {
     const repo = this.data?.repo || "GitHub Issues";
     const transport = this.data?.transport === "gh" ? "gh CLI" : this.data?.transport === "rest" ? "REST" : null;
-    const age = this.data?.fetchedAt ? `Updated ${formatRelativeAge(this.data.fetchedAt)}` : "Not fetched yet";
-    const authLabel = this.data?.canWrite ? "Read/write" : this.data?.authenticated ? "Read-only" : "Unauthenticated";
-    const authTone = this.data?.canWrite ? c.success : this.data?.authenticated ? c.warning : c.muted;
 
     return h_flex()
       .id("bh-issues-header")
@@ -560,8 +557,6 @@ export class Issues {
       // No icon in front of the title: the repo's name is the header.
       .child(div().flex_1().min_w(0).truncate().text_size(TYPE.md).font_semibold().text_color(c.ink).child(repo))
       .when(Boolean(transport), (el) => el.child(labelChip(c, transport)))
-      .when(Boolean(this.data), (el) => el.child(pill(c, authLabel, authTone)))
-      .child(div().flex_none().text_size(TYPE.xs).text_color(c.muted).child(age))
       .child(actionButton(c, "bh-issues-refresh", this.fetching ? "Refreshing…" : "Refresh", (_e, cx) => this.refreshFromGitHub(cx), {
         icon: "refresh-cw",
         tone: "secondary",
@@ -629,9 +624,7 @@ export class Issues {
       .pr(narrow ? 0 : SPACE[4])
       .pb(SPACE[4])
       .child(h_flex().flex_none().items_center().justify_between().gap(SPACE[2])
-        .child(div().text_size(TYPE.xl).font_semibold().child("Issues"))
-        // A zero count is not drawn (Principle 3).
-        .when(counts.open > 0, (el) => el.child(pill(c, `${counts.open} open`, c.muted))))
+        .child(div().text_size(TYPE.xl).font_semibold().child("Issues")))
       .child(inputBox(c, this.search, {
         icon: "search",
         clearId: "bh-issues-search-clear",
@@ -748,7 +741,7 @@ export class Issues {
               .child(svg(ICON("comment")).size(GLYPH.xs))
               .child(String(cCount)))))),
       c,
-      `bh-issue-row-${issue.number}`,
+      `bh-issue-row-${issue.number}`, { edge: true },
     );
   }
 
@@ -809,7 +802,6 @@ export class Issues {
   }
 
   detailHeader(c, issue, closed, summary) {
-    const age = formatRelativeAge(issue.updatedAt || issue.createdAt);
     const labels = Array.isArray(issue.labels) ? issue.labels : [];
     const triage = issue.triage;
     const triageText = triage
@@ -836,9 +828,7 @@ export class Issues {
         .child(pill(c, closed ? "Closed" : "Open", closed ? c.muted : c.success))
         .when(Boolean(triageText), (el) => el.child(pill(c, triageText, triage.decision === "decline" ? c.danger : c.success)))
         .children(summary.pills.map((p) => pill(c, p.label, toneColor(c, p.tone))))
-        .children(labels.map((l) => labelChip(c, l)))
-        .when(Boolean(issue.author), (el) => el.child(div().text_size(TYPE.xs).text_color(c.muted).child(`by @${issue.author}`)))
-        .when(Boolean(age), (el) => el.child(div().text_size(TYPE.xs).text_color(c.faint).child(age))))
+        .children(labels.map((l) => labelChip(c, l))))
       .when(Boolean(triage?.reason), (el) => el.child(
         div().text_size(TYPE.xs).text_color(c.muted).child(`Triage note: ${triage.reason}`),
       ));

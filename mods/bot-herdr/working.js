@@ -132,3 +132,86 @@ export function onTurn(list, was = null, step = 0) {
   const index = ((at < 0 ? 0 : at) + step) % list.length;
   return { agent: list[index], index, count: list.length };
 }
+
+/**
+ * The working animations: each activity its own glyph cycle and verbs, so a glance says what an
+ * agent is doing. Every cycle is text frames on the one 120 ms tick (look.js TICK_MS); `slot`
+ * is the glyph's fixed width in characters, so nothing beside it moves as the frames change.
+ */
+export const ACTIVITIES = {
+  thinking: { frames: ["⠁", "⠂", "⠄", "⡀", "⢀", "⠠", "⠐", "⠈"], verbs: ["Thinking", "Weighing", "Mulling"] },
+  reading: { frames: ["▖", "▘", "▝", "▗"], verbs: ["Reading", "Scanning"] },
+  editing: { frames: ["▁", "▃", "▅", "▇", "▅", "▃"], verbs: ["Writing", "Shaping"] },
+  testing: { frames: ["▱▱▱", "▰▱▱", "▰▰▱", "▰▰▰"], verbs: ["Testing", "Checking"] },
+  waiting: { frames: ["·", "•", "●", "•"], verbs: ["Waiting"] },
+  orchestrating: { frames: ["◜", "◝", "◞", "◟"], verbs: ["Coordinating"] },
+};
+
+/** The activities in the spec's order. */
+export const ACTIVITY_NAMES = Object.keys(ACTIVITIES);
+
+/** The glyph slot's width in characters: the widest frame of any cycle. */
+export const GLYPH_CHARS = Math.max(...Object.values(ACTIVITIES).flatMap((a) => a.frames.map((f) => [...f].length)));
+
+/** A verb shows for at least this long before the next takes its place. */
+export const VERB_MS = 4000;
+
+const TESTS = /\b(test|tests|check|lint|tsc|typecheck|vitest|jest|pytest|mocha|ui-audit|verify)\b/i;
+const READS = /^(Read|Reading|Search|Searching|Find|Finding|List|Listing|Fetch|Fetching|Search the web)\b/i;
+const EDITS = /^(Edit|Editing|Write|Writing)\b/i;
+const WAITS = /^(Wait|Waiting)\b|\b(hc wait|bh inbox|bh board read)\b/i;
+const LEADS = /^(Start a subagent)\b|\b(bh spawn|bh brief|hc send|bh merge)\b/;
+
+/**
+ * What an agent is doing, from its latest activity line (runner.mjs toolLine: "Read src/a.js",
+ * "Run npm test") and its role: one of ACTIVITY_NAMES. No line is thinking; an Orchestrator
+ * between tools is coordinating.
+ */
+export function activityOf({ line = null, role = null } = {}) {
+  const text = String(line ?? "").trim();
+  const lead = roleOf(role) === "oracle";
+  if (!text) return lead ? "orchestrating" : "thinking";
+  if (WAITS.test(text)) return "waiting";
+  if (LEADS.test(text)) return "orchestrating";
+  if (/^Run\b/.test(text)) return TESTS.test(text) ? "testing" : lead ? "orchestrating" : "thinking";
+  if (READS.test(text)) return "reading";
+  if (EDITS.test(text)) return "editing";
+  if (TESTS.test(text)) return "testing";
+  return lead ? "orchestrating" : "thinking";
+}
+
+/**
+ * The verb an activity shows at `now`: its verbs take turns on a VERB_MS clock, so a verb never
+ * changes sooner than every 4 s. Waiting names who it waits on when `on` is given ("Waiting on QA").
+ */
+export function verbFor(activity, now = Date.now(), on = null) {
+  const set = ACTIVITIES[activity] ?? ACTIVITIES.thinking;
+  const verb = set.verbs[Math.floor(Math.max(0, Number(now) || 0) / VERB_MS) % set.verbs.length];
+  return activity === "waiting" && on ? `${verb} on ${on}` : verb;
+}
+
+/** The longest verb any activity shows (waiting with its longest "on" name), for the verb slot's width. */
+export function longestVerb(names = []) {
+  const waits = names.map((n) => `Waiting on ${n}`);
+  return [...Object.values(ACTIVITIES).flatMap((a) => a.verbs), ...waits].reduce((a, b) => (b.length > a.length ? b : a), "");
+}
+
+/** An activity's frames as drawn: the whole cycle, or only its first glyph while motion is reduced. */
+export function framesFor(activity, reduced = false) {
+  const set = ACTIVITIES[activity] ?? ACTIVITIES.thinking;
+  return reduced ? [set.frames[0]] : set.frames.slice();
+}
+
+/** Who a waiting line names ("Wait on qa", "hc wait qa-m5"): the role's word, or null. */
+export function waitingOn(line) {
+  const m = /\b(?:wait(?:ing)?(?: on| for)?|hc wait)\s+@?([a-z][\w-]*)/i.exec(String(line ?? ""));
+  if (!m) return null;
+  const role = roleOf(m[1].split(/[-_]/)[0]);
+  const names = { qa: "QA", dev: "Dev", design: "Design", scout: "Scout", research: "Research", planner: "Planner", oracle: "Orchestrator" };
+  return names[role] ?? m[1];
+}
+
+/** The avatar's breathe while its agent works: opacity 0.7 to 1.0; null while it is not working. */
+export function breatheFor(working) {
+  return working ? { from: 0.7, to: 1, period: 2400, easing: "ease-in-out" } : null;
+}

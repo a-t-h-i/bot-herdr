@@ -206,20 +206,31 @@ test("static security & GPUI guards on learning.js, pages.js, main.js, layout, a
   assert.doesNotMatch(viewCodeOnly, /\bIntl\b/, "learningview.js must never use Intl");
 
   const pagesSrc = readFileSync(join(ROOT, "mods", "bot-herdr", "pages.js"), "utf8");
-  const knowledgeIdx = pagesSrc.indexOf('id: "knowledge"');
-  const learningIdx = pagesSrc.indexOf('id: "learning"');
-  const metricsIdx = pagesSrc.indexOf('id: "metrics"');
-  assert.ok(knowledgeIdx > -1 && learningIdx > knowledgeIdx && metricsIdx > learningIdx, "pages.js must register learning right after knowledge");
+  const order = ['id: "home"', 'id: "threads"', 'id: "agents"', 'id: "library"', 'id: "settings"'].map((needle) => pagesSrc.indexOf(needle));
+  assert.ok(order.every((at) => at > -1), "pages.js must register Home, Threads, Agents, Library and Settings");
+  assert.deepEqual([...order].sort((a, b) => a - b), order, "pages.js registers the five destinations in top-bar order");
+
+  // The Knowledge | Learning | Scripts | Issues sub-tabs live in Library now, learning right after
+  // knowledge (the order the nine-page bar used to keep).
+  const librarySrc = readFileSync(join(ROOT, "mods", "bot-herdr", "library.js"), "utf8");
+  const knowledgeIdx = librarySrc.indexOf('id: "knowledge"');
+  const learningIdx = librarySrc.indexOf('id: "learning"');
+  assert.ok(knowledgeIdx > -1 && learningIdx > knowledgeIdx, "library.js must register learning right after knowledge");
 
   const mainSrc = readFileSync(join(ROOT, "mods", "bot-herdr", "main.js"), "utf8");
   assert.match(mainSrc, /learning:\s*Learning/, "main.js must register learning view");
   assert.match(mainSrc, /"learning-doc":\s*LearningDoc/, "main.js must register learning-doc view");
+  assert.match(mainSrc, /library:\s*Library/, "main.js must register library view");
 
   const layout = JSON.parse(readFileSync(join(ROOT, "layouts", "bot-herdr.json"), "utf8"));
   const find = (n, id) => (n?.id === id ? n : (n?.children ?? []).reduce((a, c) => a || find(c, id), null));
-  assert.equal(find(layout, "switch").size.px, 760);
-  const pageIds = find(layout, "pages").children.map((c) => c.id);
-  assert.equal(pageIds[pageIds.indexOf("knowledge") + 1], "learning");
+  assert.equal(find(layout, "tabs"), null, "the top-bar tabs strip is gone");
+  assert.equal(find(layout, "switch").window_drag, true, "the five destinations fill the top bar");
+  assert.deepEqual(find(layout, "pages").children.map((c) => c.id), ["home", "threads", "agents", "library", "settings"]);
+  assert.equal(find(layout, "pages").active, "home", "Home opens by default");
+  assert.deepEqual(find(layout, "stage").children.map((c) => c.id), ["pages", "terminals"], "Agents › Terminals is herdr's own pane stage");
+  assert.deepEqual(find(layout, "status").content, { mod: "bot-herdr", props: { view: "status" } }, "the status bar is the mod's own slim bar");
+  assert.match(mainSrc, /status:\s*StatusBar/, "main.js must register the status bar view");
 
   const iconPath = join(ROOT, "mods", "bot-herdr", "icons", "page-learning.svg");
   assert.equal(existsSync(iconPath), true, "icons/page-learning.svg must exist");

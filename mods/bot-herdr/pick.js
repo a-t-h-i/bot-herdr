@@ -13,7 +13,7 @@
 import { div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { props, settings, setShared, closeOverlay, openOverlay } from "herdr";
-import { SIZE, ICON, TYPE, SPACE, CONTROL, ROW, CHIP, DOT, HAIR, GLYPH, TILE_INK, clickable } from "./look.js";
+import { SIZE, ICON, TYPE, SPACE, CONTROL, ROW, CHIP, DOT, HAIR, GLYPH, TILE_INK, clickable, looping } from "./look.js";
 import { actionButton } from "./button.js";
 import { colors } from "./theme.js";
 
@@ -187,7 +187,7 @@ export class Pick {
                 .on_click((_ev, cx) => this.chooseEffort(e.value, cx))
                 .child(e.label),
               c,
-              `bh-pick-effort-${i}`,
+              `bh-pick-effort-${i}`, { edge: true },
             );
           }))),
       ))
@@ -211,7 +211,7 @@ export class Pick {
           .px(SPACE[3])
           .gap(SPACE[3])
           .items_center()
-          .child(div().size(DOT).rounded_full().bg(c.accent).opacity(0.5).loop("opacity", { from: 0.25, to: 1, period: 1200, easing: "ease-in-out" }))
+          .child(looping(div().size(DOT).rounded_full().bg(c.accent).opacity(0.5), "opacity", { from: 0.25, to: 1, period: 1200, easing: "ease-in-out" }))
           .child(div().text_size(TYPE.md).text_color(c.muted).child("Asking the harness…")),
       ))
       .when(!this.p.loading && Boolean(this.search) && !options.length, (el) => el.child(

@@ -39,6 +39,21 @@ test("arguments: flags, booleans that take no value, repeated flags and --data",
   assert.equal(bodyText({ data: enc('{"a": "b c"}') }, ["ignored"]), '{"a": "b c"}');
 });
 
+test("app home: the engine's checkout when it is a herdr app home, else the user's", async () => {
+  const { appHomeRoot } = await lib("lib/core.mjs");
+  const app = mkdtempSync(join(tmp, "app-home-"));
+  mkdirSync(join(app, "mods/bot-herdr/engine/lib"), { recursive: true });
+  writeFileSync(join(app, "settings.json"), "{}\n");
+  assert.equal(appHomeRoot(join(app, "mods/bot-herdr/engine")), app);
+  writeFileSync(join(app, "package.json"), "{}\n");
+  assert.equal(appHomeRoot(join(app, "mods/bot-herdr/engine")), null, "a package.json means it is not an app home");
+  const repo = mkdtempSync(join(tmp, "repo-"));
+  mkdirSync(join(repo, "mods/bot-herdr/engine/lib"), { recursive: true });
+  mkdirSync(join(repo, "layouts"), { recursive: true });
+  writeFileSync(join(repo, "package.json"), "{}\n");
+  assert.equal(appHomeRoot(join(repo, "mods/bot-herdr/engine")), null, "a repo checkout is not the app's home");
+});
+
 test("tasks: steps from a plan, timing, board", async () => {
   const T = await lib("lib/tasks.mjs");
   const root = mkdtempSync(join(tmp, "p-"));

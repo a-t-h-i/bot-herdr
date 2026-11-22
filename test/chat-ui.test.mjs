@@ -177,5 +177,8 @@ test("structural invariants: no this.page shadowing, no render-time adopt/workin
   assert.doesNotMatch(sendTextBlock, /this\.input\.set_value/);
 
   const workSrc = modSrc("work.js");
-  assert.match(workSrc, /cx\.timer\.every\(QUESTIONS_MS,\s*\(cx\)\s*=>\s*\{\s*if\s*\(activePage\(\)/);
+  // Polling only while the page is the one on screen: viewShown resolves its destination and,
+  // when the work view lives in a sub-tab (Library › Knowledge), that sub-tab too.
+  assert.match(workSrc, /cx\.timer\.every\(QUESTIONS_MS,\s*\(cx\)\s*=>\s*\{\s*if\s*\(viewShown\(/);
+  assert.match(workSrc, /import \{[^}]*viewShown[^}]*\} from "\.\/pages\.js"/);
 });

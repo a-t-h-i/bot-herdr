@@ -24,8 +24,8 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { HEADLESS, argvOf, effortsOf, headless, limitArgs } from "../../roster.js";
-import { BH, DATA, ensureDir } from "./core.mjs";
-import { maybeHoldPermission } from "./approvals.mjs";
+import { BH, DATA, ensureDir, projectRoot } from "./core.mjs";
+import { maybeHoldPermission, projectAllow } from "./approvals.mjs";
 
 export { HEADLESS, headless };
 export const ACCESS = ["standard", "full"];
@@ -527,6 +527,8 @@ export class Acp {
     this.allow = allow;
     this.next = 1;
     this.pending = new Map();
+    this.held = new Set();
+    this.cancelled = false;
     this.child = null;
     this.session = null;
     this.text = "";
@@ -555,10 +557,11 @@ export class Acp {
     this.err = collectErr(this.child);
     this.child.stdin.on("error", () => {});
     this.child.on("close", () => {
-      for (const resolve of this.pending.values()) resolve({ error: { message: this.err() || "the agent stopped" } });
-      this.pending.clear();
       this.child = null;
       this.session = null;
+      this.cancelHeld();
+      for (const resolve of this.pending.values()) resolve({ error: { message: this.err() || "the agent stopped" } });
+      this.pending.clear();
     });
     lines(this.child, (m) => this.message(m));
     const init = await this.request("initialize", { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false }, clientInfo: { name: "bot-herdr", version: "1" } });
@@ -645,20 +648,27 @@ export class Acp {
       const command = call.rawInput?.command ?? call.rawInput?.cmd;
       const textCmd = Array.isArray(command) ? command.join(" ") : command;
       const asks = asksPerson(call.title ?? call.kind ?? "tool", { ...(call.rawInput ?? {}), command: textCmd });
+      const root = projectRoot(this.cwd);
       // A bh ask call is allowed at every access level: its card is the prompt, and the turn
       // ends only once the command has run and written the card (the tool_call_update above).
-      const allow = acpAllowed(call.kind, this.access, { command: textCmd, allow: this.allow }) || asks;
+      const allow = acpAllowed(call.kind, this.access, { command: textCmd, allow: [...this.allow, ...projectAllow(root)] }) || asks;
       if (asks && call.toolCallId !== undefined) this.askCall = call.toolCallId;
-      // The redesign's approval cards can hold a refused call for the user; until they land the
-      // hook says it handled nothing and the reject below is unchanged.
+      // Under ask or guarded autonomy, a refused call can be held for the user's approval card.
       if (!allow && this.access !== "full") {
         let held = null;
         try {
-          held = maybeHoldPermission({ req: m, call, options, command: textCmd, access: this.access, send: (msg) => this.send(msg), on: this.on });
+          held = maybeHoldPermission({
+            req: m, call, options, command: textCmd, access: this.access, root, agent: this.agent,
+            send: (msg) => this.send(msg), on: this.on,
+            onDone: () => { if (held) this.held.delete(held); },
+          });
         } catch {
           held = null; // a broken hook must never leave the request unanswered: fall through to reject
         }
-        if (held?.handled) return;
+        if (held?.handled) {
+          this.held.add(held);
+          return;
+        }
       }
       const pick = allow
         ? options.find((o) => o.kind === "allow_once") ?? options.find((o) => o.kind === "allow_always")
@@ -678,6 +688,16 @@ export class Acp {
     }
   }
 
+  /** Cancels every held permission still waiting on the user and clears the set. */
+  cancelHeld() {
+    for (const entry of [...this.held]) {
+      try {
+        entry.cancel?.();
+      } catch {}
+    }
+    this.held.clear();
+  }
+
   turn({ brief, prompt, on, idleMs = TURN_IDLE_MS }) {
     this.on = safeOn(on);
     this.text = "";
@@ -686,6 +706,7 @@ export class Acp {
     this.costAtStart = this.cost;
     this.asked = false;
     this.askCall = null;
+    this.cancelled = false;
     this.idleLost = null;
     this.idleStop = null;
     this.retryMeta = null;
@@ -694,6 +715,7 @@ export class Acp {
     const out = (r) => ({ ...r, exitCode: null, meta: r.error && this.retryMeta ? { retry: this.retryMeta } : null });
     this.idle = watchdog(idleMs, () => {
       this.idleLost = idleStopped(idleMs);
+      this.cancelHeld();
       if (this.session) this.send({ method: "session/cancel", params: { sessionId: this.session } });
       this.idleStop?.(); // the prompt's answer may never come: the turn ends here
     });
@@ -703,6 +725,7 @@ export class Acp {
         if (first) await this.start();
         await this.pickModel(); // every turn: a model changed in Settings reaches a live session too
         if (this.idleLost) return out({ text: this.text, error: this.idleLost, session: this.session });
+        if (this.cancelled) return out({ text: this.text, cancelled: true, session: this.session });
         const stopped = new Promise((resolve) => {
           this.idleStop = () => resolve({ stopped: true });
         });
@@ -714,6 +737,7 @@ export class Acp {
         if (seen) this.on({ kind: "usage", ...seen });
         if (this.idleLost) return out({ text: this.text, error: this.idleLost, session: this.session });
         if (this.asked) return out({ text: this.text, asked: true, error: null, session: this.session });
+        if (this.cancelled) return out({ text: this.text, cancelled: true, session: this.session });
         if (r.error) return out({ text: this.text, error: r.error.message ?? "the agent refused the prompt", session: this.session });
         if (r.result?.stopReason === "cancelled") return out({ text: this.text, cancelled: true, session: this.session });
         if (this.text.trim()) this.on({ kind: "text", text: this.text });
@@ -721,6 +745,7 @@ export class Acp {
       } catch (e) {
         return out({ text: "", error: e.message, session: null });
       } finally {
+        this.cancelHeld();
         this.idle?.done();
         this.idle = null;
       }
@@ -728,13 +753,17 @@ export class Acp {
     return {
       done,
       cancel: () => {
+        this.cancelled = true;
         this.idle?.done();
+        this.cancelHeld();
         if (this.session) this.send({ method: "session/cancel", params: { sessionId: this.session } });
+        this.idleStop?.();
       },
     };
   }
 
   close() {
+    this.cancelHeld();
     stop(this.child);
   }
 }

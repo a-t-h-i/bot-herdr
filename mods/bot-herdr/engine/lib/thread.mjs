@@ -8,7 +8,7 @@
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import { fileKey } from "./agent.mjs";
-import { DATA, UsageError, appendJsonl, listDir, need, now, readJson, readJsonl, readText, store } from "./core.mjs";
+import { DATA, UsageError, appendJsonl, bodyText, listDir, myAddress, need, now, readJson, readJsonl, readText, store } from "./core.mjs";
 import * as Q from "./ask.mjs";
 import * as T from "./tasks.mjs";
 import * as team from "./team.mjs";
@@ -431,14 +431,19 @@ function planConversation(plan, questions) {
   return { total: entries.length, entries: entries.sort((a, b) => atMs(a.at) - atMs(b.at)) };
 }
 
-/** The Change tab's numbers: the diff from the task's base commit in its own tree, when git answers. */
-export function changesOf(root, task) {
+/** A task's diff base commit and git working directory (shared by changesOf and review diff). */
+export function taskBase(root, task) {
   const base = task.git?.base ?? task.base ?? null;
   const branch = task.git?.branch ?? null;
   const from = task.git?.from ?? null;
+  return { base, branch, from, cwd: base ? taskCwd(task, root) : null };
+}
+
+/** The Change tab's numbers: the diff from the task's base commit in its own tree, when git answers. */
+export function changesOf(root, task) {
+  const { base, branch, from, cwd } = taskBase(root, task);
   if (!base) return { available: false, reason: "this task has no base commit", base: null, branch, from, files: [], filesChanged: 0, added: 0, removed: 0 };
   try {
-    const cwd = taskCwd(task, root);
     const numstat = runGit(cwd, ["diff", "--numstat", base]);
     const files = numstat.split("\n").filter(Boolean).map((line) => {
       const [added, removed, ...path] = line.split("\t");
@@ -460,6 +465,32 @@ export function changesOf(root, task) {
     // nothing is logged: this is not a broken record.
     return { available: false, reason: oneLine(e.message, 200), base, branch, from, files: [], filesChanged: 0, added: 0, removed: 0 };
   }
+}
+
+/** Tasks forked from this thread id, oldest first. */
+function forksOf(root, id) {
+  const tasks = readStore(store(root, "tasks"), "task", readTask).records;
+  return tasks
+    .filter((t) => !t.archived && t.forkOf === id)
+    .sort((a, b) => String(a.created ?? "").localeCompare(String(b.created ?? "")))
+    .map((t) => ({ id: t.id, title: String(t.title ?? t.id), state: taskState(t) }));
+}
+
+/** Forks a thread into a new task carrying the given context and recording `forkOf`. */
+export function forkThread(root, id, { carry, title = null, by = myAddress() } = {}) {
+  const parent = loadThread(root, id);
+  const parentTitle = String((parent.kind === "task" ? parent.task.title : parent.plan.title) ?? id);
+  const body = String(carry ?? "").trim();
+  if (!body) throw new UsageError('bh thread fork <id> "<what to carry>" [--title T] [--json]');
+  const request = `${body}\n\nForked from ${id}: ${parentTitle}.`;
+  const task = T.newTask(root, { request, title: title ?? undefined, by, forkOf: id });
+  try {
+    task.base = runGit(root, ["rev-parse", "HEAD"]) || null;
+    T.saveTask(root, task);
+  } catch {
+    // Not a git repo or no HEAD yet: the fork still lives cleanly without a base commit.
+  }
+  return { id: task.id, forkOf: id };
 }
 
 /** What the thread cost: tokens, dollars and minutes over its turns (the peek shows it, not the row). */
@@ -484,11 +515,13 @@ function showTask(root, task, { at, terminals }) {
     cost: costOf(root, task),
     comments: asList(task.comments),
     children: asList(task.children).map(childPart),
+    forkOf: task.forkOf ?? null,
+    forks: forksOf(root, task.id),
     questions: planId ? (openQuestionsByPlan().get(planId) ?? []).map(askPart) : [],
   };
 }
 
-function showPlan(plan, { at, terminals }) {
+function showPlan(root, plan, { at, terminals }) {
   const questions = openQuestionsByPlan().get(plan.id) ?? [];
   const row = planRow(plan, { at, questions });
   return {
@@ -500,6 +533,8 @@ function showPlan(plan, { at, terminals }) {
     cost: null,
     comments: asList(plan.comments),
     children: [],
+    forkOf: null,
+    forks: forksOf(root, plan.id),
     questions: questions.map(askPart),
   };
 }
@@ -508,7 +543,7 @@ function showPlan(plan, { at, terminals }) {
 export function showThread(root, id, { at = Date.now(), terminals = null } = {}) {
   const live = terminals ?? liveTerminals();
   const thread = loadThread(root, id);
-  return thread.kind === "plan" ? showPlan(thread.plan, { at, terminals: live }) : showTask(root, thread.task, { at, terminals: live });
+  return thread.kind === "plan" ? showPlan(root, thread.plan, { at, terminals: live }) : showTask(root, thread.task, { at, terminals: live });
 }
 
 /** Who the peek's reply box talks to: the agent that asked, else the one working on the thread. */
@@ -585,7 +620,7 @@ function peekText(x) {
   return lines.join("\n");
 }
 
-/** `bh thread list|show|peek|summary [<id>] [--json]`. */
+/** `bh thread list|show|peek|summary|fork [<id>] [--json]`. */
 export function runThreadCli({ root, sub, args, flags, out }) {
   const command = sub && !String(sub).startsWith("-") ? sub : "list";
   if (command === "list") {
@@ -596,9 +631,16 @@ export function runThreadCli({ root, sub, args, flags, out }) {
     const summary = threadSummary(root, args[0] ?? null);
     return out(flags, { command: "thread", sub: "summary", at: now(), ...summary }, (x) => (x.summaries ? x.summaries.map((t) => `${t.id}  ${t.text}`).join("\n") || "No threads yet." : `${x.id}  ${x.text}`));
   }
+  if (command === "fork") {
+    const id = need(args[0], 'bh thread fork <id> "<what to carry>" [--title T] [--json]');
+    const carry = need(bodyText(flags, args.slice(1)), 'bh thread fork <id> "<what to carry>" [--title T] [--json]');
+    const title = typeof flags.title === "string" && flags.title.trim() ? flags.title.trim() : null;
+    const forked = forkThread(root, id, { carry, title });
+    return out(flags, forked, (x) => `Forked ${x.forkOf} into ${x.id}.`);
+  }
   if (command === "show" || command === "peek") {
     const id = need(args[0], `bh thread ${command} <id> [--json]`);
     return command === "show" ? out(flags, showThread(root, id), showText) : out(flags, peekThread(root, id), peekText);
   }
-  throw new UsageError("bh thread list|show|peek|summary [<id>] [--json]");
+  throw new UsageError("bh thread list|show|peek|summary|fork [<id>] [--json]");
 }

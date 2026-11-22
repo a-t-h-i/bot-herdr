@@ -7,13 +7,28 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { appendFileSync, closeSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const ENGINE = dirname(dirname(fileURLToPath(import.meta.url)));
 export const BH = join(ENGINE, "bh.mjs");
-/** herdr's app home: the engine is <app home>/mods/bot-herdr/engine. BH_APP_HOME overrides (tests). */
-export const APP_HOME = process.env.BH_APP_HOME || resolve(ENGINE, "..", "..", "..");
+
+/** The app home an engine really belongs to: the root when it sits inside a herdr app checkout
+    (settings.json or layouts/, and no package.json — a repo engine belongs to the user's home,
+    not the checkout), else null. */
+export function appHomeRoot(engine) {
+  const root = resolve(engine, "..", "..", "..");
+  if (existsSync(join(root, "package.json"))) return null;
+  return existsSync(join(root, "settings.json")) || existsSync(join(root, "layouts")) ? root : null;
+}
+
+/** herdr's app home: BH_APP_HOME wins, then an engine inside a herdr app checkout, then the
+    user's HERDR_APP_HOME or ~/.config/herdr-app. */
+export const APP_HOME = process.env.BH_APP_HOME
+  || appHomeRoot(ENGINE)
+  || process.env.HERDR_APP_HOME
+  || join(homedir(), ".config", "herdr-app");
 export const DATA = join(APP_HOME, "data", "bot-herdr");
 
 /**

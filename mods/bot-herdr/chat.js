@@ -8,9 +8,9 @@
 
 import { div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextView, InputState, Input } from "gpui-base";
-import { terminals, spaces, focused, settings, shared, setShared, readTextFile, appHome } from "herdr";
+import { terminals, spaces, focused, settings, shared, setShared, readTextFile, appHome, window as herdrWindow } from "herdr";
 import * as fs from "fs/promises";
-import { SIZE, ICON, TYPE, LINE, SPACE, ROW, CHIP, CONTROL, TARGET, GLYPH, MOTION, SCRIM, textWidth, agentInk, clickable, isLight } from "./look.js";
+import { SIZE, ICON, TYPE, LINE, SPACE, ROW, CHIP, CONTROL, TARGET, GLYPH, MOTION, SCRIM, textWidth, agentInk, clickable, isLight, foldRegion } from "./look.js";
 import { actionButton } from "./button.js";
 import { stateView } from "./switch.js";
 import { colors } from "./theme.js";
@@ -216,10 +216,14 @@ export class Chat {
     this.hovered = null; // entry id under the pointer: its actions show
     this.justAdded = new Set(); // newly added item ids waiting to animate their arrival
     this.arriving = new Set(); // ids drawn at rest for their one arrival frame
+    this.pendingIds = new Set(); // optimistically sent message ids muted until the engine acks them
     this.commenting = null; // the reply with its comment box open: { entry, edit: cid | null }
     this.commentBoxes = new Map(); // agent name → its comment box (a placeholder is fixed when made)
+    this.typingCount = 0; // focused reply comment boxes (so view-local keys stand down)
     this.composer = new Composer({
       sent: (message, cx) => this.sent(message, cx),
+      acked: (id, info, cx) => this.acked(id, info, cx),
+      failed: (id, cx) => this.dropPending(id, cx),
       relabel: (id, from, name, cx) => this.relabel(id, from, name, cx),
       born: (address, name, space) => this.expect(address, name, space),
       answered: (q, answers, cx, opts) => this.submit(q, answers, cx, opts),
@@ -279,6 +283,8 @@ export class Chat {
     let box = this.commentBoxes.get(name);
     if (!box) {
       box = InputState.new({ placeholder: `Your comment. Enter sends it to ${name}` });
+      box.on("focus", () => { this.typingCount++; });
+      box.on("blur", () => { this.typingCount = Math.max(0, this.typingCount - 1); });
       box.on("submit", (_e, cx) => this.sendComment(cx));
       this.commentBoxes.set(name, box);
     }
@@ -391,11 +397,32 @@ export class Chat {
 
   // ── Out ────────────────────────────────────────────────────────────────────────────────────
 
-  /** Adds a message we sent; returns its feed id, so a recipient can be named later (`relabel`). */
-  sent({ text, files, paths, to }, cx) {
-    for (const t of to) if (t.address) this.expect(t.address, t.name);
+  /** Adds a message we sent; returns its feed id, so a recipient can be named later (`relabel`) or acked (`acked`). */
+  sent({ text, files, paths, to, pending = false }, cx) {
+    if (!pending) for (const t of to) if (t.address) this.expect(t.address, t.name);
     this.add({ kind: "me", text, files, paths, to: to.map((t) => t.name) }, cx);
-    return this.entries[this.entries.length - 1].id;
+    const id = this.entries[this.entries.length - 1].id;
+    if (pending && id) this.pendingIds.add(id);
+    return id;
+  }
+
+  /** Marks an optimistically sent message acknowledged by the engine, restoring full textPrimary contrast. */
+  acked(id, { to = null } = {}, cx) {
+    if (id) this.pendingIds.delete(id);
+    if (Array.isArray(to) && to.length) {
+      for (const t of to) if (t.address) this.expect(t.address, t.name);
+      const names = to.map((t) => t.name);
+      this.setFeed(this.entries.map((e) => (e.id === id ? { ...e, to: names } : e)));
+    }
+    cx.notify();
+  }
+
+  /** Drops an optimistically sent message whose send failed (the composer puts the draft back). */
+  dropPending(id, cx) {
+    if (!id) return;
+    this.pendingIds.delete(id);
+    this.setFeed(this.entries.filter((e) => e.id !== id));
+    cx.notify();
   }
 
   /** A message's recipient, once its real name is known: `from` in its `to` becomes `name`. */
@@ -482,6 +509,9 @@ export class Chat {
           if (what === "blocked") {
             wait.blocked = true;
             this.add({ kind: "note", space, text: `${wait.name} is waiting for you in its terminal.`, address }, cx);
+            // A toast only when the window is unfocused: when it is, an open window on the note
+            // alone would miss it entirely.
+            if (herdrWindow()?.active === false) this.composer.say(`${wait.name} needs you — open its terminal.`, cx, "warning");
           }
           if (what === "silent") {
             clearWait(this.waits, address);
@@ -625,6 +655,14 @@ export class Chat {
 
   // ── Drawing ────────────────────────────────────────────────────────────────────────────────
 
+  /** A press on the feed (or Esc while it holds the keyboard) folds the composer to its slim bar. */
+  foldBox(cx) {
+    if (this.commenting) return; // a comment box open takes the click
+    this.composer.expanded = false; // the slim bar; a click on it or typing grows it back
+    this.handle.focus(); // the text box is not drawn while folded: typing comes here
+    cx.notify();
+  }
+
   render(cx) {
     const withFrame = this.composer?.withFrame ? (fn) => this.composer.withFrame(fn) : (fn) => fn();
     return withFrame(() => this.renderFrame(cx));
@@ -635,7 +673,7 @@ export class Chat {
     // Take the keyboard when asked (ctrl+shift+m, the Chat pill) or when this page comes up.
     const stamp = shared(FOCUS) ?? 0;
     const page = activePage();
-    const returned = page === "chat" && this.lastPage !== "chat" && this.lastPage !== null;
+    const returned = page === "threads" && this.lastPage !== "threads" && this.lastPage !== null;
     if (stamp !== this.focusAt || returned) this.composer.focus();
     this.focusAt = stamp;
     this.lastPage = page;
@@ -715,7 +753,7 @@ export class Chat {
         cx.stop_propagation();
       })
       .child(
-        v_flex()
+        foldRegion(v_flex()
           .id("bh-feed")
           .absolute()
           .top(0)
@@ -725,12 +763,7 @@ export class Chat {
           .overflow_hidden()
           .justify_end()
           .items_center()
-          .on_mouse_down("left", (_e, cx) => {
-            if (this.commenting) return; // a comment box open takes the click
-            this.composer.expanded = false; // the slim bar; a click on it or typing grows it back
-            this.handle.focus(); // the text box is not drawn while folded: typing comes here
-            cx.notify();
-          })
+          .on_mouse_down("left", (_e, cx) => this.foldBox(cx)), "Conversation", (cx) => this.foldBox(cx))
           .on_scroll_wheel((e, cx) => this.scroll(e, view.total, cx))
           .when(view.total === 0, (el) => el.child(this.empty(c, width, team)))
           .when(view.total > 0, (el) =>
@@ -888,6 +921,8 @@ export class Chat {
       ? (mv.closedMd ??= plainMarkdown(folded.text))
       : (mv.openMd ??= plainMarkdown(mv.text));
     const chips = (e.files ?? []).map((name, i) => this.sentChip(c, e, name, i));
+    const unacked = Boolean(e.pending || this.pendingIds?.has(e.id));
+    const ink = unacked ? c.textMuted : c.textPrimary;
     return v_flex()
       .id(`bh-e-${e.id}`)
       .flex_none()
@@ -904,7 +939,8 @@ export class Chat {
           .border_color(c.bubbleEdge)
           .text_size(TYPE.md)
           .line_height(`${LINE.md}px`)
-          .child(keepPress(div().child(selectable(`bh-mine-md-${e.id}-${open ? "o" : "c"}`, md))))
+          .text_color(ink)
+          .child(keepPress(div().text_color(ink).child(selectable(`bh-mine-md-${e.id}-${open ? "o" : "c"}`, md))))
           .when(folded.folded, (el) => el.child(
             clickable(
               div()
@@ -1036,7 +1072,7 @@ export class Chat {
                   .bg(c.fill).border_1().border_color(c.edge).text_color(c.muted).child(svg(ICON("expand")).size(GLYPH.sm)),
               ),
             c,
-            `bh-pic-box-${e.id}-${index}`,
+            `bh-pic-box-${e.id}-${index}`, { edge: true },
           )
           : div()
             .relative()
@@ -1109,11 +1145,11 @@ export class Chat {
         .on_click((_ev, cx) => this.openKids(e.id, cx))
         .children(e.children.slice(0, KID_BADGES).map((k) => agentBadge(c, k.from?.name ?? "Agent", CHIP)))
         .when(n > KID_BADGES, (el) => el.child(div().text_size(TYPE.xs).text_color(c.faint).child(`+${n - KID_BADGES}`)))
-        .child(div().flex_none().text_size(TYPE.sm).font_medium().text_color(c.ink).child(`${n} child report${n === 1 ? "" : "s"}`))
+        .child(div().flex_none().text_size(TYPE.sm).font_medium().text_color(c.ink).child(`${n} child thread${n === 1 ? "" : "s"}`))
         .child(div().flex_1().min_w(0).truncate().text_size(TYPE.sm).text_color(c.muted).child(`· ${names}`))
         .child(svg(ICON(open ? "chevron-down" : "chevron-right")).flex_none().size(GLYPH.sm).text_color(c.faint)),
       c,
-      `bh-kids-${e.id}`,
+      `bh-kids-${e.id}`, { edge: true },
     );
   }
 

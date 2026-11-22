@@ -15,7 +15,7 @@
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, TextareaState, Textarea } from "gpui-base";
 import { agents, panes, spaces, settings, shared, setShared, knownAgents, notify, props, closeOverlay, openOverlay } from "herdr";
-import { SIZE, ICON, TYPE, LINE, SPACE, CONTROL, CHIP, MARK, PIP, HAIR, GLYPH, clickable, pressable, focusable, textWidth } from "./look.js";
+import { SIZE, ICON, TYPE, LINE, SPACE, CONTROL, CHIP, TARGET, MARK, PIP, HAIR, GLYPH, clickable, pressable, focusable, textWidth, activatesOn, reducedMotion, springing, REDUCE_MOTION_KEY } from "./look.js";
 import { actionButton } from "./button.js";
 import { stateView, pill, avatar, segmented } from "./switch.js";
 import { mentionTone, alpha } from "./indicators.js";
@@ -31,6 +31,11 @@ import {
 } from "./resilienceview.js";
 import { settingsGridColumns } from "./tasksview.js";
 import { OPEN_RESILIENCE } from "./statusstrip.js";
+import { setSub, subOf, showPage } from "./pages.js";
+import { KEYMAP_OPEN } from "./keymap.js";
+import { appKeyAction } from "./rowkeys.js";
+import { Metrics } from "./metrics.js";
+import { safeRender } from "./render-safe.js";
 
 const GAP = 14; // between cards
 const MAX = 1140; // the page's widest
@@ -40,10 +45,11 @@ const KNOB = 18;
 /** An agent card's height with its essentials (header, harness, model, effort, More): every card is at least this. */
 const CARD_H = 320;
 
-/** The page's tabs, one section each. */
+/** The page's tabs, one section each: Usage holds the Metrics view, quiet. */
 const SECTIONS = [
   { id: "agents", label: "Agents", icon: "users" },
   { id: "general", label: "General", icon: "page-settings" },
+  { id: "usage", label: "Usage", icon: "page-metrics" },
   { id: "resilience", label: "Resilience", icon: "shield-check" },
   { id: "harnesses", label: "Harnesses", icon: "page-terminals" },
 ];
@@ -148,7 +154,7 @@ const chipButton = (c, id, label, on, onClick) =>
       .on_click(onClick)
       .child(label),
     c,
-    id,
+    id, { edge: true },
   );
 
 /** Opens a card's extra content as a dialog over the page; MoreSheet draws it from plain props + shared state. */
@@ -163,6 +169,22 @@ function openMore({ kind, key, known = [], classifier = null }) {
   });
 }
 
+/** The Settings › Usage view, or null when it could not be built: Usage then says so, never throws. */
+function mountMetrics(cx) {
+  try {
+    const view = new Metrics();
+    view.init({}, cx);
+    return view;
+  } catch (err) {
+    try {
+      console.error(`bot-herdr [init:metrics]: ${err instanceof Error ? err.message : String(err)}`);
+    } catch {
+      // Never throw while reporting.
+    }
+    return null;
+  }
+}
+
 export class Settings {
   init(_props, cx) {
     this.known = [];
@@ -171,6 +193,8 @@ export class Settings {
     this.open = null; // "<id>:harness" or "<id>:model": the field whose list is open
     const was = remembered();
     this.section = was === "access" || was === "classifier" ? "general" : was; // the tab open
+    this.publishedSub = this.section; // the section this page last made shared
+    setSub("settings", this.section);
     this.pickedAt = /** @type {{ at?: number } | null} */ (shared(PICKED))?.at ?? 0;
     this.refreshedAt = /** @type {{ at?: number } | null} */ (shared(REFRESH))?.at ?? 0;
     this.harnessAddedAt = Number(shared(HARNESS_ADDED) ?? 0);
@@ -183,18 +207,22 @@ export class Settings {
     this.addingStep = false;
     this.draftHarness = "";
     this.draftEffort = "";
-    this.draftModelInput = InputState.new({ placeholder: "Model id (optional)" });
+    this.handle = cx.focus_handle();
+    this.typingCount = 0;
+    this.draftModelInput = this.trackInput(InputState.new({ placeholder: "Model id (optional)" }));
     this.draftModelInput.on("submit", (_e, cx) => this.commitFallbackStep(cx));
     this.asking = {}; // harness → true while `bh models` runs for it
     this.waiting = {}; // harness → what to do with the answer (reopen its list)
     this.pickBounds = null; // where the open list's field sits, to reopen it after a refresh
     this.drag = null; // { id, bounds } while an effort slider is held
     this.width = 900;
+    // Settings › Usage holds the Metrics view: built once with the page, drawn only while Usage is open.
+    this.metrics = mountMetrics(cx);
     this.saveGen = 0;
     this.problem = null;
     this.classifier = null; // what `bh config` reports (the key only as set / not set)
     this.access = null; // what `bh access` reports: { headless, access, allow }
-    this.allowInput = InputState.new({ placeholder: "npm test, git add, git commit" });
+    this.allowInput = this.trackInput(InputState.new({ placeholder: "npm test, git add, git commit" }));
     const saveAllow = (_e, cx) => {
       const v = this.allowInput.value().trim();
       if (this.access && v !== (this.access.allow ?? []).join(", ")) this.setAccess({ allow: v }, cx);
@@ -202,10 +230,10 @@ export class Settings {
     this.allowInput.on("submit", saveAllow);
     this.allowInput.on("blur", saveAllow);
 
-    this.keyInput = InputState.new({ placeholder: "sk-or-…" });
+    this.keyInput = this.trackInput(InputState.new({ placeholder: "sk-or-…" }));
     this.keyInput.on("submit", (_e, cx) => this.saveKey(cx));
     this.keyInput.on("blur", (_e, cx) => this.saveKey(cx));
-    this.modelInput = InputState.new({ placeholder: "The host's default" });
+    this.modelInput = this.trackInput(InputState.new({ placeholder: "The host's default" }));
     const saveModel = (_e, cx) => {
       const v = this.modelInput.value().trim();
       if (this.classifier && v !== (this.classifier.model ?? "")) this.config({ model: v }, cx);
@@ -213,8 +241,8 @@ export class Settings {
     this.modelInput.on("submit", saveModel);
     this.modelInput.on("blur", saveModel);
     // Clef's account id and Laya's base URL, saved as typed (on Enter or leaving the field).
-    this.accountIdInput = InputState.new({ placeholder: "Your Cloudflare account id" });
-    this.baseUrlInput = InputState.new({ placeholder: "The default base URL" });
+    this.accountIdInput = this.trackInput(InputState.new({ placeholder: "Your Cloudflare account id" }));
+    this.baseUrlInput = this.trackInput(InputState.new({ placeholder: "The default base URL" }));
     /** @type {Array<[import("gpui-base").InputState, string]>} */
     const savedFields = [[this.accountIdInput, "accountId"], [this.baseUrlInput, "baseUrl"]];
     for (const [state, field] of savedFields) {
@@ -471,6 +499,27 @@ export class Settings {
     cx.notify();
   }
 
+  /** Tracks focus on an InputState so view-local `?` never intercepts typing in a field. */
+  trackInput(state) {
+    state.on("focus", () => { this.typingCount++; });
+    state.on("blur", () => { this.typingCount = Math.max(0, this.typingCount - 1); });
+    return state;
+  }
+
+  /** View-local app keys: Ctrl+1..5 switch destinations, `?` opens the keymap when not typing. */
+  keys(e, cx) {
+    const app = appKeyAction(e, { typing: this.typingCount > 0 });
+    if (app?.kind === "page") {
+      showPage(app.page);
+      return cx.stop_propagation();
+    }
+    if (app?.kind === "keymap") {
+      setShared(KEYMAP_OPEN, true);
+      cx.stop_propagation();
+      cx.notify();
+    }
+  }
+
   /** Model text boxes are made here (never while drawing), one per agent. */
   sync() {
     const list = this.list();
@@ -481,7 +530,7 @@ export class Settings {
     }
     for (const a of list) {
       if (this.inputs[a.id]) continue;
-      const state = InputState.new({ value: a.model ?? "", placeholder: "The harness's default" });
+      const state = this.trackInput(InputState.new({ value: a.model ?? "", placeholder: "The harness's default" }));
       state.on("change", (_e, cx) => {
         const value = state.value().trim();
         const now = this.list().find((x) => x.id === a.id);
@@ -663,7 +712,9 @@ export class Settings {
     if (openResilience > this.openResilienceAt) {
       this.openResilienceAt = openResilience;
       this.section = "resilience";
+      this.publishedSub = "resilience";
       remember("resilience");
+      setSub("settings", "resilience");
       cx.timer.after(1, (cx) => this.loadResilience(cx));
     }
     // The roster changed from outside (the composer's model chip or MoreSheet): sync and persist.
@@ -678,7 +729,18 @@ export class Settings {
       });
     }
     const c = colors();
+    // A link elsewhere in the app (or the palette) can point Settings at a section: follow it.
+    const wanted = subOf("settings");
+    if (wanted && wanted !== this.publishedSub && SECTIONS.some((x) => x.id === wanted)) {
+      this.section = wanted;
+      this.publishedSub = wanted;
+      remember(wanted);
+      if (wanted === "resilience") cx.timer.after(1, (cx) => this.loadResilience(cx));
+    }
     const section = SECTIONS.some((x) => x.id === this.section) ? this.section : "agents";
+    // The destination remembers its section, so a view that lives in it knows when it is showing.
+    this.publishedSub = section;
+    setSub("settings", section);
     const list = this.list().filter((a) => this.inputs[a.id]);
     const content = Math.max(MIN_CARD, Math.min(MAX, this.width - SIZE.gutter * 2));
     const cols = content >= MIN_CARD * 3 + GAP * 2 ? 3 : content >= MIN_CARD * 2 + GAP ? 2 : 1;
@@ -687,12 +749,51 @@ export class Settings {
     const space = currentSpace()?.id ?? null;
     const rows = [];
     for (let i = 0; i < list.length; i += cols) rows.push(list.slice(i, i + cols));
+    const tabs = this.tabs(c, section);
+    // Usage is the Metrics view: a page of its own under the tabs, not a card in the column.
+    const body = section === "usage"
+      ? v_flex().size_full().items_center()
+        .child(v_flex().flex_none().w(content).pt(SPACE[5]).pb(SPACE[4]).child(h_flex().items_center().child(tabs)))
+        .child(div().id("bh-settings-usage").relative().flex_1().w_full().min_h(0).child(this.usage(cx)))
+      : v_flex()
+        .id("bh-settings-scroll")
+        .absolute()
+        .inset_0()
+        .overflow_y_scroll()
+        .items_center()
+        .child(
+          v_flex()
+            .flex_none()
+            .w(content)
+            .py(SPACE[5])
+            .gap(GAP)
+            // One section at a time, picked from the tabs.
+            .child(h_flex().items_center().child(tabs))
+            .when(Boolean(this.problem), (el) => el.child(div().text_size(TYPE.sm).text_color(c.danger).child(this.problem)))
+            .when(!this.problem && Date.now() - (this.saved ?? 0) < SAVED_MS, (el) => el.child(div().text_size(TYPE.xs).text_color(c.muted).child("Saved")))
+            .when(section === "agents", (el) => el
+              .children(rows.map((row, r) =>
+                // Cards in a row share its height; every card is at least the height of a full one.
+                h_flex().id(`bh-row-${r}`).flex_none().gap(GAP).items_stretch().children(row.map((a) => this.card(c, a, cardW, running, space)))))
+              .child(h_flex().flex_none().child(this.button(c, "bh-add-agent", "plus", "Add agent", (_e, cx) => {
+                const list = this.list();
+                this.save([...list, blank(list, this.known)], cx);
+                this.sync();
+                cx.notify();
+              }))))
+            // Access and the classifier together: 2-column grid when wide (>= 860px), stacked when narrow.
+            .when(section === "general", (el) => el.child(this.generalSection(c, content)))
+            .when(section === "resilience", (el) => el.child(this.resilienceSection(c, content)))
+            .when(section === "harnesses", (el) => el.child(this.harnesses(c))),
+        );
     return div()
       .id("bh-settings")
       .relative()
       .size_full()
       .bg(c.ground)
       .text_color(c.ink)
+      .track_focus(this.handle)
+      .on_key_down((e, cx) => this.keys(e, cx))
       .on_size_change((size, cx) => {
         // px with the app's zoom multiplied in; drawn sizes are without it.
         const zoom = Number(settings().zoom) || 1;
@@ -702,49 +803,32 @@ export class Settings {
           cx.notify();
         }
       })
-      .child(
-        v_flex()
-          .id("bh-settings-scroll")
-          .absolute()
-          .inset_0()
-          .overflow_y_scroll()
-          .items_center()
-          .child(
-            v_flex()
-              .flex_none()
-              .w(content)
-              .py(SPACE[5])
-              .gap(GAP)
-              // One section at a time, picked from the tabs.
-              .child(h_flex().items_center().child(segmented(c, {
-                id: "bh-settings-tabs",
-                items: SECTIONS.map((x) => ({ id: x.id, icon: x.icon, label: x.label, on: x.id === section })),
-                onPick: (id, cx) => {
-                  this.section = id;
-                  remember(id);
-                  if (id === "resilience") this.loadResilience(cx);
-                  cx.notify();
-                },
-              }))
-)
-              .when(Boolean(this.problem), (el) => el.child(div().text_size(TYPE.sm).text_color(c.danger).child(this.problem)))
-              .when(!this.problem && Date.now() - (this.saved ?? 0) < SAVED_MS, (el) => el.child(div().text_size(TYPE.xs).text_color(c.muted).child("Saved")))
-              .when(section === "agents", (el) => el
-                .children(rows.map((row, r) =>
-                  // Cards in a row share its height; every card is at least the height of a full one.
-                  h_flex().id(`bh-row-${r}`).flex_none().gap(GAP).items_stretch().children(row.map((a) => this.card(c, a, cardW, running, space)))))
-                .child(h_flex().flex_none().child(this.button(c, "bh-add-agent", "plus", "Add agent", (_e, cx) => {
-                  const list = this.list();
-                  this.save([...list, blank(list, this.known)], cx);
-                  this.sync();
-                  cx.notify();
-                }))))
-              // Access and the classifier together: 2-column grid when wide (>= 860px), stacked when narrow.
-              .when(section === "general", (el) => el.child(this.generalSection(c, content)))
-              .when(section === "resilience", (el) => el.child(this.resilienceSection(c, content)))
-              .when(section === "harnesses", (el) => el.child(this.harnesses(c))),
-          ),
-      );
+      .child(body);
+  }
+
+  /** The page's section tabs: one control, the current section underlined. */
+  tabs(c, section) {
+    return segmented(c, {
+      id: "bh-settings-tabs",
+      items: SECTIONS.map((x) => ({ id: x.id, icon: x.icon, label: x.label, on: x.id === section })),
+      onPick: (id, cx) => {
+        this.section = id;
+        this.publishedSub = id;
+        remember(id);
+        setSub("settings", id);
+        if (id === "resilience") this.loadResilience(cx);
+        cx.notify();
+      },
+    });
+  }
+
+  /** Settings › Usage: the Metrics view (hero numbers, details on demand), quiet under the tabs. */
+  usage(cx) {
+    const c = colors();
+    if (!this.metrics) return stateView(c, { id: "bh-settings-usage-error", title: "This view could not be drawn", line: "Restart Herdr to build the usage numbers again." });
+    const { node, error } = safeRender(this.metrics, cx, { view: "metrics" });
+    if (error) return stateView(c, { id: "bh-settings-usage-error", title: "This view could not be drawn", line: error.detail });
+    return node;
   }
 
   /** A section's heading: a small icon and the title. */
@@ -763,11 +847,14 @@ export class Settings {
 
   /** One setting on one line: its name (and a short hint under it) on the left, its control on the right. */
   settingRow(c, label, control, hint = null) {
-    return h_flex().min_h(CONTROL + SPACE[3]).px(PAD).py(SPACE[3]).gap(SPACE[4]).items_center()
-      .child(v_flex().flex_1().min_w(0).gap(SPACE[1])
+    const left = hint
+      ? v_flex().flex_1().min_w(0).gap(SPACE[1])
         .child(div().text_size(TYPE.md).font_medium().text_color(c.ink).child(label))
-        .when(Boolean(hint), (el) => el.child(div().text_size(TYPE.xs).text_color(c.faint).child(hint))))
-      .child(div().flex_none().child(control));
+        .child(div().text_size(TYPE.xs).text_color(c.faint).child(hint))
+      : div().flex_1().min_w(0).text_size(TYPE.md).font_medium().text_color(c.ink).child(label);
+    return h_flex().min_h(CONTROL + SPACE[3]).px(PAD).py(SPACE[3]).gap(SPACE[4]).items_center()
+      .child(left)
+      .child(control.flex_none());
   }
 
   /**
@@ -779,6 +866,7 @@ export class Settings {
     return v_flex()
       .id(id)
       .w_full()
+      .pb(SPACE[2])
       .rounded(SIZE.radius)
       .bg(c.fill)
       .border_1()
@@ -787,13 +875,12 @@ export class Settings {
       .child(h_flex().h(CONTROL + SPACE[4]).px(PAD).gap(SPACE[3]).items_center()
         .child(div().flex_1().min_w(0).text_size(TYPE.md).font_semibold().child(title))
         .when(Boolean(right), (el) => el.child(right)))
-      .children(shown)
-      .child(div().h(SPACE[2]));
+      .children(shown);
   }
 
   /** A compact segmented choice for a setting row. */
   choice(c, id, options, value, onPick) {
-    return segmented(c, { id, items: options.map(([v, label]) => ({ id: v, label, on: v === value })), onPick });
+    return segmented(c, { id, choice: true, items: options.map(([v, label]) => ({ id: v, label, on: v === value })), onPick });
   }
 
   /** A quiet card: the frame every section sits in. */
@@ -878,12 +965,20 @@ export class Settings {
             this.openList(a, field, e.bounds, cx);
             cx.notify();
           })
+          .role("combo_box")
+          .accessibility_label(`${field === "harness" ? "Harness" : "Model"}: ${value}`)
+          .on_key_down((e, cx) => {
+            if (!activatesOn(e)) return;
+            cx.stop_propagation();
+            this.openList(a, field, null, cx);
+            cx.notify();
+          })
           .when(field === "harness", (el) => el.child(harnessMark(c, this.known.find((k) => k.key === a.harness) ?? { key: a.harness, name: a.harness }, GLYPH.lg)))
           .child(div().flex_1().min_w(0).truncate().text_size(TYPE.md).child(value))
           .child(svg(ICON("chevron-down")).size(MARK).text_color(c.muted)),
       ),
       `bh-sel-${a.id}-${field}`,
-      c,
+      c, { edge: true },
     );
   }
 
@@ -911,6 +1006,14 @@ export class Settings {
             .justify_center()
             .rounded(SIZE.nested)
             .hover((s) => s.bg(c.hover))
+            .role("button")
+            .accessibility_label(`Choose a model for ${a.name ?? a.id}`)
+            .on_key_down((e, cx) => {
+              if (!activatesOn(e)) return;
+              cx.stop_propagation();
+              this.openList(a, "model", null, cx);
+              cx.notify();
+            })
             .on_mouse_down("left", (e, cx) => {
               cx.stop_propagation();
               // Under the whole field, not just the arrow. (`gpui-shell`'s ElementBounds carries x
@@ -952,20 +1055,24 @@ export class Settings {
     const labelW = Math.ceil(label ? slot : Math.max(...stops.map((v) => textWidth(name(v), TYPE.xs) * 1.15)) + SPACE[3]);
     const place = (i) => Math.round(Math.max(0, Math.min(width - labelW, x(i) - labelW / 2)));
     const mid = Math.round((KNOB + SPACE[3]) / 2);
-    return focusable(
-      v_flex()
+    const keys = (e, cx) => {
+      if (["left", "arrow-left", "down", "arrow-down"].includes(e.key)) pick(at - 1, cx);
+      else if (["right", "arrow-right", "up", "arrow-up"].includes(e.key)) pick(at + 1, cx);
+      else return;
+      cx.stop_propagation();
+    };
+    // The track is the slider: it takes the press and drag, and the arrows while it holds the keyboard.
+    return v_flex()
+        .id(`bh-eff-${a.id}`)
         .w(width)
         .gap(SPACE[1])
-        .on_key_down((e, cx) => {
-          if (["left", "arrow-left", "down", "arrow-down"].includes(e.key)) pick(at - 1, cx);
-          else if (["right", "arrow-right", "up", "arrow-up"].includes(e.key)) pick(at + 1, cx);
-          else return;
-          cx.stop_propagation();
-        })
-        .child(div()
+        .child(focusable(div()
           .relative()
           .w(width)
           .h(KNOB + SPACE[3])
+          .role("slider")
+          .accessibility_label(`Effort: ${name(stops[at])}`)
+          .on_key_down(keys)
           .cursor_pointer()
           .on_mouse_down("left", (e, cx) => {
             cx.stop_propagation();
@@ -993,7 +1100,7 @@ export class Settings {
           // The knob: ringed in the colour, a dot of it at the centre.
           .child(div().absolute().left(x(at) - KNOB / 2).top(mid - KNOB / 2).size(KNOB).rounded_full().bg(c.fill).border(2).border_color(tone).shadow_sm()
             .flex().items_center().justify_center()
-            .child(div().size(6).rounded_full().bg(tone))))
+            .child(div().size(6).rounded_full().bg(tone))), `bh-eff-${a.id}-track`, c))
         // Each level's name under its stop; a click on one picks it.
         // Each name sits in an absolutely placed slot; the clickable is inside it (clickable makes
         // its element relative, which would pull it out of place).
@@ -1006,10 +1113,7 @@ export class Settings {
               .child(label ? label(v) : name(v)),
             c,
             `bh-eff-${a.id}-${i}`,
-          ))))),
-      `bh-eff-${a.id}`,
-      c,
-    );
+          )))));
   }
 
   harnesses(c) {
@@ -1031,6 +1135,7 @@ export class Settings {
     if (!k) return stateView(c, { id: "bh-access-loading", title: "Loading…", loading: true });
     const on = k.headless !== false;
     const full = k.access === "full";
+    const reduced = reducedMotion();
     return this.group(c, {
       id: "bh-access",
       title: "Access",
@@ -1044,6 +1149,8 @@ export class Settings {
           (v, cx) => this.setAccess({ git: v }, cx))),
         this.settingRow(c, "Repo history", this.choice(c, "bh-repo-history", [["on", "Pushed"], ["off", "Local only"]], k.repoHistory === false ? "off" : "on",
           (v, cx) => this.setAccess({ repoHistory: v === "on" }, cx)), k.repoHistory === false ? ".bot-herdr/ is gitignored and untracked in every project" : null),
+        this.settingRow(c, "Reduce motion", this.toggle(c, "bh-reduce-motion", reduced, () => setShared(REDUCE_MOTION_KEY, !reduced), "Reduce motion"),
+          "Working animations hold their first glyph and fades are instant."),
       ],
     });
   }
@@ -1078,13 +1185,13 @@ export class Settings {
           .child(svg(ICON("chevron-down")).size(MARK).text_color(c.muted)),
       ),
       "bh-cls-model",
-      c,
+      c, { edge: true },
     );
     const field = (state, w = 240) => div().w(w).child(this.field(c, state));
     return this.group(c, {
       id: "bh-classifier",
       title: "Classifier",
-      right: this.toggle(c, "bh-cls-on", k.enabled, (_e, cx) => this.config({ enabled: !k.enabled }, cx)),
+      right: this.toggle(c, "bh-cls-on", k.enabled, (_e, cx) => this.config({ enabled: !k.enabled }, cx), "Classifier on"),
       rows: [
         this.settingRow(c, "Model", modelSelect, problem),
         this.settingRow(c, "OpenRouter key", field(this.keyInput), k.key ? "Saved" : k.openrouterKey ? "From OPENROUTER_API_KEY" : "Not set"),
@@ -1093,8 +1200,7 @@ export class Settings {
     });
   }
 
-  /** The Resilience tab: provider health & cooldowns, ordered fallback chain, and guardrail budgets. */
-  /** General tab: responsive 2-column grid (>= 860px) placing Access and Classifier cards side-by-side. */
+  /** General tab: responsive 2-column grid (>= 860px) placing Access (with Reduce motion) and Classifier cards side-by-side. */
   generalSection(c, content) {
     if (settingsGridColumns(content) === 2) {
       return h_flex()
@@ -1102,8 +1208,8 @@ export class Settings {
         .w(content)
         .gap(GAP)
         .items_start()
-        .child(v_flex().flex_1().min_w(0).gap(GAP).child(this.accessCard(c)))
-        .child(v_flex().flex_1().min_w(0).gap(GAP).child(this.classifierCard(c)));
+        .child(this.accessCard(c).flex_1().min_w(0))
+        .child(this.classifierCard(c).flex_1().min_w(0));
     }
     return v_flex()
       .id("bh-general-grid")
@@ -1370,37 +1476,48 @@ export class Settings {
       .child(div().text_size(TYPE.xs).text_color(c.faint).child(summary));
   }
 
-  /** A switch: a pill track, the knob centred in it, sliding to the side that's set. */
+  /** A switch: a 28 px hit target wrapping the visual pill track, the knob sliding (or snapping when reduced). */
   toggle(c, id, on, onClick, label = null) {
     const W = 36;
     const H = 20;
     const KNOB_D = 14;
     const inset = (H - 2 - KNOB_D) / 2; // inside the 1px border
+    const knob = springing(
+      div()
+        .absolute()
+        .top(inset)
+        .left(on ? W - 2 - KNOB_D - inset : inset),
+      "left",
+      { response: 220, damping: 0.9 },
+    )
+      .size(KNOB_D)
+      .rounded_full()
+      .bg(on ? c.accentInk : c.fill)
+      .shadow_sm();
     return focusable(
       div()
         .role("switch")
         .when(Boolean(label), (el) => el.accessibility_label(label))
-        .relative()
         .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
         .w(W)
-        .h(H)
+        .h(TARGET)
         .rounded_full()
         .cursor_pointer()
-        .bg(on ? c.accent : c.well)
-        .border_1()
-        .border_color(on ? c.accent : c.edge)
         .on_click(onClick)
         .child(div()
-          .absolute()
-          .top(inset)
-          .left(on ? W - 2 - KNOB_D - inset : inset)
-          .spring("left", { response: 220, damping: 0.9 })
-          .size(KNOB_D)
+          .relative()
+          .w(W)
+          .h(H)
           .rounded_full()
-          .bg(on ? c.accentInk : c.fill)
-          .shadow_sm()),
+          .bg(on ? c.accent : c.well)
+          .border_1()
+          .border_color(on ? c.accent : c.edge)
+          .child(knob)),
       id,
-      c,
+      c, { edge: true },
     );
   }
 

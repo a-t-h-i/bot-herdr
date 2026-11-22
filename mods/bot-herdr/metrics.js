@@ -9,7 +9,7 @@ import { SIZE, TYPE, LINE, SPACE, CONTROL, TYPE_SCALE, RADIUS } from "./look.js"
 import { segmented, stateView, avatar } from "./switch.js";
 import { actionButton } from "./button.js";
 import { colors } from "./theme.js";
-import { activePage } from "./pages.js";
+import { viewShown } from "./pages.js";
 import { bhJson, projectDir } from "./bh.js";
 import { mentionTone } from "./indicators.js";
 import { WINDOWS, DEFAULT_WINDOW, cells, hero, cardDetail, columnsFor, barHeights, dailyLabel, rankOf } from "./metricsview.js";
@@ -70,7 +70,7 @@ export class Metrics {
     this.openCards = new Set(); // the cards whose other numbers are folded open
     this.reload(cx);
     cx.timer.every(REFRESH_MS, (cx) => {
-      if (activePage() === "metrics") this.reload(cx);
+      if (viewShown("metrics")) this.reload(cx);
     });
   }
 
@@ -99,7 +99,7 @@ export class Metrics {
   }
 
   render(cx) {
-    const open = activePage() === "metrics";
+    const open = viewShown("metrics");
     if (open && !this.shown) cx.timer.after(1, (cx) => this.reload(cx));
     this.shown = open;
     const c = colors();
@@ -119,6 +119,7 @@ export class Metrics {
   picker(c) {
     return segmented(c, {
       id: "bh-metrics-window",
+      choice: true,
       items: WINDOWS.map((w) => ({ id: w.id, label: w.label, on: w.id === this.window })),
       onPick: (id, cx) => this.pick(id, cx),
     });

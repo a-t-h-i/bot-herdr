@@ -27,8 +27,9 @@ import {
   agents as reported, panes, terminals, spaces, focused, settings, run, hc, knownAgents, pickFolder, exec, window as herdrWindow,
   shared, setShared, appHome,
 } from "herdr";
-import { showPage, hold } from "./pages.js";
-import { SIZE, MOTION, ICON, TYPE, LINE, SPACE, ROW, CHIP, CONTROL, TARGET, MARK, DOT, PIP, HAIR, GLYPH, CLEAR, tint, readable, textWidth, rowsFor, baseName, upFrom, filterEntries, togglePick, sizeText, clickable, pressable, focusable } from "./look.js";
+import { showSettings, hold } from "./pages.js";
+import { SIZE, MOTION, ICON, TYPE, TYPE_SCALE, LINE, SPACE, ROW, CHIP, CONTROL, TARGET, RADIUS, MARK, DOT, PIP, HAIR, GLYPH, CLEAR, tint, readable, textWidth, rowsFor, baseName, upFrom, filterEntries, togglePick, sizeText, clickable, pressable, focusable, spinning, springing, timed } from "./look.js";
+import { composerSendMode, composerPlaceholder } from "./signals.js";
 import { actionButton } from "./button.js";
 import { stateView } from "./switch.js";
 import { colors } from "./theme.js";
@@ -153,6 +154,11 @@ function askedName(stdout) {
   }
 }
 
+/** Whether the composer should fold to a slim bar given its state flags. */
+export function composerIsFolded({ expanded = false, pane = null, paneNow = null, filesCount = 0, queuedCount = 0 } = {}) {
+  return Boolean(!expanded && !pane && paneNow !== "ask" && !(filesCount > 0) && !(queuedCount > 0));
+}
+
 /** A model pane row: `{ heading }` for a harness's name, `{ value, label, harness, note }` for a model.
  * @typedef {{ heading?: string, value?: string, label?: string, harness?: any, note?: string }} ModelRow
  */
@@ -188,16 +194,23 @@ export class Composer {
     this.browse = null; // { path, parent, entries, truncated, error, loading, selected:Set, hidden, foreign }
     this.browseAt = 0; // the row the keyboard is on
     this.browseLast = null; // { path, at }: a second click on the same folder opens it
+    // Secondary text inputs (model search, attach folder search/path) suppress view-local keys while focused.
+    this.typingCount = 0;
+    const track = (state) => {
+      state.on("focus", () => { this.typingCount++; });
+      state.on("blur", () => { this.typingCount = Math.max(0, this.typingCount - 1); });
+      return state;
+    };
     // The Orchestrator's model pane: a search over every harness's models, and its effort.
-    this.modelSearch = InputState.new({ placeholder: "Search models" });
+    this.modelSearch = track(InputState.new({ placeholder: "Search models" }));
     this.modelSearch.on("change", (_e, cx) => cx.notify());
     this.modelSearch.on("submit", (_e, cx) => {
       const first = this.modelRows().find((o) => !o.heading);
       if (first) this.pickLeadModel(first.value, cx);
     });
-    this.browseSearch = InputState.new({ placeholder: "Search this folder" });
+    this.browseSearch = track(InputState.new({ placeholder: "Search this folder" }));
     this.browseSearch.on("change", (_e, cx) => cx.notify());
-    this.browseTyped = InputState.new({ placeholder: "A path on this machine" });
+    this.browseTyped = track(InputState.new({ placeholder: "A path on this machine" }));
     this.browseTyped.on("submit", (_e, cx) => this.attachTyped(cx));
     this.browseHandle = cx.focus_handle();
     this.walk = null; // the questions being answered: drawer.js state
@@ -208,6 +221,8 @@ export class Composer {
     this.pageHeight = 700;
     this.sending = false;
     this.outboxQueue = []; // cross-page sendText items queued while a send is in flight
+    this.queuedMessages = []; // messages queued while target agent is working (removable until sent)
+    this.queueSeq = 0;
     this.sendFx = { n: 0, phase: "rest" }; // the send key's arrow: "rest" | "launch" | "land" | "rise"
     this.width = SIZE.maxWidth;
     this.justBriefed = new Set(); // briefed this session; the label can take a moment to show
@@ -235,6 +250,10 @@ export class Composer {
     // A paste with no text: the clipboard's image (or files copied in the file manager) goes on
     // as attachments, images with a preview.
     this.input.on("paste_other", (_e, cx) => this.pasteOther(cx));
+    // At rest the box is one input line; its repo, branch and model chips come up with the keyboard.
+    this.focused = false;
+    this.input.on("focus", (_e, cx) => this.setFocused(true, cx));
+    this.input.on("blur", (_e, cx) => this.setFocused(false, cx));
 
     // Keys while the text box has the keyboard ("A > Input": the text box inside our element).
     // Later bindings win over the text box's own at the same depth, and the menu ones are added
@@ -243,6 +262,7 @@ export class Composer {
     try {
       cx.bind_keys([
         { keystroke: "enter", action: "bot_herdr_send", context: "BotHerdr > Input" },
+        { keystroke: "ctrl-enter", action: "bot_herdr_steer", context: "BotHerdr > Input" },
         { keystroke: "pageup", action: "bot_herdr_page_up", context: "BotHerdr > Input" },
         { keystroke: "pagedown", action: "bot_herdr_page_down", context: "BotHerdr > Input" },
         { keystroke: "ctrl-end", action: "bot_herdr_latest", context: "BotHerdr > Input" },
@@ -258,11 +278,23 @@ export class Composer {
 
     this.loadKnown(cx);
     cx.timer.every(60000, (cx) => this.loadKnown(cx));
+    cx.timer.every(1500, (cx) => this.flushQueued(cx));
   }
 
   focus() {
     this.expanded = true;
     this.input.focus();
+  }
+
+  setFocused(on, cx) {
+    if (this.focused === on) return;
+    this.focused = on;
+    cx.notify();
+  }
+
+  /** At rest: no keyboard, nothing typed or attached, no pane up. The box is then one input line. */
+  atRest() {
+    return !this.focused && !this.text.trim() && !this.files.length && !this.pane && this.paneNow() !== "ask";
   }
 
   loadKnown(cx) {
@@ -445,7 +477,7 @@ export class Composer {
               })
               .child(l ? l.charAt(0).toUpperCase() + l.slice(1) : "Default"),
             c,
-            `bc-effort-${l || "default"}`,
+            `bc-effort-${l || "default"}`, { edge: true },
           );
         }))))
       .when(Boolean(this.askingModels), (el) => el.child(div().flex_none().h(ROW).flex().items_center().text_size(TYPE.xs).text_color(c.faint).child("Asking the harnesses for their models…")))
@@ -779,7 +811,7 @@ export class Composer {
     if (row.kind === "command" && row.name === "settings") {
       this.input.set_value("");
       this.mode = null;
-      showPage("settings");
+      showSettings("agents");
     } else if (lists) {
       this.input.set_selected_range(range);
       this.mode = "start";
@@ -1104,7 +1136,7 @@ export class Composer {
         .on_click(onClick)
         .child(label),
       c,
-      id,
+      id, { edge: true },
     );
     const primary = (id, label, onClick) => actionButton(c, id, label, onClick, { tone: "primary" });
     const list = v_flex()
@@ -1211,6 +1243,15 @@ export class Composer {
   }
 
   send(cx) {
+    this.submitInput(cx, false);
+  }
+
+  /** Ctrl+Enter (or Steer button): interrupts a working target agent, then sends. */
+  steer(cx) {
+    this.submitInput(cx, true);
+  }
+
+  submitInput(cx, steer) {
     if (this.sending) return;
     // With a question up, what you type answers it.
     if (!this.pane && this.paneNow() === "ask") {
@@ -1226,11 +1267,51 @@ export class Composer {
       if (option) return at.question.multi ? this.toggleAsk(q, option.label, cx) : this.answerAsk(q, { picks: [option.label] }, cx);
       return this.answerAsk(q, { text: typed }, cx);
     }
-    this.dispatchContent(this.input.content(), this.files, { fromInput: true }, cx);
+    const content = this.input.content();
+    const text = String(content?.text ?? "").trim();
+    const target = this.target();
+    const busy = target?.status === "working";
+    const mode = composerSendMode({ busy, steer });
+    if (mode === "queue" && (text || this.files.length) && !/^\s*\//.test(text)) {
+      this.queuedMessages.push({
+        n: ++this.queueSeq,
+        text: text || this.files.map((f) => f.name).join(", "),
+        content,
+        files: [...this.files],
+        address: target?.address ?? null,
+      });
+      this.files = [];
+      this.input.set_value("");
+      this.text = "";
+      this.pane = null;
+      this.trigger = null;
+      this.mode = null;
+      this.dismissed = null;
+      cx.notify();
+      return;
+    }
+    this.dispatchContent(content, this.files, { fromInput: true, steer: mode === "steer" }, cx);
   }
 
-  /** Plans and dispatches one message (`fromInput: false` for queued cross-page sends). */
-  dispatchContent(content, keptFiles, { fromInput = false } = {}, cx) {
+  /** Removes a queued message before it is delivered. */
+  removeQueued(n, cx) {
+    this.queuedMessages = this.queuedMessages.filter((item) => item.n !== n);
+    cx.notify();
+  }
+
+  /** Delivers the oldest queued message once its target agent is no longer working. */
+  flushQueued(cx) {
+    if (!this.queuedMessages.length || this.sending) return;
+    const next = this.queuedMessages[0];
+    const all = agents();
+    const agent = next.address ? all.find((a) => a.address === next.address) : this.target();
+    if (agent?.status === "working") return;
+    this.queuedMessages.shift();
+    this.dispatchContent(next.content, next.files, { fromInput: false }, cx);
+  }
+
+  /** Plans and dispatches one message (`fromInput: false` for queued sends; `steer: true` interrupts first). */
+  dispatchContent(content, keptFiles, { fromInput = false, steer = false } = {}, cx) {
     const all = agents();
     const target = this.target();
     const result = plan(content, {
@@ -1256,7 +1337,7 @@ export class Composer {
         this.input.set_value("");
         this.text = "";
       }
-      showPage("settings");
+      showSettings("agents");
       cx.notify();
       if (!fromInput) this.flushOutbox(cx);
       return;
@@ -1279,6 +1360,13 @@ export class Composer {
     this.sending = true;
     // The arrow shoots up out of the key as the message goes.
     this.sendFx = { n: this.sendFx.n, phase: "launch" };
+    // Optimistic send: show the message muted in the feed at once until the engine acks it.
+    const initialTo = result.steps
+      .filter((s) => s.do === "send" || s.do === "start")
+      .map((s) => (s.do === "send" ? { address: s.address, name: this.nameOf(s.address) } : { address: null, name: s.tab ?? s.name }));
+    const pendingId = initialTo.length
+      ? this.hooks.sent?.({ text: sentText ?? "", files: keptFiles.map((f) => f.name), paths: keptFiles.map((f) => f.path), to: initialTo, pending: true }, cx)
+      : null;
     cx.notify();
     // A plain message (no @, no /command) to the Orchestrator may go to one agent instead.
     const first = result.steps[0];
@@ -1297,6 +1385,10 @@ export class Composer {
       }
       for (const step of steps) {
         try {
+          if (steer && step.do === "send" && step.address) {
+            const liveAgent = all.find((a) => a.address === step.address);
+            if (liveAgent?.status === "working") await hc(["interrupt", step.address]);
+          }
           await this.runStep(step, all);
           if (step.do === "send") to.push({ address: step.address, name: this.nameOf(step.address) });
           if (step.do === "start") to.push({ address: null, name: step.tab ?? step.name });
@@ -1304,7 +1396,12 @@ export class Composer {
           failed.push(e instanceof Error ? e.message : String(e));
         }
       }
-      if (to.length) this.hooks.sent?.({ text: sentText ?? "", files: keptFiles.map((f) => f.name), paths: keptFiles.map((f) => f.path), to }, cx);
+      if (to.length) {
+        if (pendingId) this.hooks.acked?.(pendingId, { to }, cx);
+        else this.hooks.sent?.({ text: sentText ?? "", files: keptFiles.map((f) => f.name), paths: keptFiles.map((f) => f.path), to }, cx);
+      } else if (pendingId) {
+        this.hooks.failed?.(pendingId, cx);
+      }
       this.sending = false;
       this.landSend(cx);
       if (failed.length) {
@@ -1333,12 +1430,17 @@ export class Composer {
       this.trigger = null;
       this.mode = null;
     }
-    const id = this.hooks.sent?.({ text: question, files: [], paths: [], to: [{ address: null, name: "knowledge-scout" }] }, cx);
+    const id = this.hooks.sent?.({ text: question, files: [], paths: [], to: [{ address: null, name: "knowledge-scout" }], pending: true }, cx);
     cx.notify();
     cx.spawn(async (cx) => {
       const r = await bh(["knowledge", "ask", "--data", enc(question), "--json"], { cwd: projectDir() });
-      if (r.code !== 0) this.say((r.stderr || r.stdout).trim().split("\n")[0] || "Couldn't ask Scout.", cx, "error");
-      else this.hooks.relabel?.(id, "knowledge-scout", askedName(r.stdout) ?? "knowledge-scout", cx);
+      if (r.code !== 0) {
+        if (id) this.hooks.failed?.(id, cx);
+        this.say((r.stderr || r.stdout).trim().split("\n")[0] || "Couldn't ask Scout.", cx, "error");
+      } else {
+        if (id) this.hooks.acked?.(id, {}, cx);
+        this.hooks.relabel?.(id, "knowledge-scout", askedName(r.stdout) ?? "knowledge-scout", cx);
+      }
       cx.notify();
     });
   }
@@ -1495,7 +1597,13 @@ export class Composer {
 
   /** Whether the composer should be folded to a slim bar now. */
   isFolded() {
-    return Boolean(!this.expanded && !this.pane && this.paneNow() !== "ask" && !this.files.length);
+    return composerIsFolded({
+      expanded: this.expanded,
+      pane: this.pane,
+      paneNow: this.paneNow(),
+      filesCount: this.files.length,
+      queuedCount: this.queuedMessages?.length ?? 0,
+    });
   }
 
   /** A key typed while folded: grow back and type it at the end of the draft. */
@@ -1518,9 +1626,16 @@ export class Composer {
     return rows;
   }
 
+  /** Height reserved by queued message rows shown above the composer. */
+  queueH() {
+    const n = this.queuedMessages?.length ?? 0;
+    return n > 0 ? n * (CONTROL + SPACE[1]) + SPACE[2] : 0;
+  }
+
   height(width) {
     if (this.isFolded()) return 40;
-    return SIZE.textTop + this.textRows(width) * SIZE.line + SIZE.tools + 2;
+    const base = this.atRest() ? SIZE.textTop * 2 + SIZE.line + 2 : SIZE.textTop + this.textRows(width) * SIZE.line + SIZE.tools + 2;
+    return base + this.queueH();
   }
 
   /** The attachments row: taller when it shows images. */
@@ -1563,10 +1678,12 @@ export class Composer {
     const menu = this.paneView(c, width);
     const folded = this.isFolded();
     const attach = !folded && this.files.length > 0 ? this.attachments(c, width) : null;
+    const queued = !folded && this.queuedMessages.length > 0 ? this.queueView(c, width) : null;
     return v_flex()
       .id("bc")
       .key_context(contexts.join(" "))
       .on_action("bot_herdr_send", (_e, cx) => this.send(cx))
+      .on_action("bot_herdr_steer", (_e, cx) => this.steer(cx))
       .on_action("bot_herdr_pick", (_e, cx) => this.pick(this.rows()[this.at], cx))
       .on_action("bot_herdr_up", (_e, cx) => this.move(-1, cx))
       .on_action("bot_herdr_down", (_e, cx) => this.move(1, cx))
@@ -1579,8 +1696,35 @@ export class Composer {
       .when(Boolean(this.toast), (el) => el.child(this.toastView(c, width)))
       // Painted before the pane, so the pane covers the box's top edge where they join.
       .child(folded ? this.slim(c, width) : this.box(c, width, Boolean(menu)))
+      .when(Boolean(queued), (el) => el.child(queued))
       .when(Boolean(attach), (el) => el.child(attach))
       .when(Boolean(menu), (el) => el.child(menu));
+  }
+
+  /** Muted rows above the composer for messages queued while the target agent is working. */
+  queueView(c, width) {
+    return v_flex()
+      .id("bh-queue")
+      .flex_none()
+      .w(width)
+      .pb(SPACE[2])
+      .gap(SPACE[1])
+      .children(this.queuedMessages.map((item) => h_flex()
+        .id(`bh-queue-${item.n}`)
+        .role("status")
+        .accessibility_label(`Queued message: ${item.text}`)
+        .w_full()
+        .h(CONTROL)
+        .px(SPACE[3])
+        .gap(SPACE[2])
+        .items_center()
+        .rounded(RADIUS.control)
+        .bg(c.well)
+        .border_1()
+        .border_color(c.edge)
+        .child(div().flex_none().text_size(TYPE_SCALE.metadata).text_color(c.textMuted).child("Queued"))
+        .child(div().flex_1().min_w(0).truncate().text_size(TYPE_SCALE.metadata).text_color(c.textSecondary).child(item.text.replace(/\s+/g, " ")))
+        .child(actionButton(c, `bh-queue-${item.n}-remove`, "Remove", (_e, cx) => this.removeQueued(item.n, cx), { tone: "quiet", tooltip: "Remove queued message" }))));
   }
 
   // The composer box: the text and the tools row. Attachments sit above it as thumbnails.
@@ -1591,22 +1735,32 @@ export class Composer {
     const target = this.target();
     const busy = target?.status === "working";
     const empty = !this.text.trim() && !this.files.length;
-    const placeholder = !this.pane && this.paneNow() === "ask" ? "Or type your own reply…" : busy ? `${lead?.name ?? "Orchestrator"} is working. Enter steers it…` : this.placeholder ?? PLACEHOLDER;
+    const placeholder = composerPlaceholder({
+      asking: !this.pane && this.paneNow() === "ask",
+      busy,
+      leadName: lead?.name ?? "Orchestrator",
+      customPlaceholder: this.placeholder,
+      fallback: PLACEHOLDER,
+    });
     // Every height here is stated. The text box stretches to fill its parent, and a floating
     // surface may be offered the whole window, so nothing is left to size itself.
-    const textH = this.textRows(width) * SIZE.line;
+    const rest = this.atRest();
+    const textH = (rest ? 1 : this.textRows(width)) * SIZE.line;
     return v_flex()
       .id("bc-box")
       .relative()
       .flex_none()
       .w(width)
-      .h(SIZE.textTop + textH + SIZE.tools + SPACE[1])
+      .h(rest ? SIZE.textTop * 2 + textH : SIZE.textTop + textH + SIZE.tools + SPACE[1])
       .bg(c.fill)
       .border_1()
       .border_color(c.edge)
       .rounded(SIZE.radius)
       .shadow_md()
       .on_drop((e, cx) => this.addFiles(e.paths, cx))
+      // Enter queues while busy (or sends when idle); Ctrl+Enter steers (interrupts then sends).
+      .on_action("bot_herdr_send", (_e, cx) => this.send(cx))
+      .on_action("bot_herdr_steer", (_e, cx) => this.steer(cx))
       .on_mouse_down("left", (_e, cx) => {
         cx.stop_propagation(); // the box keeps its own presses: the scrim behind must not see them
         this.expanded = true;
@@ -1643,7 +1797,7 @@ export class Composer {
               }),
           ),
       )
-      .child(this.tools(c, target, busy, empty, lead));
+      .when(!rest, (el) => el.child(this.tools(c, target, busy, empty, lead)));
   }
 
   /** A slim bar when the feed is scrolled away: click or type to grow it back, draft intact. */
@@ -1670,7 +1824,7 @@ export class Composer {
         })
         .child(div().flex_1().min_w(0).truncate().text_size(TYPE.md).text_color(this.text.trim() ? c.ink : c.faint).child(draft)),
       c,
-      "bc-slim",
+      "bc-slim", { edge: true },
     );
   }
 
@@ -1736,7 +1890,7 @@ export class Composer {
             .child(image(f.image || f.path).w(SIZE.imagesRow + SPACE[5] - SPACE[1]).h(SIZE.imagesRow - SPACE[3] - SPACE[1]))
             .child(div().absolute().top(SPACE[2]).right(SPACE[2]).rounded(SIZE.nested).bg(c.fill).child(remove(i, `bc-file-x-${i}`))),
           c,
-          `bc-file-${i}`,
+          `bc-file-${i}`, { edge: true },
         )
         : h_flex()
           .id(`bc-file-${i}`)
@@ -1784,23 +1938,35 @@ export class Composer {
     const textH = leaving ? H : h;
     const textTop = leaving ? 0 : top;
     const textLeft = Math.round((width - textW) / 2);
-    const shape = div()
-      .id(`bc-toast-shape-${t.n}`)
-      .absolute()
-      .top(top)
-      .left(left)
-      .w(w)
-      .h(h)
-      .bg(c.fill)
-      .border_1()
-      .border_color(c.edge)
-      .rounded(SIZE.radius)
-      .shadow_md()
-      .child(div().absolute().top(0).left(SIZE.radius).right(SIZE.radius).h(HAIR).bg(c.rim))
-      .spring("top", TOAST_SPRINGS.rise)
-      .spring("height", TOAST_SPRINGS.height)
-      .spring("width", TOAST_SPRINGS.width)
-      .spring("left", TOAST_SPRINGS.width);
+    const shape = springing(
+      springing(
+        springing(
+          springing(
+            div()
+              .id(`bc-toast-shape-${t.n}`)
+              .absolute()
+              .top(top)
+              .left(left)
+              .w(w)
+              .h(h)
+              .bg(c.fill)
+              .border_1()
+              .border_color(c.edge)
+              .rounded(SIZE.radius)
+              .shadow_md()
+              .child(div().absolute().top(0).left(SIZE.radius).right(SIZE.radius).h(HAIR).bg(c.rim)),
+            "top",
+            TOAST_SPRINGS.rise,
+          ),
+          "height",
+          TOAST_SPRINGS.height,
+        ),
+        "width",
+        TOAST_SPRINGS.width,
+      ),
+      "left",
+      TOAST_SPRINGS.width,
+    );
     const tone = toneOf(c, item.kind);
     let body = h_flex()
       .id(`bc-toast-body-${t.n}`)
@@ -1813,7 +1979,7 @@ export class Composer {
       .gap(SPACE[3])
       .items_center()
       .opacity(up ? 1 : 0)
-      .transition("opacity", leaving ? TOAST_EXIT_TEXT : up ? { ...MOTION.row, delay: 240 } : MOTION.row)
+      .transition("opacity", timed(leaving ? TOAST_EXIT_TEXT : up ? { ...MOTION.row, delay: 240 } : MOTION.row))
       .text_size(TYPE.md)
       .line_height(`${LINE.md}px`)
       .text_color(c.ink)
@@ -1824,7 +1990,7 @@ export class Composer {
         this.dropToast(item.id, cx);
       }, { tone: "secondary" })));
     // Leaving, the words stay where they are (no spring to a new place) and only fade.
-    if (!leaving) body = body.spring("top", TOAST_SPRINGS.rise);
+    if (!leaving) body = springing(body, "top", TOAST_SPRINGS.rise);
     return div().id("bc-toast").absolute().left(0).right(0).top(-slot).h(slot).child(shape).child(body);
   }
 
@@ -1880,6 +2046,7 @@ export class Composer {
         "bc-lead-model",
       )))
       .child(div().flex_1())
+      .when(busy && !empty, (el) => el.child(actionButton(c, "bh-steer", "Steer", (_e, cx) => this.steer(cx), { tone: "secondary", tooltip: "Interrupt and steer (Ctrl+Enter)" })))
       .when(busy, (el) =>
         el.child(focusable(
           pressable(
@@ -1925,25 +2092,37 @@ export class Composer {
       .bg(c.well)
       .when(canSend, (el) => el.hover((s) => s.opacity(0.92)))
       .on_click((_e, cx) => this.send(cx))
-      .child(layer("bc-send-fill", fill)
-        .left((TARGET - fill) / 2)
-        .top((TARGET - fill) / 2)
-        .rounded_full()
-        .bg(c.accent)
-        .border_b(1)
-        .border_color(c.accentLip)
-        .opacity(canSend ? 1 : 0)
-        .transition("opacity", MOTION.hover)
-        .spring("width", canSend ? SEND_GROW : SEND_SHRINK)
-        .spring("height", canSend ? SEND_GROW : SEND_SHRINK)
-        .spring("left", canSend ? SEND_GROW : SEND_SHRINK)
-        .spring("top", canSend ? SEND_GROW : SEND_SHRINK))
+      .child(springing(
+        springing(
+          springing(
+            springing(
+              layer("bc-send-fill", fill)
+                .left((TARGET - fill) / 2)
+                .top((TARGET - fill) / 2)
+                .rounded_full()
+                .bg(c.accent)
+                .border_b(1)
+                .border_color(c.accentLip)
+                .opacity(canSend ? 1 : 0)
+                .transition("opacity", MOTION.hover),
+              "width",
+              canSend ? SEND_GROW : SEND_SHRINK,
+            ),
+            "height",
+            canSend ? SEND_GROW : SEND_SHRINK,
+          ),
+          "left",
+          canSend ? SEND_GROW : SEND_SHRINK,
+        ),
+        "top",
+        canSend ? SEND_GROW : SEND_SHRINK,
+      ))
       .child(layer(`bc-send-arrow-${fx.n}`, GLYPH.lg)
         .left(mid)
         .top(arrowTop)
         .opacity(arrowOn ? 1 : 0)
-        .transition("top", launching ? SEND_LAUNCH : SEND_RISE)
-        .transition("opacity", launching ? SEND_LAUNCH_FADE : SEND_RISE)
+        .transition("top", timed(launching ? SEND_LAUNCH : SEND_RISE))
+        .transition("opacity", timed(launching ? SEND_LAUNCH_FADE : SEND_RISE))
         .child(glyph(`bc-send-dim-${fx.n}`, c.faint, !canSend))
         .child(glyph(`bc-send-ink-${fx.n}`, c.accentInk, canSend)))
       // Shown only if sending takes a moment, so a quick send doesn't flash it.
@@ -1951,8 +2130,8 @@ export class Composer {
         .left(mid)
         .top(mid)
         .opacity(launching ? 1 : 0)
-        .transition("opacity", launching ? SEND_SPIN_IN : MOTION.hover)
-        .when(fx.phase !== "rest", (el) => el.child(svg(ICON("spinner")).size(GLYPH.lg).text_color(c.faint).spin(900))));
+        .transition("opacity", timed(launching ? SEND_SPIN_IN : MOTION.hover))
+        .when(fx.phase !== "rest", (el) => el.child(spinning(svg(ICON("spinner")).size(GLYPH.lg).text_color(c.faint), 900))));
   }
 
   /** The message is out: a new arrow, drawn low and clear first, rises into the send key. */

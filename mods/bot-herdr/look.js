@@ -86,6 +86,8 @@ function withTokens(base) {
     surface0: base.ground,
     surface1: base.fill,
     surface2: base.hover,
+    // A press: the surface a second level up from hover.
+    pressed: mix(base.hover, base.ink, 0.07),
     textPrimary: base.ink,
     textSecondary: base.muted,
     textMuted: base.faint,
@@ -203,34 +205,100 @@ export const GLYPH = { xs: 10, sm: 12, md: 14, lg: 16 };
  * motion at all.
  * @typedef {import("gpui-shell").TransitionPolicy} Motion
  */
-export const MOTION = {
-  /** @type {Motion} */
-  hover: { duration: 120, easing: "ease-out" },
-  /** @type {Motion} */
-  press: { duration: 90, easing: "ease-out" },
-  /** @type {Motion} */
-  pane: { duration: 190, easing: "ease-out" },
-  /** @type {Motion} */
-  arrive: { duration: 240, easing: "ease-out" },
-  stagger: 22,
-  /** @type {Motion} */
-  menuWidth: { duration: 170, easing: "ease-out" },
-  /** @type {Motion} */
-  menuClose: { duration: 110, easing: "ease-in" },
-  /** @type {Motion} */
-  row: { duration: 240, easing: "ease-out" },
-  /** @type {Motion} */
-  tool: { duration: 160, easing: "ease-out" },
-  // A toast leaving: as long as its arrival, eased at both ends so it melts away, not snaps.
-  /** @type {Motion} */
-  toastOut: { duration: 300, easing: "ease-in-out" },
-  /** @type {Motion} */
-  toastTextOut: { duration: 200, easing: "ease-in-out" },
-  /** @type {Motion} */
-  turn: { duration: 260, easing: "ease-out" },
-  /** @type {Motion} */
-  verb: { duration: 420, easing: "ease-out" },
+
+/** The design language's three timings: hover, appear and fold, panels sliding in. */
+export const TIMING = { hover: 100, appear: 150, panel: 250 };
+
+/** The one tick every working animation's text frames run on. */
+export const TICK_MS = 120;
+
+/**
+ * Reduce motion: the Settings › General toggle, or herdr's own setting once it has one. main.js
+ * hands in where to read it (`setMotionSource`); everything that moves asks `reducedMotion()`.
+ */
+let motionSource = () => false;
+
+/** The shared (persisted, every view re-renders on change) key of the Reduce motion toggle. */
+export const REDUCE_MOTION_KEY = "bot-herdr.reduce-motion";
+
+/** Whether motion is reduced, from the toggle's shared value and herdr's settings (`reduced_motion`, once herdr has it). */
+export const motionReduced = (toggle, hostSettings) => toggle === true || hostSettings?.reduced_motion === true;
+
+/** Where `reducedMotion()` reads from: a function answering true while motion is reduced. */
+export function setMotionSource(read) {
+  motionSource = typeof read === "function" ? read : () => false;
+}
+
+/** Whether motion is reduced now: frames freeze on their first glyph and fades are instant. */
+export function reducedMotion() {
+  try {
+    return Boolean(motionSource());
+  } catch {
+    return false;
+  }
+}
+
+/** A transition policy as drawn now: instant, with no delay, while motion is reduced. */
+export function timed(policy) {
+  return reducedMotion() ? { ...policy, duration: 0, delay: 0 } : policy;
+}
+
+/**
+ * A looping property (a breathe, a pulse) that rests, unmoving, while motion is reduced: an
+ * opacity loop rests fully shown at its `to`, anything else where the element already sits.
+ */
+export function looping(el, property, options) {
+  if (!reducedMotion()) return el.loop(property, options);
+  return property === "opacity" && Number.isFinite(options?.to) ? el.opacity(options.to) : el;
+}
+
+/** Text frames on the one tick: frozen on the first frame while motion is reduced. */
+export function framed(el, list, ms = TICK_MS) {
+  const frames = Array.isArray(list) && list.length ? list : [""];
+  return reducedMotion() ? el.child(frames[0]) : el.frames(frames, ms);
+}
+
+/** A spinning glyph that stands still while motion is reduced. */
+export function spinning(el, ms) {
+  return reducedMotion() ? el : el.spin(ms);
+}
+
+/** A spring on a property that snaps with no motion while motion is reduced. */
+export function springing(el, property, policy) {
+  return reducedMotion() ? el : el.spring(property, policy);
+}
+
+/** How long a newly finished thread or step holds its soft highlight before fading. */
+export const HIGHLIGHT_MS = 2000;
+
+/** Every motion's resting policy, on the three timings; MOTION hands them out through `timed`. */
+const POLICIES = {
+  hover: { duration: TIMING.hover, easing: "ease-out" },
+  press: { duration: TIMING.hover, easing: "ease-out" },
+  pane: { duration: TIMING.panel, easing: "ease-out" },
+  arrive: { duration: TIMING.appear, easing: "ease-out" },
+  fold: { duration: TIMING.appear, easing: "ease-in-out" },
+  menuWidth: { duration: TIMING.panel, easing: "ease-out" },
+  menuClose: { duration: TIMING.appear, easing: "ease-in" },
+  row: { duration: TIMING.appear, easing: "ease-out" },
+  tool: { duration: TIMING.appear, easing: "ease-out" },
+  // A toast leaving: as long as a panel, eased at both ends so it melts away, not snaps.
+  toastOut: { duration: TIMING.panel, easing: "ease-in-out" },
+  toastTextOut: { duration: TIMING.appear, easing: "ease-in-out" },
+  turn: { duration: TIMING.panel, easing: "ease-out" },
+  verb: { duration: TIMING.panel, easing: "ease-out" },
+  highlight: { duration: TIMING.panel, easing: "ease-out" },
 };
+
+/** @type {Record<keyof typeof POLICIES, Motion> & { stagger: number }} */
+export const MOTION = /** @type {any} */ ({
+  get stagger() {
+    return reducedMotion() ? 0 : 22;
+  },
+});
+for (const name of Object.keys(POLICIES)) {
+  Object.defineProperty(MOTION, name, { enumerable: true, get: () => timed(POLICIES[name]) });
+}
 
 /** A pointer over a control: its background takes the hover tone. gpui animates no colours. */
 export function hoverable(el, c, fill = null) {
@@ -240,19 +308,58 @@ export function hoverable(el, c, fill = null) {
 /** A filled accent button's hover: the accent a shade deeper, never the page's pale hover tone. */
 export const accentFill = (c) => mix(c.accent, c.accentLip ?? "#000000", 0.28);
 
-/** A press sinks the control a pixel: `top` is one of the properties gpui animates. */
-export function pressable(el) {
-  return el.relative().transition("top", MOTION.press).active((s) => s.top(1));
+/**
+ * A press sinks the control a pixel (`top` is one of the properties gpui animates) and, given a
+ * `press` tone, steps its surface up. gpui keeps one active style, so both are set here at once.
+ */
+export function pressable(el, press = null) {
+  return el.relative().transition("top", MOTION.press).active((s) => (press ? s.top(1).bg(press) : s.top(1)));
 }
 
-/** Keyboard reach and a 2px accent ring on focus; `id` keeps its identity across re-renders. */
-export function focusable(el, id, c) {
-  return el.id(id).tab_index(0).focus((s) => s.border_2().border_color(c.accent).opacity(1));
+/** The press tone over a hover tone: one more step up the surfaces (no bounce, no colour fade). */
+export const pressTone = (c, fill = null) => (fill && fill !== c.hover ? mix(fill, c.ink, 0.07) : c.pressed ?? c.hover);
+
+/**
+ * Keyboard reach and a 2px accent ring on focus; `id` keeps its identity across re-renders. The
+ * ring's 2px are reserved (a clear border) so focus moves nothing; an element that draws its own
+ * edge (`edge: true`) keeps it and the ring takes its place. gpui's `focus` style follows focus,
+ * not the input device, so a click that focuses a control shows its ring too.
+ */
+export function focusable(el, id, c, { edge = false } = {}) {
+  const reserved = edge ? el : el.border_2().border_color(CLEAR);
+  return reserved.id(id).tab_index(0).focus((s) => s.border_2().border_color(c.accent).opacity(1));
+}
+
+/** Whether a key press activates the focused control, as a click would: Enter or Space. */
+export const activatesOn = (e) => ["enter", "return", "space", " "].includes(String(e?.key ?? "").toLowerCase()) && !e?.modifiers?.control && !e?.modifiers?.alt && !e?.modifiers?.platform;
+
+/**
+ * A control that opens on a press (a list under it, say) also opens on Enter or Space while it
+ * holds the keyboard; `run(cx)` is what the press does, without a pointer position.
+ */
+export function activates(el, run) {
+  return el.on_key_down((e, cx) => {
+    if (!activatesOn(e)) return;
+    cx.stop_propagation();
+    run(cx);
+  });
+}
+
+/**
+ * A scrolling conversation a press folds the composer under: it is a tab stop too, named for a
+ * screen reader, and Esc while it holds the keyboard folds the box as the press does.
+ */
+export function foldRegion(el, label, fold) {
+  return el.tab_index(0).role("log").accessibility_label(label).on_key_down((e, cx) => {
+    if (String(e?.key ?? "").toLowerCase() !== "escape") return;
+    fold(cx);
+  });
 }
 
 /** A control's whole answer to the pointer and the keyboard: hover, press and focus. */
-export function clickable(el, c, id, { fill = null } = {}) {
-  return focusable(pressable(hoverable(el, c, fill)), id, c);
+export function clickable(el, c, id, { fill = null, edge = false } = {}) {
+  // Hover steps the surface up one level; a press steps it up a second.
+  return focusable(pressable(hoverable(el, c, fill), pressTone(c, fill)), id, c, { edge });
 }
 
 /**
