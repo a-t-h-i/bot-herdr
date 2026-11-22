@@ -6,7 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { palette, contrastOf, agentInk, agentInkOn, agentHue, mix, LIGHT, DARK, STATE } from "../mods/bot-herdr/look.js";
+import { palette, contrastOf, agentInk, LIGHT, DARK, STATE } from "../mods/bot-herdr/look.js";
 
 const snapshot = JSON.parse(readFileSync(new URL("./fixtures/herdr-themes.json", import.meta.url), "utf8"));
 
@@ -47,21 +47,13 @@ for (const theme of themes) {
         const r = contrastOf(ink, c[bg]);
         assert.ok(r >= 4.5, fail(theme, `agentInk(${name})`, ink, c[bg], r, "4.5"));
       }
-      // The Knowledge card and filter chip are tinted with the agent's hue: a card keeps fill in
-      // light mode and an alpha(hue) tint in dark; a chip is alpha(hue) over the page.
-      const hue = agentHue(name, c.accent);
-      const cardRest = theme.light ? c.fill : mix(c.ground, hue, 0.08);
-      const cardHover = theme.light ? c.fill : mix(c.ground, hue, 0.12);
-      const cardInk = theme.light ? ink : agentInkOn(c, name, cardHover);
-      for (const bg of [cardRest, cardHover]) {
-        const r = contrastOf(cardInk, bg);
-        assert.ok(r >= 4.5, fail(theme, `card name (${name})`, cardInk, bg, r, "4.5"));
-      }
-      const chipRest = mix(c.ground, hue, theme.light ? 0.04 : 0.16);
-      const chipHover = theme.light ? c.hover : mix(c.ground, hue, 0.22);
-      for (const bg of [chipRest, chipHover]) {
-        const r = contrastOf(c.ink, bg);
-        assert.ok(r >= 4.5, fail(theme, `chip label (${name})`, c.ink, bg, r, "4.5"));
+      // No card and no chip is tinted with the agent's hue any more (Principle 5): the Knowledge
+      // card is the card and its filter chip is text. The identity colour is one small dot (3:1 as
+      // a glyph) beside a name that still reads at AA on the card, the page and the hover tone.
+      const dot = agentInk(c, name);
+      for (const bg of ["fill", "ground"]) {
+        const r = contrastOf(dot, c[bg]);
+        assert.ok(r >= 4.5, fail(theme, `agent dot (${name})`, dot, c[bg], r, "4.5"));
       }
     }
     const onAccent = contrastOf(c.accentInk, c.accent);

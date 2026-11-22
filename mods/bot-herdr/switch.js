@@ -8,7 +8,7 @@
 import { div, svg } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import { focused, shared, theme, nextCommand, settings } from "herdr";
-import { SIZE, TYPE, LINE, SPACE, CONTROL, DOT, GLYPH, ICON, clickable, textWidth } from "./look.js";
+import { SIZE, TYPE, TYPE_SCALE, LINE, SPACE, CONTROL, CHIP, DOT, GLYPH, ICON, clickable, textWidth } from "./look.js";
 import { actionButton } from "./button.js";
 import { colors } from "./theme.js";
 import { PAGES, HOLD, activePage, showPage } from "./pages.js";
@@ -52,15 +52,21 @@ function pageTabs(room, countOf, active) {
 }
 
 /**
- * The one segmented control: the page switch, a task's tab strip, a plan's list choice.
- * `items` is [{ id, label, on, count }]; `onPick(id, cx)` receives the picked one. `mark` is how
- * the picked one stands out: "fill" (a raised tab) or "line" (a thin accent edge, no fill — the
- * page switch's). `padX` narrows every item's padding together, so a strip can fit any window.
+ * The one selection style, app-wide: the picked item's label in the accent over a 2px accent
+ * underline. Nothing is filled, outlined all round or pill-shaped to mean "chosen" (Principle 2
+ * and the spec's Tabs and selection rule). A segmented control keeps its grey track, so a group
+ * of choices reads as one control.
+ *
+ * The one segmented control: the page switch, a task's tab strip, a plan's list choice, a setting.
+ * `items` is [{ id, label, on, count }]; `onPick(id, cx)` receives the picked one. `bar` styles the
+ * strip itself before its items are added: the page switch hands it the top bar's own styles, so
+ * its tabs sit straight on the bar instead of on a second grey track inside a second frame.
+ * `padX` narrows every item's padding together, so a strip can fit any window.
  */
-export function segmented(c, { id, items, onPick, grow = false, height = null, mark = "fill", padX = SPACE[4] }) {
-  // The track insets its items by the same 2px on every side, so the picked one sits centred in
-  // it. `height` is the items' own (the page switch matches herdr's 29px tabs); by default the
-  // track is a control's height.
+export function segmented(c, { id, items, onPick, grow = false, height = null, padX = SPACE[4], bar = null }) {
+  // The track insets its items by 2px on every side, so the picked one sits centred in it.
+  // `height` is the items' own (the page switch matches herdr's 29px tabs); by default the track
+  // is a control's height. The 2px inset is optical, the one step off the 4px grid.
   const itemH = height ?? CONTROL - SPACE[1] * 2;
   return h_flex()
     .id(id)
@@ -68,9 +74,9 @@ export function segmented(c, { id, items, onPick, grow = false, height = null, m
     .p(SPACE[1])
     .gap(SPACE[1])
     .items_center()
-    .rounded(SIZE.control)
-    .bg(c.well)
     .when(grow, (el) => el.flex_1())
+    .when(Boolean(bar), (el) => bar(el))
+    .when(!bar, (el) => el.rounded(SIZE.control).bg(c.well))
     .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
     .children(items.map((item, i) =>
       clickable(
@@ -84,48 +90,75 @@ export function segmented(c, { id, items, onPick, grow = false, height = null, m
           .items_center()
           .gap(SPACE[2])
           .rounded(SIZE.nested)
-          .text_size(TYPE.sm)
+          .text_size(TYPE_SCALE.metadata)
           .font_medium()
           .when(item.grow, (el) => el.flex_1().justify_center())
-          // Every item keeps a 1px border, transparent unless it is the picked one, so nothing
-          // moves when the pick changes.
-          .when(item.on && mark === "line", (el) => el.border_1().border_color(c.accent).text_color(c.ink))
-          .when(!item.on && mark === "line", (el) => el.border_1().border_color(alpha(c.accent, 0)).text_color(c.muted).hover((s) => s.text_color(c.ink)))
-          .when(item.on && mark !== "line", (el) => el.bg(c.fill).text_color(c.ink))
-          .when(!item.on && mark !== "line", (el) => el.text_color(c.muted).hover((s) => s.text_color(c.ink)))
+          // The underline keeps its 2px on every item, transparent until it is the picked one,
+          // so nothing moves when the pick changes.
+          .when(item.on, (el) => el.border_b(2).border_color(c.accent).text_color(c.accent))
+          .when(!item.on, (el) => el.border_b(2).border_color(alpha(c.accent, 0)).text_color(c.textSecondary).hover((s) => s.text_color(c.textPrimary)))
           .on_click((_e, cx) => onPick(item.id, cx))
           // An item that opens something under itself learns where it is on the press.
           .when(Boolean(item.onDown), (el) => el.on_mouse_down("left", (e, cx) => item.onDown(e, cx)))
           // An icon before the label, in the label's colour; the label is always there.
           .when(Boolean(item.icon), (el) => el.child(svg(ICON(item.icon)).flex_none().size(GLYPH.sm)))
           .child(item.label)
-          .when(item.count != null, (el) => el.child(div().text_size(TYPE.xs).font_semibold().text_color(c.accent).child(String(item.count)))),
+          .when(item.count != null, (el) => el.child(div().text_size(TYPE_SCALE.metadata).font_semibold().text_color(item.on ? c.accent : c.textMuted).child(String(item.count)))),
         c,
         `${id}-${item.id}`,
       )));
 }
 
 /**
- * A small rounded label in a tone: its text in the tone, on a wash of it. `pulse` adds a live dot
- * (a running agent, a plan being worked on).
+ * A state or status word in its tone: the state's glyph carries the colour and the word names it,
+ * with no chip, wash or pill (Principle 5: colour means identity or state, never decoration).
+ * `pulse` adds a live dot (a running agent, a plan being worked on).
  */
 export function pill(c, label, tone, { pulse = false, id = null } = {}) {
   const el = h_flex()
     .flex_none()
     .h(LINE.md)
-    .px(SPACE[3])
     .gap(SPACE[2])
     .items_center()
-    .rounded_full()
-    .bg(alpha(tone, 0.14))
-    .border_1()
-    .border_color(alpha(tone, 0.3))
-    .text_size(TYPE.xs)
+    .text_size(TYPE_SCALE.metadata)
     .font_medium()
     .text_color(tone)
     .when(pulse, (x) => x.child(div().size(DOT).rounded_full().bg(tone).loop("opacity", { from: 0.35, to: 1, period: 1400, easing: "ease-in-out" })))
     .child(label);
   return id ? el.id(id) : el;
+}
+
+/** Whether a filter has anything behind it, or is the one being shown: only then is its chip drawn. */
+export const chipHasResults = (count, on = false) => Boolean(on) || Number(count) > 0;
+
+/**
+ * A filter chip: its label and, when there are any, how many match. Nothing empty is drawn
+ * (Principle 3), so a chip with a zero count never appears and a count only reads above zero.
+ * Chosen, it takes the app's one selection style: accent text over a 2px accent underline.
+ */
+export function filterChip(c, { id, label, count = null, on = false, onClick }) {
+  const n = Number(count);
+  const text = Number.isFinite(n) && n > 0 ? `${label} · ${n}` : label;
+  return clickable(
+    h_flex()
+      .role("tab")
+      .aria_selected(on)
+      .flex_none()
+      .h(CHIP)
+      .px(SPACE[2])
+      .gap(SPACE[1])
+      .items_center()
+      .rounded(SIZE.nested)
+      .text_size(TYPE_SCALE.metadata)
+      .font_medium()
+      .when(on, (el) => el.border_b(2).border_color(c.accent).text_color(c.accent))
+      .when(!on, (el) => el.border_b(2).border_color(alpha(c.accent, 0)).text_color(c.textSecondary).hover((s) => s.text_color(c.textPrimary)))
+      .on_click(onClick)
+      .child(text),
+    c,
+    id,
+    { fill: c.hover },
+  );
 }
 
 /** An agent's avatar: its initial on a wash of its colour, ringed in it. */
@@ -178,7 +211,9 @@ export function sectionHead(c, icon, title, about = null, tone = null) {
  * Loading adds the quiet pulse; an error passes the retry as its action.
  */
 export function stateView(c, { id, title, line = null, action = null, loading = false }) {
-  // Centred in whatever holds it, its wrapped lines centred too.
+  // Centred in whatever holds it, its wrapped lines centred too. The title needs a row only when a
+  // working dot sits before it.
+  const heading = div().text_center().text_size(TYPE_SCALE.title).font_semibold().text_color(c.textPrimary).child(title);
   return v_flex()
     .id(id ?? "bh-state")
     .self_center()
@@ -186,22 +221,20 @@ export function stateView(c, { id, title, line = null, action = null, loading = 
     .gap(SPACE[3])
     .py(SPACE[5])
     .max_w(460)
-    .child(
-      h_flex()
+    .child(loading
+      ? h_flex()
         .gap(SPACE[3])
         .items_center()
-        .when(loading, (el) => el.child(
-          div()
-            .size(DOT)
-            .rounded_full()
-            .bg(c.accent)
-            .opacity(0.5)
-            .loop("opacity", { from: 0.25, to: 1, period: 1200, easing: "ease-in-out" }),
-        ))
-        .child(div().text_center().text_size(TYPE.lg).font_semibold().text_color(c.ink).child(title)),
-    )
+        .child(div()
+          .size(DOT)
+          .rounded_full()
+          .bg(c.accent)
+          .opacity(0.5)
+          .loop("opacity", { from: 0.25, to: 1, period: 1200, easing: "ease-in-out" }))
+        .child(heading)
+      : heading)
     .when(Boolean(line), (el) => el.child(
-      div().text_center().text_size(TYPE.md).line_height(`${LINE.md}px`).text_color(c.muted).child(line),
+      div().text_center().text_size(TYPE_SCALE.body).line_height(`${LINE.md}px`).text_color(c.textSecondary).child(line),
     ))
     .when(Boolean(action), (el) => el.child(
       actionButton(c, `${id ?? "bh-state"}-action`, action.label, action.on, { tone: "secondary" }),
@@ -274,33 +307,31 @@ export class Switch {
     const counts = shared(OPEN_COUNTS) ?? {};
     const countOf = (id) => (Number(counts[id]) > 0 ? Number(counts[id]) : null);
     const tabs = pageTabs(room, countOf, active);
-    // Drawn as one bar with herdr's tabs beside it: the same ground and bottom line on the strip,
-    // the control itself in our own palette.
-    return h_flex()
-      .id("bh-switch")
-      .size_full()
-      .items_center()
-      .overflow_hidden()
-      .on_size_change((size, cx) => {
-        // px with the app's zoom multiplied in; drawn sizes are without it.
-        const zoom = Number(settings().zoom) || 1;
-        const w = size.width / zoom;
-        if (Math.abs(w - (this.width ?? 0)) >= 1) {
-          this.width = w;
-          cx.notify();
-        }
-      })
-      .pl(SPACE[4])
-      .bg(t.chrome)
-      .border_b(1)
-      .border_color(t.border)
-      .child(segmented(c, {
-        id: "bh-pages",
-        height: HERDR_TAB,
-        mark: "line",
-        padX: tabs.pad,
-        items: this.items(tabs, active, countOf),
-        onPick: (id) => (id === MORE.id ? this.openMore(tabs.more, countOf) : showPage(id)),
-      }));
+    // One bar, not a bar holding a second bar: the tabs sit straight on herdr's top bar with the
+    // same ground and bottom line, and the picked one is underlined (the app's one selection style).
+    return segmented(c, {
+      id: "bh-pages",
+      height: HERDR_TAB,
+      padX: tabs.pad,
+      items: this.items(tabs, active, countOf),
+      onPick: (id) => (id === MORE.id ? this.openMore(tabs.more, countOf) : showPage(id)),
+      bar: (strip) => strip
+        .size_full()
+        .items_center()
+        .overflow_hidden()
+        .on_size_change((size, cx) => {
+          // px with the app's zoom multiplied in; drawn sizes are without it.
+          const zoom = Number(settings().zoom) || 1;
+          const w = size.width / zoom;
+          if (Math.abs(w - (this.width ?? 0)) >= 1) {
+            this.width = w;
+            cx.notify();
+          }
+        })
+        .pl(SPACE[4])
+        .bg(t.chrome)
+        .border_b(1)
+        .border_color(t.border),
+    });
   }
 }

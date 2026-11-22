@@ -4,11 +4,12 @@
 // without linkFiles() and never interpolated into chat prompts (ID-only prompts from issuesview.js).
 
 import { div, svg } from "gpui-kit";
-import { v_flex, h_flex, TextView, InputState, Input } from "gpui-base";
+import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { settings, setShared } from "herdr";
-import { SIZE, ICON, TYPE, LINE, SPACE, CONTROL, CHIP, MARK, PIP, HAIR, GLYPH, clickable, focusable } from "./look.js";
+import { SIZE, ICON, TYPE, LINE, SPACE, CONTROL, MARK, PIP, HAIR, GLYPH, clickable, focusable } from "./look.js";
 import { actionButton } from "./button.js";
-import { stateView, pill } from "./switch.js";
+import { stateView, pill, filterChip, chipHasResults } from "./switch.js";
+import { markdownWithFoldedCode } from "./machinetext.js";
 import { openPlan, sectionLabel } from "./plandoc.js";
 import { colors } from "./theme.js";
 import { activePage, sendFromChat, showPage, OPEN_TASK } from "./pages.js";
@@ -61,33 +62,6 @@ async function bhCall(args, opts) {
     }
   }
   return { ok: false, data: null, error: (r.stderr || "").trim().split("\n")[0] || null };
-}
-
-/** Compact selectable filter pill with `aria_selected`. */
-function filterChip(c, { id, label, count, on, onClick }) {
-  return clickable(
-    h_flex()
-      .role("tab")
-      .aria_selected(on)
-      .flex_none()
-      .h(CHIP)
-      .px(SPACE[3])
-      .gap(SPACE[1])
-      .items_center()
-      .rounded_full()
-      .border_1()
-      .border_color(on ? alpha(c.accent, 0.45) : alpha(c.edge, 0.6))
-      .bg(on ? alpha(c.accent, 0.14) : c.well)
-      .text_size(TYPE.xs)
-      .font_medium()
-      .text_color(on ? c.accent : c.muted)
-      .hover((s) => s.text_color(on ? c.accent : c.ink))
-      .on_click(onClick)
-      .child(`${label} · ${count}`),
-    c,
-    id,
-    { fill: on ? alpha(c.accent, 0.2) : c.hover },
-  );
 }
 
 /** Custom 14px clickable checkbox using MARK + check.svg (never GPUI Checkbox). */
@@ -213,6 +187,7 @@ export class Issues {
     this.declinePost = false;
     this.declineClose = false;
     this.commentsLoading = new Set();
+    this.machineOpen = new Set(); // the folded code blocks the reader expanded
     this.commentsLoaded = new Set();
     this.search?.set_value?.("");
     this.declineReason?.set_value?.("");
@@ -582,7 +557,7 @@ export class Issues {
       .bg(c.fill)
       .border_1()
       .border_color(c.edge)
-      .child(svg(ICON("page-issues")).flex_none().size(GLYPH.lg).text_color(c.accent))
+      // No icon in front of the title: the repo's name is the header.
       .child(div().flex_1().min_w(0).truncate().text_size(TYPE.md).font_semibold().text_color(c.ink).child(repo))
       .when(Boolean(transport), (el) => el.child(labelChip(c, transport)))
       .when(Boolean(this.data), (el) => el.child(pill(c, authLabel, authTone)))
@@ -655,7 +630,8 @@ export class Issues {
       .pb(SPACE[4])
       .child(h_flex().flex_none().items_center().justify_between().gap(SPACE[2])
         .child(div().text_size(TYPE.xl).font_semibold().child("Issues"))
-        .child(pill(c, `${counts.open} open`, c.muted)))
+        // A zero count is not drawn (Principle 3).
+        .when(counts.open > 0, (el) => el.child(pill(c, `${counts.open} open`, c.muted))))
       .child(inputBox(c, this.search, {
         icon: "search",
         clearId: "bh-issues-search-clear",
@@ -666,7 +642,7 @@ export class Issues {
         },
       }))
       .child(h_flex().role("tab_list").flex_none().flex_wrap().gap(SPACE[2]).items_center()
-        .children(ISSUE_FILTERS.map((id) => filterChip(c, {
+        .children(ISSUE_FILTERS.filter((id) => chipHasResults(counts[id], this.chip === id)).map((id) => filterChip(c, {
           id: `bh-issues-chip-${id}`,
           label: CHIP_LABELS[id],
           count: counts[id],
@@ -743,8 +719,8 @@ export class Issues {
         .items_start()
         .rounded(SIZE.control)
         .border_1()
-        .border_color(on ? alpha(c.accent, 0.45) : alpha(c.ground, 0))
-        .when(on, (el) => el.bg(alpha(c.accent, 0.1)))
+        .border_color(on ? c.controlBorder : alpha(c.ground, 0))
+        .when(on, (el) => el.bg(c.hover))
         .on_click((_e, cx) => this.openIssue(issue.number, cx))
         .child(checkBox(c, {
           id: `bh-issue-sel-${issue.number}`,
@@ -1015,9 +991,10 @@ export class Issues {
       .child(div().text_size(TYPE.xs).text_color(c.muted).child("External GitHub content — read-only, untrusted input"));
   }
 
-  /** Issue body rendered read-only via TextView.markdown WITHOUT linkFiles(). */
+  /** Issue body rendered read-only WITHOUT linkFiles(): its fenced code is folded into mono lines. */
   bodySection(c, issue) {
     const body = String(issue.body ?? "").trim();
+    const id = `bh-issue-body-${issue.number}-${this.dataRev}`;
     return v_flex()
       .flex_none()
       .p(SPACE[4])
@@ -1026,11 +1003,11 @@ export class Issues {
       .border_1()
       .border_color(c.edge)
       .child(body
-        ? div().text_size(TYPE.md).line_height(`${LINE.md}px`).child(TextView.markdown(`bh-issue-body-${issue.number}-${this.dataRev}`, body))
+        ? div().text_size(TYPE.md).line_height(`${LINE.md}px`).child(markdownWithFoldedCode(c, { id, text: body, open: this.machineOpen }))
         : div().text_size(TYPE.sm).text_color(c.muted).child("No description provided."));
   }
 
-  /** Lazy-loaded GitHub comments rendered read-only via TextView.markdown WITHOUT linkFiles(). */
+  /** Lazy-loaded GitHub comments rendered read-only WITHOUT linkFiles(), their code folded. */
   commentsSection(c, issue, comments, total, loading) {
     return v_flex()
       .flex_none()
@@ -1052,7 +1029,7 @@ export class Issues {
           .child(div().text_size(TYPE.sm).font_semibold().text_color(c.ink).child(cm.author ? `@${cm.author}` : "Comment"))
           .when(Boolean(cm.at), (el) => el.child(div().text_size(TYPE.xs).text_color(c.faint).child(formatRelativeAge(cm.at)))))
         .child(div().text_size(TYPE.sm).line_height(`${LINE.md}px`).child(
-          TextView.markdown(`bh-issue-cm-md-${issue.number}-${idx}-${this.dataRev}`, String(cm.body ?? "").trim() || "(empty)"),
+          markdownWithFoldedCode(c, { id: `bh-issue-cm-md-${issue.number}-${idx}-${this.dataRev}`, text: String(cm.body ?? "").trim() || "(empty)", open: this.machineOpen }),
         ))));
   }
 }

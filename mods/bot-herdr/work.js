@@ -13,9 +13,9 @@
 import { div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextView, InputState, Input } from "gpui-base";
 import { settings, shared, terminals } from "herdr";
-import { SIZE, ICON, TYPE, LINE, SPACE, CONTROL, CHIP, GLYPH, MARK, DOT, PIP, HAIR, MOTION, mix, agentHue, agentInk, agentInkOn, isLight, stateTone, clickable, pressable, focusable } from "./look.js";
+import { SIZE, ICON, TYPE, TYPE_SCALE, LINE, SPACE, CONTROL, CHIP, GLYPH, MARK, DOT, PIP, HAIR, MOTION, STATE, agentInk, stateTone, clickable, pressable, focusable } from "./look.js";
 import { actionButton } from "./button.js";
-import { segmented, stateView, pill } from "./switch.js";
+import { segmented, stateView, pill, filterChip, chipHasResults } from "./switch.js";
 import { commentRow, openFirst, openPlan, sectionLabel, COMMENT_LINKS, arm, armed, startMenuTrigger, startMenuPanel, issueChips } from "./plandoc.js";
 import { colors } from "./theme.js";
 import { activePage, openTerminal, sendFromChat, showPage, startPlanTask, wakeGoal, OPEN_TASK } from "./pages.js";
@@ -33,7 +33,7 @@ import { mockupFile, openInBrowser } from "./media.js";
 import { openLightbox } from "./lightbox.js";
 import { openFile, openLink } from "./viewer.js";
 import { OpenQuestions, publishCounts } from "./questions.js";
-import { seatStates, seatsOf, boardAge, boardTone } from "./signals.js";
+import { seatStates, seatsOf, boardAge } from "./signals.js";
 import { stepAgents, usageText } from "./steps.js";
 import { skillsLine } from "./skillsview.js";
 import {
@@ -61,6 +61,9 @@ import {
   nextOpenedOnChip,
   formatTaskSkills,
 } from "./tasksview.js";
+import { duration, ago } from "./numbers.js";
+import { machineLine, markdownWithFoldedCode, toggleMachine } from "./machinetext.js";
+import { machineKind } from "./machinefold.js";
 
 const TABS = [
   { id: "tasks", icon: "page-tasks", label: "Tasks" },
@@ -89,9 +92,6 @@ const planTone = (c, status) => c[PLAN_STATUS[status]?.tone] ?? c.muted;
 const seats = () => seatsOf(roster(shared(ROSTER_KEY), []));
 
 
-/** Which status circle a task or step gets: each word of the status maps to one mark. */
-const MARK_KIND = { done: "done", active: "active", now: "active", paused: "paused", blocked: "blocked", abandoned: "cross", skipped: "cross" };
-
 const GAP = 14;
 const MAX = 1140;
 const REFRESH_MS = 4000;
@@ -113,25 +113,10 @@ const keep = (key, value) => {
   }
 };
 
-/** 3725000 ms → "1h 2m"; under a minute → "<1m". */
-export function duration(ms) {
-  const m = Math.floor((ms ?? 0) / 60000);
-  if (m < 1) return "<1m";
-  const h = Math.floor(m / 60);
-  return h ? `${h}h ${m % 60}m` : `${m}m`;
-}
-
-/** How old something is, in one short word: now, 40s, 3h, 4d. */
-export function age(iso, at = Date.now()) {
-  const ms = at - Date.parse(iso ?? "");
-  if (!Number.isFinite(ms)) return "";
-  const s = Math.floor(ms / 1000);
-  if (s < 30) return "now";
-  if (s < 60) return `${s}s`;
-  if (s < 3600) return `${Math.floor(s / 60)}m`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h`;
-  return `${Math.floor(s / 86400)}d`;
-}
+/** Time worked in one short word (numbers.js); kept exported here for the rows that read it. */
+export { duration };
+/** How old something is, in one short word: now, 40s, 3m, 4h, 3d. */
+export const age = ago;
 
 const day = (iso) => {
   const d = new Date(iso);
@@ -165,25 +150,24 @@ function resetComposer(comp) {
   comp.pane = null;
 }
 
-/** The status circle: done a filled tick, active an accent ring with a dot, paused a muted ring with pause bars, blocked an amber "!", abandoned or skipped a muted cross, open an empty ring. */
-function statusMark(c, status, size = GLYPH.lg) {
-  const kind = MARK_KIND[status] ?? "open";
-  const box = div().flex_none().size(size).flex().items_center().justify_center().rounded_full();
-  if (kind === "done") return box.bg(stateTone(c, "done")).child(svg(ICON("check")).size(size - SPACE[2]).text_color(c.fill));
-  const ring = { active: stateTone(c, "working"), blocked: stateTone(c, "needsYou") }[kind] ?? stateTone(c, "idle");
-  const inside = markInside(c, kind);
-  return box.border_1().border_color(ring).when(Boolean(inside), (el) => el.child(inside));
-}
+/** Which state a task's status draws as (look.js STATE has the one glyph and tone per state). */
+const STATUS_STATE = { done: "done", active: "working", now: "working", paused: "paused", blocked: "needsYou", abandoned: "idle", skipped: "idle" };
 
-/** What sits inside a status ring, if anything. */
-function markInside(c, kind) {
-  if (kind === "active") return div().size(DOT).rounded_full().bg(stateTone(c, "working"));
-  if (kind === "paused") return h_flex().gap(SPACE[1]).items_center()
-    .child(div().w(SPACE[1]).h(SPACE[3]).rounded(PIP).bg(stateTone(c, "paused")))
-    .child(div().w(SPACE[1]).h(SPACE[3]).rounded(PIP).bg(stateTone(c, "paused")));
-  if (kind === "blocked") return div().text_size(TYPE.xs).font_bold().text_color(stateTone(c, "needsYou")).child("!");
-  if (kind === "cross") return svg(ICON("x")).size(GLYPH.xs).text_color(stateTone(c, "idle"));
-  return null;
+/**
+ * A task's status as the state language's one glyph in its tone: ● working, ◆ needs you, ✓ done,
+ * ‖ paused, ○ idle. The same mark on every page and surface, and one element, not a ring and its
+ * contents (Foundations › State language).
+ */
+function statusMark(c, status, size = GLYPH.lg) {
+  const key = STATUS_STATE[status] ?? "idle";
+  return div()
+    .flex_none()
+    .w(size)
+    .text_size(size)
+    .line_height(`${size}px`)
+    .text_center()
+    .text_color(stateTone(c, key))
+    .child(STATE[key].glyph);
 }
 
 /** Resolves a semantic tone key ("success" | "warning" | "danger" | "accent" | "muted") to a theme colour. */
@@ -204,35 +188,7 @@ function progressBar(c, prog) {
     .when(prog.pct > 0, (el) => el.child(div().h_full().w(`${prog.pct}%`).rounded_full().bg(fill)));
 }
 
-/** A compact selectable filter pill button with `aria_selected`. */
-function filterChip(c, { id, label, count = null, on = false, onClick }) {
-  const text = count != null ? `${label} · ${count}` : label;
-  return clickable(
-    h_flex()
-      .role("tab")
-      .aria_selected(on)
-      .flex_none()
-      .h(CHIP)
-      .px(SPACE[3])
-      .gap(SPACE[1])
-      .items_center()
-      .rounded_full()
-      .border_1()
-      .border_color(on ? alpha(c.accent, 0.45) : alpha(c.edge, 0.6))
-      .bg(on ? alpha(c.accent, 0.14) : c.well)
-      .text_size(TYPE.xs)
-      .font_medium()
-      .text_color(on ? c.accent : c.muted)
-      .hover((s) => s.text_color(on ? c.accent : c.ink))
-      .on_click(onClick)
-      .child(text),
-    c,
-    id,
-    { fill: on ? alpha(c.accent, 0.2) : c.hover },
-  );
-}
-
-/** A status's word in a pill: working the accent, done the success tone, blocked amber, paused muted. */
+/** A status's word: working the accent, done the success tone, blocked amber, paused muted. */
 function statusTone(c, status) {
   return { active: stateTone(c, "working"), done: stateTone(c, "done"), blocked: stateTone(c, "needsYou"), paused: stateTone(c, "paused"), abandoned: c.faint }[status] ?? stateTone(c, "idle");
 }
@@ -325,14 +281,14 @@ function waitingFor(p, seat) {
     .reduce((n, q) => n + (q.questions ?? []).filter((x) => String(x.seat ?? "").toLowerCase() === seat).length, 0);
 }
 
-/** A seat's state in words, as its pill reads it out. */
+/** A seat's state in words, as its tooltip reads it out. */
 const SEAT_STATE = { working: "working", done: "done", none: "not started" };
 
-/** A seat's state from its terminal: a breathing dot at work, a check once it answered, a quiet ring before it starts. */
+/** A seat's state from its terminal: a breathing dot at work (no lower than 0.75, so it keeps 3:1), a check once it answered, a quiet ring before it starts. */
 function seatMark(c, state) {
   if (state === "working") {
-    return div().flex_none().size(DOT).rounded_full().bg(stateTone(c, "working")).opacity(0.45)
-      .loop("opacity", { from: 0.25, to: 0.9, period: 1600, easing: "ease-in-out" });
+    return div().flex_none().size(DOT).rounded_full().bg(stateTone(c, "working"))
+      .loop("opacity", { from: 0.75, to: 1, period: 1600, easing: "ease-in-out" });
   }
   if (state === "done") return svg(ICON("check")).flex_none().size(GLYPH.xs).text_color(stateTone(c, "done"));
   return div().flex_none().size(DOT).rounded_full().border_1().border_color(stateTone(c, "idle"));
@@ -358,6 +314,7 @@ export class Work {
     this.width = 900;
     this.height = 700;
     this.dir = null; // the project folder the data is from
+    this.machineOpen = new Set(); // the machine-text lines the user expanded (branch names, contracts, stacks)
     this.tasks = null;
     this.taskDetail = null; // full `bh task show` record for the currently opened task
     this.taskDetailId = null;
@@ -1164,7 +1121,7 @@ export class Work {
       ));
   }
 
-  /** Status filter chips (`Active · N`, `Blocked · N`, `Done · N`, `Archived · N`). */
+  /** Status filter chips (`Active · N`, `Blocked · N`, …): a chip with nothing behind it is not drawn. */
   taskChipBar(c, counts) {
     return h_flex()
       .role("tab_list")
@@ -1172,7 +1129,7 @@ export class Work {
       .flex_wrap()
       .gap(SPACE[2])
       .items_center()
-      .children(STATUS_CHIPS.map((id) => filterChip(c, {
+      .children(STATUS_CHIPS.filter((id) => chipHasResults(counts[id], this.taskChip === id)).map((id) => filterChip(c, {
         id: `bh-task-chip-${id}`,
         label: CHIP_LABELS[id],
         count: counts[id],
@@ -1213,7 +1170,7 @@ export class Work {
       }, { tone: "quiet" })));
   }
 
-  /** A list row: status mark + truncated title on line 1; compact 5px progress bar + metrics on line 2. */
+  /** A list row: status mark + truncated title on line 1; compact 5px progress bar + metrics on line 2. The opened row steps its surface up one level; no colour marks it (it is not a primary action). */
   taskRow(c, t, i = 0) {
     const on = this.opened === t.id;
     const finished = t.status === "done" || t.status === "abandoned";
@@ -1230,8 +1187,8 @@ export class Work {
         .gap(SPACE[2])
         .rounded(SIZE.control)
         .border_1()
-        .border_color(on ? alpha(c.accent, 0.45) : alpha(c.ground, 0))
-        .when(on, (el) => el.bg(alpha(c.accent, 0.1)))
+        .border_color(on ? c.controlBorder : alpha(c.ground, 0))
+        .when(on, (el) => el.bg(c.hover))
         .opacity(this.rowsIn === false ? 0 : 1)
         .transition("opacity", { ...MOTION.row, delay: Math.min(i, 8) * MOTION.stagger })
         .on_click((_e, cx) => this.openTask(t.id, cx))
@@ -1249,7 +1206,7 @@ export class Work {
           .when(Boolean(worked), (el) => el.child(div().flex_none().child(`· ${worked}`)))),
       c,
       `bh-task-${t.id}`,
-      { fill: on ? alpha(c.accent, 0.14) : null },
+      { fill: on ? c.hover : null },
     );
   }
 
@@ -1334,9 +1291,19 @@ export class Work {
           }), c, `bh-task-pr-${t.id}`)
           : pill(c, `PR #${prNum}`, c.info)))
         .when(Boolean(t.track), (el) => el.child(div().child(`${t.track} track`)))
-        .when(Boolean(t.git?.branch), (el) => el.child(div().child(`· branch ${t.git.branch}`)))
         .when(Boolean(metrics), (el) => el.child(div().child(`· ${metrics}`)))
         .child(textLink(c, `bh-task-details-${t.id}`, open ? "Details ▴" : "Details ▾", (_e, cx) => this.toggleDesc(`details:${t.id}`, cx), open ? c.ink : c.accent)))
+      // A branch name is machine text: one muted mono line, folded in the middle, never at body size.
+      .when(Boolean(t.git?.branch), (el) => el.child(machineLine(c, {
+        id: `bh-task-branch-${t.id}`,
+        text: t.git.branch,
+        lead: "branch",
+        expanded: this.machineOpen.has(`bh-task-branch-${t.id}`),
+        onToggle: (_e, cx) => {
+          toggleMachine(this.machineOpen, `bh-task-branch-${t.id}`);
+          cx.notify();
+        },
+      })))
       .when(Boolean(open), (el) => el.child(this.taskDetails(c, t)));
   }
 
@@ -1782,7 +1749,7 @@ export class Work {
         .when(Boolean(first), (el) => el.child(h_flex().flex_none().gap(SPACE[2]).items_center().text_size(TYPE.sm)
           .child(agentDot(c, first))
           .child(div().font_medium().text_color(agentInk(c, first)).child(who.length > 1 ? `${who.length} agents` : first))))
-        .when(working, (el) => el.child(pill(c, "working", c.success, { pulse: true })))
+        .when(working, (el) => el.child(pill(c, "working", stateTone(c, "working"), { pulse: true })))
         .when(Boolean(time), (el) => el.child(div().flex_none().text_size(TYPE.sm).text_color(c.muted).child(`· ${time}`)))
         .when(liveNotes > 0, (el) => el.child(commentCount(c, liveNotes)))
         .when(Boolean(s.report?.file), (el) => el.child(this.reportLink(c, s.report.file, `bh-step-report-${t.id}-${s.n}`))),
@@ -1861,30 +1828,36 @@ export class Work {
       id, c);
   }
 
-  /** Board tab: kind filter chips + live newest-first board entries. */
+  /** Board tab: kind filter chips (only kinds with entries) + live newest-first board entries. */
   taskBoardTab(c, t) {
     const board = Array.isArray(t.board) ? t.board : [];
     const { items, counts } = filterBoard(board, this.boardKind);
     const rows = [...items].reverse();
     return v_flex()
       .gap(SPACE[3])
-      .child(h_flex().role("tab_list").flex_wrap().gap(SPACE[2]).items_center().children(BOARD_KINDS.map((kind) => filterChip(c, {
-        id: `bh-board-kind-${kind}`,
-        label: kind === "all" ? "All" : kind,
-        count: counts[kind],
-        on: this.boardKind === kind,
-        onClick: (_e, cx) => {
-          this.boardKind = kind;
-          cx.notify();
-        },
-      }))))
+      .child(h_flex().role("tab_list").flex_wrap().gap(SPACE[2]).items_center().children(BOARD_KINDS
+        .filter((kind) => chipHasResults(counts[kind], this.boardKind === kind))
+        .map((kind) => filterChip(c, {
+          id: `bh-board-kind-${kind}`,
+          label: kind === "all" ? "All" : kind,
+          count: counts[kind],
+          on: this.boardKind === kind,
+          onClick: (_e, cx) => {
+            this.boardKind = kind;
+            cx.notify();
+          },
+        }))))
       .when(!rows.length, (el) => el.child(mutedLine(c, board.length ? `No ${this.boardKind} entries on the board.` : "Nothing on the board yet.")))
       .children(rows.map((e, i) => this.boardRow(c, t, e, i)));
   }
 
-  /** One board entry: its number, kind, who posted it and when, then what it says. */
+  /** One board entry: its number, type word, who posted it and when, then what it says. A contract, a
+   * stack trace or a path is machine text: one muted mono line that expands. */
   boardRow(c, t, e, i) {
-    const text = linkFiles(String(e.text ?? ""));
+    const raw = String(e.text ?? "");
+    const text = linkFiles(raw);
+    const id = `bh-board-text-${t.id}-${e.n}`;
+    const kind = machineKind(raw);
     return v_flex()
       .flex_none()
       .gap(SPACE[2])
@@ -1896,13 +1869,23 @@ export class Work {
       .opacity(this.rowsIn === false ? 0 : 1)
       .transition("opacity", { ...MOTION.row, delay: Math.min(i, 8) * MOTION.stagger })
       .child(h_flex().flex_wrap().gap(SPACE[2]).items_center()
-        .when(e.n != null, (el) => el.child(div().text_size(TYPE.xs).text_color(c.faint).child(`#${e.n}`)))
-        .child(pill(c, String(e.kind ?? "note"), c[boardTone(e.kind)] ?? c.muted))
+        .when(e.n != null, (el) => el.child(div().text_size(TYPE_SCALE.metadata).text_color(c.faint).child(`#${e.n}`)))
+        .child(div().text_size(TYPE_SCALE.metadata).text_color(c.textMuted).child(String(e.kind ?? "note")))
         .child(div().text_size(TYPE.sm).font_medium().text_color(agentInk(c, e.from ?? "the team")).child(e.from ?? "the team"))
         .when(Boolean(e.to), (el) => el.child(div().text_size(TYPE.sm).text_color(c.muted).child(`→ ${e.to}`)))
-        .child(div().text_size(TYPE.xs).text_color(c.faint).child(boardAge(e.at)))
+        .child(div().text_size(TYPE_SCALE.metadata).text_color(c.faint).child(boardAge(e.at)))
         .when(Boolean(e.file), (el) => el.child(this.reportLink(c, e.file, `bh-board-report-${t.id}-${e.n}`))))
-      .child(TextView.markdown(`bh-board-text-${t.id}-${e.n}`, text).on_link_click((url) => openLink(url, projectDir())));
+      .child(kind
+        ? machineLine(c, {
+          id,
+          text: raw,
+          expanded: this.machineOpen.has(id),
+          onToggle: (_e, cx) => {
+            toggleMachine(this.machineOpen, id);
+            cx.notify();
+          },
+        })
+        : markdownWithFoldedCode(c, { id, text, open: this.machineOpen, onLink: (url) => openLink(url, projectDir()) }));
   }
 
   /** A step's recorded time (its `timeMs`, else its stored `workedMs`); "" for one not started. */
@@ -2497,14 +2480,12 @@ export class Work {
       .children(this.railActions(c, p));
   }
 
-  /** A seat's pill: its state and three letters in the seat's colour on a tint when on, faint with no fill when off, and a badge of its open questions. */
+  /** A seat's pill: its state and three letters in the seat's colour when on, faint when off, and a badge of its open questions. No tint and no outlined chip: the colour is the identity. */
   seatPill(c, p, seat, off, state = "none") {
-    const hue = agentHue(seat.id, c.accent);
-    const on = !off;
-    const el = this.seatFace(c, seat, { hue, on, state, waiting: waitingFor(p, seat.id) });
+    const el = this.seatFace(c, seat, { on: !off, state, waiting: waitingFor(p, seat.id) });
     if (seat.fixed) return el;
     return focusable(
-      pressable(el.hover((s) => s.bg(on ? alpha(hue, 0.22) : c.hover)).on_click((_e, cx) => {
+      pressable(el.hover((s) => s.bg(c.hover)).on_click((_e, cx) => {
         this.act(["plan", "seat", p.id, seat.id, off ? "--on" : "--off"], cx);
       })),
       `bh-seat-${seat.id}`,
@@ -2512,8 +2493,8 @@ export class Work {
     );
   }
 
-  /** A seat's three letters on its pill: in the seat's colour on a tint when on, faint with no fill when off. */
-  seatFace(c, seat, { hue, on, state, waiting }) {
+  /** A seat's three letters on its pill: in the seat's colour when on, faint when off; only the state dot fills a circle. */
+  seatFace(c, seat, { on, state, waiting }) {
     return h_flex()
       .relative()
       .flex_none()
@@ -2523,9 +2504,6 @@ export class Work {
       .justify_center()
       .items_center()
       .rounded(SIZE.control)
-      .border_1()
-      .border_color(on ? alpha(hue, 0.45) : c.edge)
-      .bg(on ? alpha(hue, 0.14) : alpha(c.ground, 0))
       .text_size(TYPE.xs)
       .font_semibold()
       .text_color(on ? agentInk(c, seat.id) : c.faint)
@@ -2591,7 +2569,6 @@ export class Work {
     const agents = all.map((x) => x.agent);
     const q = (this.knowSearch?.value?.() ?? "").toLowerCase().trim();
     const filter = this.knowFilter ?? new Set();
-    const hueFor = (a) => agentHue(a, c.accent);
     const cards = all.flatMap(({ agent, text, notes }) => outline(text ?? "").sections.flatMap((s) => s.entries.map((e) => ({
       agent, section: s.name, entry: e, notes: notesOn(notes ?? [], e.text), text: e.text, title: e.key || (s.name ?? agent),
     })))).filter((card) => !filter.size || filter.has(card.agent))
@@ -2622,24 +2599,25 @@ export class Work {
         .child(div().flex_1().min_w(180).max_w(320).h(CONTROL).px(SPACE[3]).flex().items_center().rounded(SIZE.control).bg(c.fill).border_1().border_color(c.edge)
           .child(Input.new(this.knowSearch).w_full().h_full().text_size(TYPE.md).text_color(c.ink)))
         .child(h_flex().flex_1().gap(SPACE[3]).flex_wrap().items_center().children(agents.map((a) => {
-          const on = !filter.size || filter.has(a);
-          const hue = hueFor(a);
-          const light = isLight(c);
+          // The chip is marked as chosen only while a filter is on: with no filter, nothing is picked.
+          const on = filter.size > 0 && filter.has(a);
           return focusable(
             pressable(
-              div().h(CONTROL).px(SPACE[3]).flex().items_center().gap(SPACE[3]).rounded_full().border_1()
-                .border_color(on ? alpha(hue, light ? 0.35 : 0.5) : c.edge)
-                .bg(on ? (light ? alpha(hue, 0.04) : alpha(hue, 0.16)) : c.fill)
-                .text_color(on ? c.ink : c.muted)
-                .hover((s) => s.bg(light ? c.hover : alpha(hue, 0.22)))
+              h_flex().h(CONTROL).px(SPACE[2]).gap(SPACE[2]).items_center().rounded(SIZE.nested)
+                .border_b(2)
+                .border_color(on ? c.accent : alpha(c.accent, 0))
+                .text_size(TYPE.sm)
+                .font_medium()
+                .text_color(on ? c.accent : c.muted)
+                .hover((s) => s.bg(c.hover))
                 .on_click((_e, cx) => {
                   if (!this.knowFilter) this.knowFilter = new Set();
                   if (this.knowFilter.has(a)) this.knowFilter.delete(a); else { if (!this.knowFilter.size) this.knowFilter = new Set(agents.filter((x) => x !== a)); else this.knowFilter.add(a); }
                   if (this.knowFilter.size === agents.length) this.knowFilter.clear();
                   cx.notify();
                 })
-                .child(div().size(SPACE[3]).rounded_full().bg(hue))
-                .child(div().text_size(TYPE.sm).font_medium().child(a.charAt(0).toUpperCase() + a.slice(1))),
+                .child(div().flex_none().size(DOT).rounded_full().bg(agentInk(c, a)))
+                .child(a.charAt(0).toUpperCase() + a.slice(1)),
             ),
             `bh-know-chip-${a}`,
             c,
@@ -2653,7 +2631,7 @@ export class Work {
       .child(h_flex().w(width).gap(SPACE[4]).items_start().children(
         columns.map((col) =>
           v_flex().flex_1().min_w(0).gap(SPACE[4]).children(
-            col.map((card, i) => this.knowNoteCard(c, card, hueFor(card.agent), i)),
+            col.map((card, i) => this.knowNoteCard(c, card, i)),
           ),
         ),
       ))
@@ -2676,11 +2654,10 @@ export class Work {
     };
   }
 
-  knowNoteCard(c, card, hue, index = 0) {
+  knowNoteCard(c, card, index = 0) {
     const { agent, entry: e, notes, section } = card;
     const on = this.addingAt("knowledge", agent, e.line);
     const body = /^\s{0,3}[-*+]\s+/.test(e.text) ? e.text.replace(/^\s{0,3}[-*+]\s+/, "") : e.text;
-    const light = isLight(c);
     return clickable(
       v_flex()
         .flex_none()
@@ -2688,17 +2665,18 @@ export class Work {
         .p(SPACE[4])
         .gap(SPACE[3])
         .rounded(SIZE.radius)
-        .bg(light ? c.fill : mix(c.ground, hue, 0.08))
+        .bg(c.fill)
         .border_1()
         .border_color(c.edge)
-        .hover((s) => (light ? s.border_color(alpha(hue, 0.35)) : s.bg(mix(c.ground, hue, 0.12)).border_color(alpha(hue, 0.35))))
+        .hover((s) => s.border_color(c.controlBorder))
         .opacity(this.rowsIn === false ? 0 : 1)
         .transition("opacity", { ...MOTION.row, delay: Math.min(index, 8) * MOTION.stagger })
         .on_click((_e, cx) => { this.agent = agent; this.startInline("knowledge", agent, e.line, cx); })
-        // The agent is marked by its dot and name only; no stripe.
+        // The agent is marked by its dot and name only: no card wash, no stripe. Both use the
+        // identity colour repaired for the card (3:1 for the dot, AA for the name).
         .child(h_flex().gap(SPACE[3]).items_center()
-          .child(div().size(SPACE[3]).rounded_full().bg(hue))
-          .child(div().text_size(TYPE.xs).font_medium().text_color(light ? agentInk(c, agent) : agentInkOn(c, agent, mix(c.ground, hue, 0.12))).child(agent.charAt(0).toUpperCase() + agent.slice(1)))
+          .child(div().flex_none().size(DOT).rounded_full().bg(agentInk(c, agent)))
+          .child(div().text_size(TYPE.xs).font_medium().text_color(agentInk(c, agent)).child(agent.charAt(0).toUpperCase() + agent.slice(1)))
           .when(Boolean(section), (el) => el.child(div().text_size(TYPE.xs).text_color(c.faint).child(section)))
           .child(div().flex_1())
           .child(focusable(

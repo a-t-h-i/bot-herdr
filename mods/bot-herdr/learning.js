@@ -5,7 +5,7 @@
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, TextView, InputState, Input } from "gpui-base";
 import { props, settings, shared, setShared, openOverlay, closeOverlay } from "herdr";
-import { SIZE, ICON, TYPE, LINE, SPACE, CONTROL, HAIR, GLYPH, clickable } from "./look.js";
+import { SIZE, ICON, TYPE, TYPE_SCALE, LINE, SPACE, CONTROL, HAIR, GLYPH, clickable } from "./look.js";
 import { actionButton } from "./button.js";
 import { stateView, pill } from "./switch.js";
 import { sectionLabel } from "./plandoc.js";
@@ -287,27 +287,13 @@ export class Learning {
               .gap(SPACE[3])
               .items_start()
               .child(
-                div()
-                  .flex_none()
-                  .size(36)
-                  .rounded(SIZE.control)
-                  .flex()
-                  .items_center()
-                  .justify_center()
-                  .bg(alpha(c.accent, 0.12))
-                  .border_1()
-                  .border_color(alpha(c.accent, 0.25))
-                  .text_color(c.accent)
-                  .child(svg(ICON("page-learning")).size(GLYPH.lg)),
-              )
-              .child(
                 v_flex()
                   .flex_1()
                   .min_w(0)
                   .gap(SPACE[1])
-                  .child(div().text_size(TYPE.xl).line_height(`${LINE.xl}px`).font_semibold().text_color(c.ink)
+                  .child(div().text_size(TYPE_SCALE.title).line_height(`${LINE.lg}px`).font_semibold().text_color(c.textPrimary)
                     .child("Repo Learning Guide"))
-                  .child(div().text_size(TYPE.md).line_height(`${LINE.md}px`).text_color(c.muted)
+                  .child(div().text_size(TYPE_SCALE.body).line_height(`${LINE.md}px`).text_color(c.textSecondary)
                     .child("Short concept primers built from your team's knowledge and the architectural decisions you made.")),
               ),
           )

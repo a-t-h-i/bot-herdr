@@ -771,10 +771,10 @@ export class Settings {
   }
 
   /**
-   * A settings group: a compact card with a header (icon, title, and a control on the right, the
-   * classifier's switch say), then its rows.
+   * A card: its title (no icon in front of it), an optional control on the right (the classifier's
+   * switch, say), then its rows.
    */
-  group(c, { id, icon, title, right = null, rows = [] }) {
+  group(c, { id, title, right = null, rows = [] }) {
     const shown = rows.filter(Boolean);
     return v_flex()
       .id(id)
@@ -785,8 +785,6 @@ export class Settings {
       .border_color(c.edge)
       .overflow_hidden()
       .child(h_flex().h(CONTROL + SPACE[4]).px(PAD).gap(SPACE[3]).items_center()
-        .child(div().flex_none().size(26).rounded(SIZE.nested).flex().items_center().justify_center().bg(c.well).text_color(c.muted)
-          .child(svg(ICON(icon)).size(GLYPH.md)))
         .child(div().flex_1().min_w(0).text_size(TYPE.md).font_semibold().child(title))
         .when(Boolean(right), (el) => el.child(right)))
       .children(shown)
@@ -847,11 +845,10 @@ export class Settings {
       .child(v_flex().gap(SPACE[2]).child(this.label(c, "Harness")).child(this.select(c, a, "harness", harnessName, inner)))
       .child(v_flex().gap(SPACE[2]).child(this.label(c, "Model")).child(this.modelField(c, a, inputs.model, inner))
         .when(Boolean(currentSpace()?.machine), (el) => el.child(div().text_size(TYPE.xs).text_color(c.faint).child("Type a model id for this space."))))
-      .child(v_flex().gap(SPACE[2])
+      // Effort is drawn only for a harness that has effort levels: there is nothing to say otherwise.
+      .when(efforts.length > 0, (el) => el.child(v_flex().gap(SPACE[2])
         .child(this.label(c, "Effort"))
-        .child(efforts.length
-          ? this.slider(c, a, stops, inner, tone)
-          : div().text_size(TYPE.sm).text_color(c.faint).child("No effort setting for this harness.")))
+        .child(this.slider(c, a, stops, inner, tone))))
       // Pinned to the foot, so every card's More sits on the same line.
       .child(div().flex_1())
       .child(h_flex().child(this.disclosure(c, "agent", a.id))));
@@ -1036,7 +1033,6 @@ export class Settings {
     const full = k.access === "full";
     return this.group(c, {
       id: "bh-access",
-      icon: "shield-check",
       title: "Access",
       rows: [
         this.settingRow(c, "Run agents", this.choice(c, "bh-run", [["headless", "Headless"], ["cli", "CLI"]], on ? "headless" : "cli",
@@ -1087,7 +1083,6 @@ export class Settings {
     const field = (state, w = 240) => div().w(w).child(this.field(c, state));
     return this.group(c, {
       id: "bh-classifier",
-      icon: "zap",
       title: "Classifier",
       right: this.toggle(c, "bh-cls-on", k.enabled, (_e, cx) => this.config({ enabled: !k.enabled }, cx)),
       rows: [
@@ -1170,7 +1165,6 @@ export class Settings {
       }));
     return this.group(c, {
       id: "bh-resilience-health",
-      icon: "shield-check",
       title: "Provider health & cooldowns",
       right: controls,
       rows: rows.length
@@ -1225,7 +1219,6 @@ export class Settings {
     if (this.addingStep) rows.push(this.addFallbackRow(c));
     return this.group(c, {
       id: "bh-resilience-fallbacks",
-      icon: "zap",
       title: "Fallback chain",
       right: toggleBtn,
       rows,
@@ -1312,7 +1305,6 @@ export class Settings {
       options.some(([k]) => Number(k) === val) ? null : `Current: ${fmt(val)}`;
     return this.group(c, {
       id: "bh-resilience-guardrails",
-      icon: "shield-check",
       title: "Guardrails & Autonomous budgets",
       rows: [
         this.settingRow(
