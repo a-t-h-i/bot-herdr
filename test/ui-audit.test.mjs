@@ -233,9 +233,10 @@ test("the shot plan is one page-theme PNG for every audited page and key theme",
   assert.equal(plan.pages.length, AUDIT_PAGES.length);
   assert.deepEqual(plan.themes, ["graphite", "paper", "plum-dark", "win98"]);
   assert.equal(plan.files.length, AUDIT_PAGES.length * SHOT_THEMES.length);
-  assert.deepEqual(plan.files.slice(0, 4).map((f) => f.file), SHOT_THEMES.map((t) => join("/shots", `chat-${t.name}.png`)));
-  assert.ok(plan.files.some((f) => f.file === join("/shots", "tasks-board-win98.png")));
-  assert.ok(plan.files.some((f) => f.file === join("/shots", "settings-general-paper.png")));
+  assert.deepEqual(plan.files.slice(0, 4).map((f) => f.file), SHOT_THEMES.map((t) => join("/shots", `home-${t.name}.png`)), "Home is the first audited page");
+  assert.ok(plan.files.some((f) => f.file === join("/shots", "library-issues-win98.png")));
+  assert.ok(plan.files.some((f) => f.file === join("/shots", "settings-usage-paper.png")));
+  assert.ok(plan.files.some((f) => f.file === join("/shots", "tasks-board-win98.png")), "a page the navigation replaced is still audited");
   assert.equal(new Set(plan.files.map((f) => f.file)).size, plan.files.length);
 });
 

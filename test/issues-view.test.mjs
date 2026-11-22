@@ -233,7 +233,9 @@ test("static security & GPUI guards on issues.js, layout, and registration", () 
 
   const layout = JSON.parse(readFileSync(join(ROOT, "layouts", "bot-herdr.json"), "utf8"));
   const find = (n, id) => (n?.id === id ? n : (n?.children ?? []).reduce((a, c) => a || find(c, id), null));
-  assert.ok(find(layout, "switch").size.px >= 680);
+  assert.equal(find(layout, "switch").window_drag, true, "the top bar's destinations fill the bar");
   const pageIds = find(layout, "pages").children.map((c) => c.id);
-  assert.equal(pageIds[pageIds.indexOf("plans") + 1], "issues");
+  assert.deepEqual(pageIds, ["home", "threads", "agents", "library", "settings"], "the Issues browser lives in Library › Issues");
+  const librarySrc = readFileSync(join(ROOT, "mods", "bot-herdr", "library.js"), "utf8");
+  assert.match(librarySrc, /id: "issues"/, "library.js must register the Issues sub-tab");
 });

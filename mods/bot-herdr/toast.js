@@ -26,7 +26,7 @@ export class Toast {
     this.p = given ?? props() ?? {};
     this.up = false;
     this.out = false;
-    if (activePage() === "chat") {
+    if (activePage() === "threads") {
       this.handed = true;
       setShared(TOAST_KEY, { title: this.p.title ?? "", body: this.p.body ?? "", level: this.p.level ?? "info", action: this.p.action ?? null, at: Date.now() });
       cx.timer.after(1, () => closeOverlay(this.p.overlay));

@@ -7,49 +7,17 @@
 
 import { div, svg } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
-import { focused, shared, theme, nextCommand, settings } from "herdr";
-import { SIZE, TYPE, TYPE_SCALE, LINE, SPACE, CONTROL, CHIP, DOT, GLYPH, ICON, clickable, textWidth } from "./look.js";
+import { focused, shared, theme, nextCommand, window as herdrWindow, run } from "herdr";
+import { SIZE, TYPE, TYPE_SCALE, LINE, SPACE, CONTROL, CHIP, DOT, GLYPH, ICON, clickable } from "./look.js";
 import { actionButton } from "./button.js";
 import { colors } from "./theme.js";
 import { PAGES, HOLD, activePage, showPage } from "./pages.js";
 import { OPEN_COUNTS } from "./signals.js";
-import { fitTabs } from "./tabfit.js";
-import { PICKED, openPick } from "./pick.js";
 import { alpha } from "./working.js";
 
 const HOLD_MS = 3000;
 /** herdr's own tabs (mods/tabs) are 29px tall; the page switch's tabs match them. */
 const HERDR_TAB = 29;
-/** The final tab holding the pages that do not fit the slot, and its list's pick key. */
-const MORE = { id: "more", label: "More ▾" };
-const MORE_KEY = "bh-pages-more";
-
-/** The width a tab needs at a padding: its icon, its label and, when it has one, its count. */
-const tabWidth = (p, pad, count) => pad * 2 + (p.icon ? GLYPH.sm + SPACE[2] : 0) + Math.ceil(textWidth(p.label, TYPE.sm) * 1.15) + (count ? SPACE[2] + Math.ceil(textWidth(String(count), TYPE.xs)) : 0);
-
-/**
- * The horizontal padding every tab takes in `room`: the full one when the whole strip fits, else
- * the narrow one. Narrower still, tabs go behind More (pageTabs) — a label is never dropped.
- */
-function tabPad(room, countOf) {
-  const frame = SPACE[1] * 2 + SPACE[1] * (PAGES.length - 1);
-  const need = (pad) => frame + PAGES.reduce((n, p) => n + tabWidth(p, pad, countOf(p.id)), 0);
-  return need(SPACE[4]) <= room ? SPACE[4] : SPACE[2];
-}
-
-/**
- * The page tabs drawn in `room` and the ones behind More: at the full padding all of them; at
- * the narrow one, the tabs from the end that do not fit, never the open page.
- */
-function pageTabs(room, countOf, active) {
-  const pad = tabPad(room, countOf);
-  if (pad === SPACE[4]) return { pad, shown: PAGES, more: [] };
-  const widths = PAGES.map((p) => tabWidth(p, pad, countOf(p.id)));
-  const counted = PAGES.reduce((n, p) => n + (countOf(p.id) ?? 0), 0);
-  const more = tabWidth(MORE, pad, counted || null);
-  const fit = fitTabs(widths, room - SPACE[1] * 2, PAGES.findIndex((p) => p.id === active), { gap: SPACE[1], more });
-  return { pad, shown: fit.shown.map((i) => PAGES[i]), more: fit.more.map((i) => PAGES[i]) };
-}
 
 /**
  * The one selection style, app-wide: the picked item's label in the accent over a 2px accent
@@ -244,94 +212,119 @@ export function stateView(c, { id, title, line = null, action = null, loading = 
 export class Switch {
   init(_props, cx) {
     this.where = null;
-    this.pickedAt = /** @type {{ at?: number } | null} */ (shared(PICKED))?.at ?? 0;
-    this.moreBounds = null; // where the More tab was pressed, so its list opens under it
-    // ctrl+shift+m (keys.json: "bot-herdr.focus") opens the chat and puts the keyboard in it.
+    // ctrl+shift+m (keys.json: "bot-herdr.focus") opens Threads and puts the keyboard in it.
     cx.spawn(async (cx) => {
       for (;;) {
         const command = await nextCommand();
-        if (command === "focus" || command === "chat") showPage("chat");
+        if (command === "focus" || command === "chat") showPage("threads");
         else if (PAGES.some((p) => p.id === command)) showPage(command);
         cx.notify();
       }
     });
   }
 
-  /** A tab, space or agent was picked outside the chat: show the terminals. */
+  /** A tab, space or agent was picked outside Threads: show herdr's terminals (Agents › Terminals). */
   follow(cx) {
     const f = focused();
     const where = f ? `${f.space}:${f.tab}` : null;
     const before = this.where;
     this.where = where;
     if (before === null || where === null || where === before) return;
-    if (activePage() !== "chat") return;
+    if (activePage() !== "threads") return;
     if (Date.now() - Number(shared(HOLD) ?? 0) < HOLD_MS) return;
     cx.timer.after(1, () => showPage("terminals"));
   }
 
-  /** A page picked from the More list: show it. */
-  followPick(cx) {
-    const picked = /** @type {{ key?: string, value?: string, at?: number } | null} */ (shared(PICKED));
-    if (picked?.key !== MORE_KEY || !(picked.at > this.pickedAt)) return;
-    this.pickedAt = picked.at;
-    cx.timer.after(1, () => showPage(picked.value));
-  }
-
-  /** The More list: the pages that did not fit, each with its open-question count. */
-  openMore(pages, countOf) {
-    const options = pages.map((p) => ({ value: p.id, label: p.label, note: countOf(p.id) ? `${countOf(p.id)} open` : "" }));
-    openPick({ key: MORE_KEY, options, selected: null, bounds: this.moreBounds, minWidth: 180 });
-  }
-
-  /** The switch's items: the tabs that fit, then More with the sum of its pages' counts. */
-  items(tabs, active, countOf) {
-    const items = tabs.shown.map((p) => ({ id: p.id, icon: p.icon, label: p.label, on: p.id === active, count: countOf(p.id) }));
-    if (!tabs.more.length) return items;
-    const count = tabs.more.reduce((n, p) => n + (countOf(p.id) ?? 0), 0);
-    const onDown = (e) => {
-      this.moreBounds = e.bounds;
-    };
-    return [...items, { ...MORE, on: false, count: count || null, onDown }];
-  }
-
   render(cx) {
     this.follow(cx);
-    this.followPick(cx);
     const c = colors();
     const t = /** @type {Record<string, import("gpui-kit").Color>} */ (theme());
     const active = activePage();
-    // Every tab shows its icon, label and count. Where the strip is too narrow for that, each
-    // tab's padding narrows; narrower still, the tabs from the end go behind More.
-    const room = (this.width ?? 9999) - SPACE[4] * 2;
-    // A tab's open-question count, so a question is never missed from another page.
-    const counts = shared(OPEN_COUNTS) ?? {};
-    const countOf = (id) => (Number(counts[id]) > 0 ? Number(counts[id]) : null);
-    const tabs = pageTabs(room, countOf, active);
-    // One bar, not a bar holding a second bar: the tabs sit straight on herdr's top bar with the
-    // same ground and bottom line, and the picked one is underlined (the app's one selection style).
-    return segmented(c, {
-      id: "bh-pages",
-      height: HERDR_TAB,
-      padX: tabs.pad,
-      items: this.items(tabs, active, countOf),
-      onPick: (id) => (id === MORE.id ? this.openMore(tabs.more, countOf) : showPage(id)),
-      bar: (strip) => strip
-        .size_full()
+    // A destination's open-question count, so a question is never missed from another page. A
+    // question is about a plan or a chat, and both are the same thread now.
+    const counts = /** @type {Record<string, number> | null} */ (shared(OPEN_COUNTS)) ?? {};
+    const countOf = (id) => {
+      const n = id === "threads" ? (Number(counts.chat) || 0) + (Number(counts.plans) || 0) : Number(counts[id]);
+      return Number.isFinite(n) && n > 0 ? n : null;
+    };
+    const tabs = PAGES.filter((p) => !p.gear);
+    const gear = PAGES.find((p) => p.gear) ?? PAGES[PAGES.length - 1];
+    return h_flex()
+      .id("bh-pages")
+      .size_full()
+      .items_center()
+      .p(SPACE[1])
+      .gap(SPACE[1])
+      .overflow_hidden()
+      .pl(SPACE[4])
+      .bg(t.chrome)
+      .border_b(1)
+      .border_color(t.border)
+      // One bar, not a bar holding a second bar: the tabs sit straight on herdr's top bar, and the
+      // picked one is underlined (the app's one selection style). The gear ends the row.
+      .child(h_flex()
+        .role("tab_list")
+        .flex_1()
+        .min_w(0)
         .items_center()
-        .overflow_hidden()
-        .on_size_change((size, cx) => {
-          // px with the app's zoom multiplied in; drawn sizes are without it.
-          const zoom = Number(settings().zoom) || 1;
-          const w = size.width / zoom;
-          if (Math.abs(w - (this.width ?? 0)) >= 1) {
-            this.width = w;
-            cx.notify();
-          }
-        })
-        .pl(SPACE[4])
-        .bg(t.chrome)
-        .border_b(1)
-        .border_color(t.border),
-    });
+        .gap(SPACE[1])
+        .children(tabs.map((p, i) => pageTab(c, { ...p, i, n: PAGES.length, height: HERDR_TAB, on: p.id === active, count: countOf(p.id), onClick: () => showPage(p.id) })))
+        .child(div().flex_1())
+        .child(pageTab(c, { ...gear, label: null, i: PAGES.length - 1, n: PAGES.length, height: HERDR_TAB, on: gear.id === active, a11y: gear.label, padX: SPACE[3], onClick: () => showPage(gear.id) })))
+      // The window's own buttons are controls, not destinations: outside the tab list, at the end.
+      .when(Boolean(herdrWindow()?.buttons), (el) => el.child(windowButtons(c)));
   }
+}
+
+/**
+ * The window's own buttons, where the system draws none (Linux and Windows; macOS keeps its traffic
+ * lights over the rail). The bar that used to carry them, herdr's tab strip, is gone from this
+ * layout, so minimizing, maximizing and closing stay in reach here rather than only in the palette.
+ */
+function windowButtons(c) {
+  // A press on a button acts; it never starts dragging the window the bar sits on.
+  const stop = (_e, cx) => cx.stop_propagation();
+  const button = (id, icon, label, command) =>
+    actionButton(c, id, null, () => run(command), { icon, tone: "quiet", tooltip: label, a11y: label }).on_mouse_down("left", stop);
+  return h_flex()
+    .flex_none()
+    .items_center()
+    .gap(SPACE[1])
+    .child(button("bh-window-minimize", "window-minimize", "Minimize", "window.minimize"))
+    .child(button("bh-window-maximize", "window-maximize", "Maximize", "window.maximize"))
+    .child(button("bh-window-close", "x", "Close window", "window.close"));
+}
+
+/**
+ * One top-bar destination: accent text over a 2px accent underline when it is the one showing,
+ * with the same underline kept transparent otherwise so nothing moves when the pick changes
+ * (Tabs and selection). An icon-only tab — the Settings gear — carries its name as its label.
+ */
+function pageTab(c, { id, label = null, icon = null, on, count = null, i = 0, n = 1, height = HERDR_TAB, padX = SPACE[4], a11y = null, onClick }) {
+  return clickable(
+    div()
+      .role("tab")
+      .set_position(i + 1, n)
+      .aria_selected(Boolean(on))
+      .h(height)
+      .px(padX)
+      .flex_none()
+      .flex()
+      .items_center()
+      .gap(SPACE[2])
+      .rounded(SIZE.nested)
+      .text_size(TYPE_SCALE.metadata)
+      .font_medium()
+      .when(on, (el) => el.border_b(2).border_color(c.accent).text_color(c.accent))
+      .when(!on, (el) => el.border_b(2).border_color(alpha(c.accent, 0)).text_color(c.textSecondary).hover((s) => s.text_color(c.textPrimary)))
+      .when(Boolean(a11y), (el) => el.accessibility_label(a11y).tooltip(a11y))
+      // A press on a tab picks it; it never starts dragging the window the bar sits on.
+      .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+      .on_click(onClick)
+      .when(Boolean(icon), (el) => el.child(svg(ICON(icon)).flex_none().size(GLYPH.sm)))
+      .when(Boolean(label), (el) => el.child(label))
+      .when(count != null, (el) => el.child(div().text_size(TYPE_SCALE.metadata).font_semibold().text_color(on ? c.accent : c.textMuted).child(String(count)))),
+    c,
+    `bh-pages-${id}`,
+  );
 }

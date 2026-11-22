@@ -326,6 +326,8 @@ export default class ShotPage extends View {
   }
 
   render(cx) {
+    // Prepared again so no other page's published sub-tab can change this one's seeded state.
+    prepare();
     return this.inner.render(cx);
   }
 }

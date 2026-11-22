@@ -31,6 +31,9 @@ import {
 } from "./resilienceview.js";
 import { settingsGridColumns } from "./tasksview.js";
 import { OPEN_RESILIENCE } from "./statusstrip.js";
+import { setSub, subOf } from "./pages.js";
+import { Metrics } from "./metrics.js";
+import { safeRender } from "./render-safe.js";
 
 const GAP = 14; // between cards
 const MAX = 1140; // the page's widest
@@ -40,10 +43,11 @@ const KNOB = 18;
 /** An agent card's height with its essentials (header, harness, model, effort, More): every card is at least this. */
 const CARD_H = 320;
 
-/** The page's tabs, one section each. */
+/** The page's tabs, one section each: Usage holds the Metrics view, quiet. */
 const SECTIONS = [
   { id: "agents", label: "Agents", icon: "users" },
   { id: "general", label: "General", icon: "page-settings" },
+  { id: "usage", label: "Usage", icon: "page-metrics" },
   { id: "resilience", label: "Resilience", icon: "shield-check" },
   { id: "harnesses", label: "Harnesses", icon: "page-terminals" },
 ];
@@ -163,6 +167,22 @@ function openMore({ kind, key, known = [], classifier = null }) {
   });
 }
 
+/** The Settings › Usage view, or null when it could not be built: Usage then says so, never throws. */
+function mountMetrics(cx) {
+  try {
+    const view = new Metrics();
+    view.init({}, cx);
+    return view;
+  } catch (err) {
+    try {
+      console.error(`bot-herdr [init:metrics]: ${err instanceof Error ? err.message : String(err)}`);
+    } catch {
+      // Never throw while reporting.
+    }
+    return null;
+  }
+}
+
 export class Settings {
   init(_props, cx) {
     this.known = [];
@@ -171,6 +191,8 @@ export class Settings {
     this.open = null; // "<id>:harness" or "<id>:model": the field whose list is open
     const was = remembered();
     this.section = was === "access" || was === "classifier" ? "general" : was; // the tab open
+    this.publishedSub = this.section; // the section this page last made shared
+    setSub("settings", this.section);
     this.pickedAt = /** @type {{ at?: number } | null} */ (shared(PICKED))?.at ?? 0;
     this.refreshedAt = /** @type {{ at?: number } | null} */ (shared(REFRESH))?.at ?? 0;
     this.harnessAddedAt = Number(shared(HARNESS_ADDED) ?? 0);
@@ -190,6 +212,8 @@ export class Settings {
     this.pickBounds = null; // where the open list's field sits, to reopen it after a refresh
     this.drag = null; // { id, bounds } while an effort slider is held
     this.width = 900;
+    // Settings › Usage holds the Metrics view: built once with the page, drawn only while Usage is open.
+    this.metrics = mountMetrics(cx);
     this.saveGen = 0;
     this.problem = null;
     this.classifier = null; // what `bh config` reports (the key only as set / not set)
@@ -663,7 +687,9 @@ export class Settings {
     if (openResilience > this.openResilienceAt) {
       this.openResilienceAt = openResilience;
       this.section = "resilience";
+      this.publishedSub = "resilience";
       remember("resilience");
+      setSub("settings", "resilience");
       cx.timer.after(1, (cx) => this.loadResilience(cx));
     }
     // The roster changed from outside (the composer's model chip or MoreSheet): sync and persist.
@@ -678,7 +704,18 @@ export class Settings {
       });
     }
     const c = colors();
+    // A link elsewhere in the app (or the palette) can point Settings at a section: follow it.
+    const wanted = subOf("settings");
+    if (wanted && wanted !== this.publishedSub && SECTIONS.some((x) => x.id === wanted)) {
+      this.section = wanted;
+      this.publishedSub = wanted;
+      remember(wanted);
+      if (wanted === "resilience") cx.timer.after(1, (cx) => this.loadResilience(cx));
+    }
     const section = SECTIONS.some((x) => x.id === this.section) ? this.section : "agents";
+    // The destination remembers its section, so a view that lives in it knows when it is showing.
+    this.publishedSub = section;
+    setSub("settings", section);
     const list = this.list().filter((a) => this.inputs[a.id]);
     const content = Math.max(MIN_CARD, Math.min(MAX, this.width - SIZE.gutter * 2));
     const cols = content >= MIN_CARD * 3 + GAP * 2 ? 3 : content >= MIN_CARD * 2 + GAP ? 2 : 1;
@@ -687,6 +724,43 @@ export class Settings {
     const space = currentSpace()?.id ?? null;
     const rows = [];
     for (let i = 0; i < list.length; i += cols) rows.push(list.slice(i, i + cols));
+    const tabs = this.tabs(c, section);
+    // Usage is the Metrics view: a page of its own under the tabs, not a card in the column.
+    const body = section === "usage"
+      ? v_flex().size_full().items_center()
+        .child(v_flex().flex_none().w(content).pt(SPACE[5]).pb(SPACE[4]).child(h_flex().items_center().child(tabs)))
+        .child(div().id("bh-settings-usage").relative().flex_1().w_full().min_h(0).child(this.usage(cx)))
+      : v_flex()
+        .id("bh-settings-scroll")
+        .absolute()
+        .inset_0()
+        .overflow_y_scroll()
+        .items_center()
+        .child(
+          v_flex()
+            .flex_none()
+            .w(content)
+            .py(SPACE[5])
+            .gap(GAP)
+            // One section at a time, picked from the tabs.
+            .child(h_flex().items_center().child(tabs))
+            .when(Boolean(this.problem), (el) => el.child(div().text_size(TYPE.sm).text_color(c.danger).child(this.problem)))
+            .when(!this.problem && Date.now() - (this.saved ?? 0) < SAVED_MS, (el) => el.child(div().text_size(TYPE.xs).text_color(c.muted).child("Saved")))
+            .when(section === "agents", (el) => el
+              .children(rows.map((row, r) =>
+                // Cards in a row share its height; every card is at least the height of a full one.
+                h_flex().id(`bh-row-${r}`).flex_none().gap(GAP).items_stretch().children(row.map((a) => this.card(c, a, cardW, running, space)))))
+              .child(h_flex().flex_none().child(this.button(c, "bh-add-agent", "plus", "Add agent", (_e, cx) => {
+                const list = this.list();
+                this.save([...list, blank(list, this.known)], cx);
+                this.sync();
+                cx.notify();
+              }))))
+            // Access and the classifier together: 2-column grid when wide (>= 860px), stacked when narrow.
+            .when(section === "general", (el) => el.child(this.generalSection(c, content)))
+            .when(section === "resilience", (el) => el.child(this.resilienceSection(c, content)))
+            .when(section === "harnesses", (el) => el.child(this.harnesses(c))),
+        );
     return div()
       .id("bh-settings")
       .relative()
@@ -702,49 +776,32 @@ export class Settings {
           cx.notify();
         }
       })
-      .child(
-        v_flex()
-          .id("bh-settings-scroll")
-          .absolute()
-          .inset_0()
-          .overflow_y_scroll()
-          .items_center()
-          .child(
-            v_flex()
-              .flex_none()
-              .w(content)
-              .py(SPACE[5])
-              .gap(GAP)
-              // One section at a time, picked from the tabs.
-              .child(h_flex().items_center().child(segmented(c, {
-                id: "bh-settings-tabs",
-                items: SECTIONS.map((x) => ({ id: x.id, icon: x.icon, label: x.label, on: x.id === section })),
-                onPick: (id, cx) => {
-                  this.section = id;
-                  remember(id);
-                  if (id === "resilience") this.loadResilience(cx);
-                  cx.notify();
-                },
-              }))
-)
-              .when(Boolean(this.problem), (el) => el.child(div().text_size(TYPE.sm).text_color(c.danger).child(this.problem)))
-              .when(!this.problem && Date.now() - (this.saved ?? 0) < SAVED_MS, (el) => el.child(div().text_size(TYPE.xs).text_color(c.muted).child("Saved")))
-              .when(section === "agents", (el) => el
-                .children(rows.map((row, r) =>
-                  // Cards in a row share its height; every card is at least the height of a full one.
-                  h_flex().id(`bh-row-${r}`).flex_none().gap(GAP).items_stretch().children(row.map((a) => this.card(c, a, cardW, running, space)))))
-                .child(h_flex().flex_none().child(this.button(c, "bh-add-agent", "plus", "Add agent", (_e, cx) => {
-                  const list = this.list();
-                  this.save([...list, blank(list, this.known)], cx);
-                  this.sync();
-                  cx.notify();
-                }))))
-              // Access and the classifier together: 2-column grid when wide (>= 860px), stacked when narrow.
-              .when(section === "general", (el) => el.child(this.generalSection(c, content)))
-              .when(section === "resilience", (el) => el.child(this.resilienceSection(c, content)))
-              .when(section === "harnesses", (el) => el.child(this.harnesses(c))),
-          ),
-      );
+      .child(body);
+  }
+
+  /** The page's section tabs: one control, the current section underlined. */
+  tabs(c, section) {
+    return segmented(c, {
+      id: "bh-settings-tabs",
+      items: SECTIONS.map((x) => ({ id: x.id, icon: x.icon, label: x.label, on: x.id === section })),
+      onPick: (id, cx) => {
+        this.section = id;
+        this.publishedSub = id;
+        remember(id);
+        setSub("settings", id);
+        if (id === "resilience") this.loadResilience(cx);
+        cx.notify();
+      },
+    });
+  }
+
+  /** Settings › Usage: the Metrics view (hero numbers, details on demand), quiet under the tabs. */
+  usage(cx) {
+    const c = colors();
+    if (!this.metrics) return stateView(c, { id: "bh-settings-usage-error", title: "This view could not be drawn", line: "Restart Herdr to build the usage numbers again." });
+    const { node, error } = safeRender(this.metrics, cx, { view: "metrics" });
+    if (error) return stateView(c, { id: "bh-settings-usage-error", title: "This view could not be drawn", line: error.detail });
+    return node;
   }
 
   /** A section's heading: a small icon and the title. */

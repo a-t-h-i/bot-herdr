@@ -5,7 +5,10 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 const tmp = mkdtempSync(join(tmpdir(), "bh-install-foundation-"));
 after(() => {
@@ -61,7 +64,8 @@ test("resolveHerdrAppBin finds herdr-app in ~/.local/bin when PATH has it nowher
 
 // ── The redesign's layout migration (migrateLayout, backupLayout) ──────────────────────────
 
-const { migrateLayout, backupLayout, layoutBackupPath } = await import(new URL("../install.mjs", import.meta.url));
+const { migrateLayout, backupLayout, layoutBackupPath, installLayout } = await import(new URL("../install.mjs", import.meta.url));
+const shippedLayout = join(ROOT, "layouts", "bot-herdr.json");
 
 /** The eleven-destination layout a user has installed today, with their own sizes and theme. */
 const oldLayout = {
@@ -186,4 +190,40 @@ test("backupLayout keeps the layout beside itself with a timestamp, never twice 
   assert.equal(second, `${file}.20261122T001530Z-2.bak`);
   assert.ok(existsSync(second));
   assert.equal(backupLayout(join(tmp, "layouts", "none.json"), { at }), "");
+});
+
+// ── Shipping the layout: installLayout over an installed file ────────────────────────────────
+
+test("installLayout: an installed layout (with metrics) becomes the shipped one, backed up", () => {
+  const dir = mkdtempSync(join(tmp, "install-layout-"));
+  const file = join(dir, "layouts", "bot-herdr.json");
+  mkdirSync(dirname(file), { recursive: true });
+  const installed = JSON.stringify(oldLayout, null, 2);
+  writeFileSync(file, installed);
+
+  const at = new Date("2026-11-22T00:15:30.123Z");
+  const first = installLayout({ file, target: shippedLayout, at });
+  assert.equal(first.action, "migrated");
+  assert.equal(first.backup, `${file}.20261122T001530Z.bak`, "the layout it replaced is kept beside it");
+  assert.equal(readFileSync(first.backup, "utf8"), installed, "the backup is the file as it was");
+
+  const written = JSON.parse(readFileSync(file, "utf8"));
+  const shipped = JSON.parse(readFileSync(shippedLayout, "utf8"));
+  assert.deepEqual(pageIds(written), ["home", "threads", "agents", "library", "settings", "my-own-tool"], "the five destinations, plus a page of the user's own");
+  assert.equal(findNode(written, "pages").active, "home", "the old page (metrics) is gone, so Home opens");
+  assert.equal(findNode(written, "tabs"), null, "the top-bar tabs strip does not come back");
+  assert.deepEqual(findNode(written, "stage").children.map((c) => c.id), ["pages", "terminals"]);
+  assert.equal(findNode(written, "switch").window_drag, shipped.children[1].children[0].children[0].window_drag);
+  assert.deepEqual(findNode(written, "sidebar").size, { px: 300 }, "the person's own rail width is kept");
+  assert.deepEqual(written.theme, { light: "bot-herdr-light", dark: "bot-herdr-dark" }, "and their theme");
+
+  const again = installLayout({ file, target: shippedLayout, at: new Date("2026-11-22T01:00:00.000Z") });
+  assert.equal(again.action, "kept", "a repeat install writes nothing");
+  assert.equal(again.backup, "", "and makes no second backup");
+  assert.equal(readFileSync(file, "utf8"), JSON.stringify(written, null, 2) + "\n");
+
+  assert.equal(installLayout({ file: join(dir, "fresh", "bot-herdr.json"), target: shippedLayout }).action, "created", "no installed layout: written as it ships");
+  assert.equal(installLayout({ file, target: join(dir, "missing.json") }).action, "kept", "an unreadable shipped layout keeps the installed one");
+  assert.equal(installLayout({ file, target: shippedLayout, force: true }).action, "replaced", "--force replaces the structure, still backing up");
+  rmSync(dir, { recursive: true, force: true });
 });

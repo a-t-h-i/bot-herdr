@@ -1,9 +1,14 @@
 // bot-herdr: one mod, several views, picked by the layout block's props.
-//   { "view": "chat" }      the chat page: every agent's replies and the composer (chat.js)
-//   { "view": "switch" }    the Chat / Terminals / Settings switch in the top bar (switch.js)
+//   { "view": "switch" }    the top bar: Home, Threads, Agents, Library and the Settings gear (switch.js)
+//   { "view": "home" }      what needs you, then the fleet and today's spend (home.js)
+//   { "view": "threads" }   a task's thread; the Orchestrator's chat until the thread view lands (threads.js)
+//   { "view": "agents" }    Agents › Fleet, or (props.sub "terminals") the strip above herdr's panes (agents.js)
+//   { "view": "library" }   Library › Knowledge | Learning | Scripts | Issues (library.js)
+//   { "view": "scripts" }   Library › Scripts on its own
+//   { "view": "chat" }      the Orchestrator's chat used on its own (chat.js)
 //   { "view": "work", "tab": "tasks" | "plans" | "knowledge" }   the team's work (work.js)
 //   { "view": "pick" }      a dropdown list, opened as a popup by Settings (pick.js)
-//   { "view": "settings" }  the agents: harness, model, effort (settings.js)
+//   { "view": "settings" }  the agents, run mode, resilience, harnesses and usage (settings.js)
 //   { "view": "settings-more" }  a settings card's More, as a dialog (settings.js)
 //   { "view": "lightbox" }  a picture opened large, as a dialog (lightbox.js)
 //   { "view": "file" }      a file named in a message, opened read only, as a dialog (viewer.js)
@@ -30,9 +35,14 @@ import { FileView } from "./viewer.js";
 import { PlanDoc } from "./plandoc.js";
 import { Metrics } from "./metrics.js";
 import { Learning, LearningDoc } from "./learning.js";
+import { Home } from "./home.js";
+import { Threads } from "./threads.js";
+import { Agents } from "./agents.js";
+import { Library } from "./library.js";
+import { Scripts } from "./scripts.js";
 import Issues from "./issues.js";
 
-export const VIEWS = { chat: Chat, switch: Switch, work: Work, issues: Issues, learning: Learning, "learning-doc": LearningDoc, settings: Settings, pick: Pick, lightbox: Lightbox, toast: Toast, file: FileView, plan: PlanDoc, note: NoteForm, metrics: Metrics, "settings-more": MoreSheet };
+export const VIEWS = { home: Home, threads: Threads, agents: Agents, library: Library, scripts: Scripts, chat: Chat, switch: Switch, work: Work, issues: Issues, learning: Learning, "learning-doc": LearningDoc, settings: Settings, pick: Pick, lightbox: Lightbox, toast: Toast, file: FileView, plan: PlanDoc, note: NoteForm, metrics: Metrics, "settings-more": MoreSheet };
 
 /** Resolves theme tokens safely so even a broken theme lookup keeps the fallback readable. */
 function safeColors() {

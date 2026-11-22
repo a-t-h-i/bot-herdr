@@ -10,7 +10,7 @@ import { actionButton } from "./button.js";
 import { stateView, pill } from "./switch.js";
 import { sectionLabel } from "./plandoc.js";
 import { colors } from "./theme.js";
-import { activePage, sendFromChat } from "./pages.js";
+import { sendFromChat, viewShown } from "./pages.js";
 import { bh, bhJson, projectDir } from "./bh.js";
 import { alpha } from "./working.js";
 import {
@@ -155,7 +155,7 @@ export class Learning {
   init(_given, cx) {
     this.dir = projectDir();
     this.width = 960;
-    this.shown = activePage() === "learning";
+    this.shown = viewShown("learning");
     this.updatedAt = Number(shared(LEARN_UPDATED) ?? 0);
     this.search = InputState.new({ placeholder: "Search concepts or decisions…" });
     this.search.on("change", (_e, cx) => cx.notify());
@@ -204,7 +204,7 @@ export class Learning {
 
   syncContext(cx) {
     const dir = projectDir();
-    const openNow = activePage() === "learning";
+    const openNow = viewShown("learning");
     const sharedAt = Number(shared(LEARN_UPDATED) ?? 0);
     if (dir !== this.dir) {
       this.resetState(dir);

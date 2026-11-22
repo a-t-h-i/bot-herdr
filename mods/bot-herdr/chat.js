@@ -635,7 +635,7 @@ export class Chat {
     // Take the keyboard when asked (ctrl+shift+m, the Chat pill) or when this page comes up.
     const stamp = shared(FOCUS) ?? 0;
     const page = activePage();
-    const returned = page === "chat" && this.lastPage !== "chat" && this.lastPage !== null;
+    const returned = page === "threads" && this.lastPage !== "threads" && this.lastPage !== null;
     if (stamp !== this.focusAt || returned) this.composer.focus();
     this.focusAt = stamp;
     this.lastPage = page;

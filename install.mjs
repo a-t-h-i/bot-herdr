@@ -9,7 +9,7 @@
 //   node install.mjs --skip-tools   don't download the bundled rg, fd and ast-grep
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { ensureTools } from "./mods/bot-herdr/engine/lib/install-tools.mjs";
@@ -36,6 +36,11 @@ export function resolveHerdrAppBin() {
 }
 
 const hasHomePage = (text) => String(text ?? "").includes('"id": "home"');
+
+// Layouts written before the redesign (a "home" page is what marks one): these helpers merged the
+// pages the redesign added into an installed layout, and a layout from that era may still be on a
+// machine. `runInstall` now ships the whole structure through `installLayout`/`migrateLayout`, so
+// they stay exported for those older layouts (and the tests that pin their behaviour).
 
 /**
  * Whether an installed layout predates the redesign: the repo layout has a "home" page and the
@@ -143,43 +148,13 @@ async function runInstall() {
 
   const layout = join(appHome, "layouts", "bot-herdr.json");
   const repoLayout = join(here, "layouts", "bot-herdr.json");
-  // A layout from before the redesign's "home" page is kept as .pre-redesign.old and replaced, so
-  // the pages the redesign adds actually appear.
-  const migrate = existsSync(layout) && shouldMigrateRedesignLayout(readFileSync(repoLayout, "utf8"), readFileSync(layout, "utf8"));
-  if (migrate) {
-    cpSync(layout, `${layout}.pre-redesign.old`);
-    cpSync(repoLayout, layout);
-    console.log(`layout   ${layout} (the redesigned one; yours from before is kept as bot-herdr.json.pre-redesign.old)`);
-  } else {
-    // A layout from before the pages (chat, terminals, tasks, plans, knowledge, metrics, settings)
-    // can't show them: replace it.
-    const old = existsSync(layout) && !readFileSync(layout, "utf8").includes('"id": "metrics"');
-    if (old) cpSync(layout, `${layout}.old`);
-    if (!existsSync(layout) || old || args.has("--force")) {
-      mkdirSync(dirname(layout), { recursive: true });
-      cpSync(repoLayout, layout);
-      console.log(`layout   ${layout}${old ? " (yours from before is kept as bot-herdr.json.old)" : ""}`);
-    } else {
-      // Notifications rise out of the chat's composer: the root names our mod as its toast.
-      try {
-        const kept = JSON.parse(readFileSync(layout, "utf8"));
-        let changed = false;
-        if (!kept.toast) {
-          kept.toast = "bot-herdr";
-          changed = true;
-        }
-        // The Files / Changes panel sits beside the pages, not inside the Terminals page, so the
-        // tab bar's Files and Changes buttons show it on every page (Chat too).
-        changed = panelBesidePages(kept) || changed;
-        changed = ensureIssuesPage(kept) || changed;
-        changed = ensureLearningPage(kept) || changed;
-        if (changed) writeFileSync(layout, `${JSON.stringify(kept, null, 2)}\n`);
-      } catch {
-        // not JSON we can read: leave it as it is
-      }
-      console.log(`layout   kept your ${layout} (--force replaces it)`);
-    }
-  }
+  // The redesign's five destinations ship as the layout; an installed one is migrated onto them
+  // (theme, sizes, own pages and the open page carried) and kept beside the new file with a
+  // timestamp. A repeat install writes nothing; --force replaces the structure too, still backed up.
+  const shipped = installLayout({ file: layout, target: repoLayout, force: args.has("--force") });
+  if (shipped.action === "kept" && shipped.reason) console.log(`layout   kept your ${layout} (${shipped.reason})`);
+  else if (shipped.action === "kept") console.log(`layout   ${layout} is current`);
+  else console.log(`layout   ${layout}${shipped.backup ? ` (your old one is kept as ${basename(shipped.backup)})` : ""}`);
 
   // Keys: add ours, never replace one you already bound.
   const keysFile = join(appHome, "keys.json");
@@ -252,31 +227,6 @@ async function runInstall() {
 
   if (args.has("--switch")) spawnSync(herdrApp, ["do", "layout.switch", "--name", "bot-herdr"], { stdio: "inherit" });
   else console.log('switch   herdr-app do layout.switch --name bot-herdr   (or ctrl+shift+l)');
-}
-
-/**
- * Moves the "panel" node (herdr's Files / Changes) out of the "terminals" page to sit beside the
- * "pages" stack, in a "work-body" row. Returns whether the layout changed.
- */
-function panelBesidePages(root) {
-  const parentOf = (node, id) => {
-    for (const child of node?.children ?? []) {
-      if (child.id === id) return node;
-      const found = parentOf(child, id);
-      if (found) return found;
-    }
-    return null;
-  };
-  const from = parentOf(root, "panel");
-  const work = parentOf(root, "pages");
-  if (from?.id !== "terminals" || !work) return false;
-  const panel = from.children.find((c) => c.id === "panel");
-  from.children = from.children.filter((c) => c !== panel);
-  const pages = work.children.find((c) => c.id === "pages");
-  const { children, ...rest } = panel;
-  const body = { id: "work-body", type: "row", children: [pages, { ...rest, padding: rest.padding ?? 8, children }] };
-  work.children = work.children.map((c) => (c === pages ? body : c));
-  return true;
 }
 
 // ── The redesign's layout migration ───────────────────────────────────────────────────────
@@ -394,6 +344,45 @@ export function backupLayout(file, { at = new Date(), copy = cpSync } = {}) {
   const path = layoutBackupPath(file, at);
   copy(file, path);
   return path;
+}
+
+/** A file's text, or null when it cannot be read. */
+function readTextOrNull(file) {
+  try {
+    return readFileSync(file, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+/** Whether two layout texts hold the same layout, whatever their spacing. */
+function sameLayoutText(a, b) {
+  try {
+    return JSON.stringify(JSON.parse(a)) === JSON.stringify(JSON.parse(b));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Puts the shipped layout where Herdr reads it, without losing the one that was there:
+ *  - nothing installed: writes it ("created");
+ *  - an installed layout: migrates it onto the shipped structure (migrateLayout) and keeps the old
+ *    file beside it with a timestamp ("migrated") — an unreadable one is replaced, still backed up;
+ *  - --force: replaces the structure too, backed up ("replaced");
+ *  - already current: writes nothing and makes no backup ("kept").
+ * Returns { action, backup, reason }, where backup is "" when there was nothing to back up.
+ */
+export function installLayout({ file, target, force = false, at = new Date() }) {
+  const shipped = readTextOrNull(target);
+  if (!shipped) return { action: "kept", backup: "", reason: "the shipped layout could not be read" };
+  const installed = readTextOrNull(file);
+  const next = installed === null || force ? shipped : JSON.stringify(migrateLayout(installed, shipped) ?? JSON.parse(shipped), null, 2) + "\n";
+  if (installed !== null && sameLayoutText(next, installed)) return { action: "kept", backup: "" };
+  mkdirSync(dirname(file), { recursive: true });
+  const backup = installed === null ? "" : backupLayout(file, { at });
+  writeFileSync(file, next);
+  return { action: installed === null ? "created" : force ? "replaced" : "migrated", backup };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {

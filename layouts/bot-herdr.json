@@ -102,23 +102,12 @@
             {
               "id": "switch",
               "type": "block",
-              "size": {
-                "px": 760
-              },
               "window_drag": true,
               "content": {
                 "mod": "bot-herdr",
                 "props": {
                   "view": "switch"
                 }
-              }
-            },
-            {
-              "id": "tabs",
-              "type": "block",
-              "window_drag": true,
-              "content": {
-                "mod": "tabs"
               }
             }
           ]
@@ -128,161 +117,121 @@
           "type": "row",
           "children": [
             {
-              "id": "pages",
+              "id": "stage",
               "type": "stack",
-              "active": "chat",
+              "active": "pages",
               "children": [
                 {
-                  "id": "chat",
-                  "type": "block",
-                  "content": {
-                    "mod": "bot-herdr",
-                    "props": {
-                      "view": "chat"
-                    }
-                  }
-                },
-                {
-                  "id": "terminals",
-                  "type": "row",
-                  "padding": 8,
-                  "gap": 8,
+                  "id": "pages",
+                  "type": "stack",
+                  "active": "home",
                   "children": [
                     {
-                      "id": "main",
+                      "id": "home",
                       "type": "block",
                       "content": {
-                        "tab": "active",
-                        "pane": {
-                          "gap": 8,
-                          "radius": 10,
-                          "background": "background",
-                          "lone": true,
-                          "border": {
-                            "width": 1,
-                            "color": "border"
-                          },
-                          "focus": {
-                            "width": 1,
-                            "color": "accent"
-                          },
-                          "header": {
-                            "content": {
-                              "mod": "pane"
-                            },
-                            "height": 30,
-                            "position": "top",
-                            "reveal": "always"
-                          }
+                        "mod": "bot-herdr",
+                        "props": {
+                          "view": "home"
+                        }
+                      }
+                    },
+                    {
+                      "id": "threads",
+                      "type": "block",
+                      "content": {
+                        "mod": "bot-herdr",
+                        "props": {
+                          "view": "threads"
+                        }
+                      }
+                    },
+                    {
+                      "id": "agents",
+                      "type": "block",
+                      "content": {
+                        "mod": "bot-herdr",
+                        "props": {
+                          "view": "agents"
+                        }
+                      }
+                    },
+                    {
+                      "id": "library",
+                      "type": "block",
+                      "content": {
+                        "mod": "bot-herdr",
+                        "props": {
+                          "view": "library"
+                        }
+                      }
+                    },
+                    {
+                      "id": "settings",
+                      "type": "block",
+                      "content": {
+                        "mod": "bot-herdr",
+                        "props": {
+                          "view": "settings"
                         }
                       }
                     }
                   ]
                 },
                 {
-                  "id": "tasks",
-                  "type": "block",
-                  "content": {
-                    "mod": "bot-herdr",
-                    "props": {
-                      "view": "work",
-                      "tab": "tasks"
-                    }
-                  }
-                },
-                {
-                  "id": "plans",
-                  "type": "block",
-                  "content": {
-                    "mod": "bot-herdr",
-                    "props": {
-                      "view": "work",
-                      "tab": "plans"
-                    }
-                  }
-                },
-                {
-                  "id": "issues",
-                  "type": "block",
-                  "content": {
-                    "mod": "bot-herdr",
-                    "props": {
-                      "view": "issues"
-                    }
-                  }
-                },
-                {
-                  "id": "knowledge",
-                  "type": "block",
-                  "content": {
-                    "mod": "bot-herdr",
-                    "props": {
-                      "view": "work",
-                      "tab": "knowledge"
-                    }
-                  }
-                },
-                {
-                  "id": "learning",
-                  "type": "block",
-                  "content": {
-                    "mod": "bot-herdr",
-                    "props": {
-                      "view": "learning"
-                    }
-                  }
-                },
-                {
-                  "id": "metrics",
-                  "type": "block",
-                  "content": {
-                    "mod": "bot-herdr",
-                    "props": {
-                      "view": "metrics"
-                    }
-                  }
-                },
-                {
-                  "id": "settings",
-                  "type": "block",
-                  "content": {
-                    "mod": "bot-herdr",
-                    "props": {
-                      "view": "settings"
-                    }
-                  }
-                }
-              ]
-            },
-            {
-              "id": "panel",
-              "type": "column",
-              "hidden": true,
-              "size": {
-                "px": 368
-              },
-              "min": 280,
-              "max": 900,
-              "padding": 8,
-              "children": [
-                {
-                  "id": "panel-body",
-                  "type": "stack",
-                  "active": "files",
+                  "id": "terminals",
+                  "type": "column",
+                  "padding": 8,
+                  "gap": 8,
                   "children": [
                     {
-                      "id": "files",
+                      "id": "agents-tabs",
                       "type": "block",
+                      "size": {
+                        "px": 40
+                      },
                       "content": {
-                        "mod": "files"
+                        "mod": "bot-herdr",
+                        "props": {
+                          "view": "agents",
+                          "sub": "terminals"
+                        }
                       }
                     },
                     {
-                      "id": "changes",
-                      "type": "block",
-                      "content": {
-                        "mod": "changes"
-                      }
+                      "id": "panes",
+                      "type": "row",
+                      "children": [
+                        {
+                          "id": "main",
+                          "type": "block",
+                          "content": {
+                            "tab": "active",
+                            "pane": {
+                              "gap": 8,
+                              "radius": 10,
+                              "background": "background",
+                              "lone": true,
+                              "border": {
+                                "width": 1,
+                                "color": "border"
+                              },
+                              "focus": {
+                                "width": 1,
+                                "color": "accent"
+                              },
+                              "header": {
+                                "content": {
+                                  "mod": "pane"
+                                },
+                                "height": 30,
+                                "position": "top",
+                                "reveal": "always"
+                              }
+                            }
+                          }
+                        }
+                      ]
                     }
                   ]
                 }

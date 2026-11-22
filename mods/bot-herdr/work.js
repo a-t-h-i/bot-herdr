@@ -18,7 +18,7 @@ import { actionButton } from "./button.js";
 import { segmented, stateView, pill, filterChip, chipHasResults } from "./switch.js";
 import { commentRow, openFirst, openPlan, sectionLabel, COMMENT_LINKS, arm, armed, startMenuTrigger, startMenuPanel, issueChips } from "./plandoc.js";
 import { colors } from "./theme.js";
-import { activePage, openTerminal, sendFromChat, showPage, startPlanTask, wakeGoal, OPEN_TASK } from "./pages.js";
+import { openTerminal, sendFromChat, showPage, startPlanTask, viewShown, wakeGoal, OPEN_TASK } from "./pages.js";
 import { ROSTER_KEY, roster, slug } from "./roster.js";
 import { bh, bhJson, enc, projectDir } from "./bh.js";
 import { outline, notesOn } from "./doc.js";
@@ -394,11 +394,11 @@ export class Work {
     this.taskComposer.expanded = false;
     this.readQuestions(cx);
     cx.timer.every(QUESTIONS_MS, (cx) => {
-      if (activePage() === (this.fixed ?? "work")) this.readQuestions(cx);
+      if (viewShown(this.fixed ?? "work")) this.readQuestions(cx);
     });
     this.reload(cx);
     cx.timer.every(REFRESH_MS, (cx) => {
-      if (activePage() === (this.fixed ?? "work")) this.reload(cx);
+      if (viewShown(this.fixed ?? "work")) this.reload(cx);
     });
   }
 
@@ -883,7 +883,7 @@ export class Work {
       this.noteAddedAt = added.at;
       cx.timer.after(1, (cx) => this.reload(cx));
     }
-    const active = activePage() === (this.fixed ?? "work");
+    const active = viewShown(this.fixed ?? "work");
     if (active && !this.wasActive) {
       cx.timer.after(1, (cx) => {
         this.readQuestions(cx);

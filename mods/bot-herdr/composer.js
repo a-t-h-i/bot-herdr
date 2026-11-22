@@ -27,7 +27,7 @@ import {
   agents as reported, panes, terminals, spaces, focused, settings, run, hc, knownAgents, pickFolder, exec, window as herdrWindow,
   shared, setShared, appHome,
 } from "herdr";
-import { showPage, hold } from "./pages.js";
+import { showSettings, hold } from "./pages.js";
 import { SIZE, MOTION, ICON, TYPE, LINE, SPACE, ROW, CHIP, CONTROL, TARGET, MARK, DOT, PIP, HAIR, GLYPH, CLEAR, tint, readable, textWidth, rowsFor, baseName, upFrom, filterEntries, togglePick, sizeText, clickable, pressable, focusable } from "./look.js";
 import { actionButton } from "./button.js";
 import { stateView } from "./switch.js";
@@ -779,7 +779,7 @@ export class Composer {
     if (row.kind === "command" && row.name === "settings") {
       this.input.set_value("");
       this.mode = null;
-      showPage("settings");
+      showSettings("agents");
     } else if (lists) {
       this.input.set_selected_range(range);
       this.mode = "start";
@@ -1256,7 +1256,7 @@ export class Composer {
         this.input.set_value("");
         this.text = "";
       }
-      showPage("settings");
+      showSettings("agents");
       cx.notify();
       if (!fromInput) this.flushOutbox(cx);
       return;

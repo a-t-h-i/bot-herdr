@@ -12,7 +12,7 @@ import { stateView, pill, filterChip, chipHasResults } from "./switch.js";
 import { markdownWithFoldedCode } from "./machinetext.js";
 import { openPlan, sectionLabel } from "./plandoc.js";
 import { colors } from "./theme.js";
-import { activePage, sendFromChat, showPage, OPEN_TASK } from "./pages.js";
+import { sendFromChat, showPage, viewShown, OPEN_TASK } from "./pages.js";
 import { bh, bhJson, projectDir } from "./bh.js";
 import { openLink } from "./viewer.js";
 import { alpha } from "./working.js";
@@ -154,7 +154,7 @@ export class Issues {
     this.dir = projectDir();
     this.width = 960;
     this.height = 720;
-    this.shown = activePage() === "issues";
+    this.shown = viewShown("issues");
     this.handle = cx.focus_handle();
     this.search = InputState.new({ placeholder: "Search issues, #number, or label..." });
     this.search.on("change", (_e, cx) => cx.notify());
@@ -462,7 +462,7 @@ export class Issues {
 
   render(cx) {
     const dir = projectDir();
-    const openNow = activePage() === "issues";
+    const openNow = viewShown("issues");
     if (dir !== this.dir) {
       this.switchTo(dir);
       cx.timer.after(1, (cx) => this.loadList(cx, dir, { allowAutoFetch: openNow }));

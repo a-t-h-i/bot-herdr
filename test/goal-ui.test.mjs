@@ -84,7 +84,7 @@ test("settingsGridColumns switches cleanly between 2 columns (>= 860px) and 1 co
 });
 
 test("GPUI static guards: no forbidden APIs, zero global top banners, Settings 2-column grids, and Goal UI hooks wired", () => {
-  const uiFiles = ["work.js", "plandoc.js", "pages.js", "settings.js", "tasksview.js", "issues.js", "issuesview.js"];
+  const uiFiles = ["work.js", "plandoc.js", "pages.js", "settings.js", "tasksview.js", "issues.js", "issuesview.js", "home.js", "agents.js", "library.js", "scripts.js", "threads.js", "rowkeys.js"];
   for (const name of uiFiles) {
     const src = readFileSync(join(ROOT, "mods", "bot-herdr", name), "utf8");
     const codeOnly = src.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");

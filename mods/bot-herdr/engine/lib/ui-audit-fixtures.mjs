@@ -207,12 +207,84 @@ const METRICS = {
   ],
 };
 
+/** One thread at a glance (bh thread list's row): what Home's Review section draws. */
+const THREAD_ROW = {
+  id: TASK_ONE.id,
+  kind: "task",
+  title: TASK_ONE.title,
+  state: "review",
+  glyph: "◇",
+  status: "active",
+  planId: TASK_ONE.plan,
+  agents: ["dev-m1", "Dev", "qa-1"],
+  steps: { done: 2, total: 6 },
+  blocked: 0,
+  openComments: 1,
+  needs: [],
+  activeAgents: ["dev-m1"],
+  goal: null,
+  ageMs: 51000000,
+  age: "2h",
+  created: TASK_ONE.created,
+  updated: "2026-11-21T19:00:00.000Z",
+  branch: "redesign-bot-herdr-ui-to-design-language-dev-m1",
+  path: "/tmp/bot-herdr/worktrees/redesign-bot-herdr-ui-to-design-language-dev-m1",
+  summary: { text: "Quiet pass is ready for QA", at: "2026-11-21T19:00:00.000Z", source: "activity", agent: "dev-m1" },
+};
+
+/** `bh home --json`: what needs you (ranked), the reviews, the fleet and today's spend. */
+const HOME = {
+  command: "home",
+  at: NOW,
+  header: { running: 3, needsYou: 5, text: "3 running · 5 need you" },
+  needsYou: [
+    { kind: "question", thread: TASK_ONE.id, ref: "comment c3", title: "Which selection style should the filter chips use?", text: "The board and the chips disagree; pick one.", from: "You", at: "2026-11-21T19:40:00.000Z" },
+    { kind: "blocker", thread: TASK_TWO.id, ref: "step 4", title: "Antigravity is offline", text: "QA cannot start until the harness answers.", from: "qa-1", at: "2026-11-21T19:20:00.000Z" },
+    { kind: "approval", thread: TASK_ONE.id, ref: "round 2", title: "Allow once: run the test suite", text: "Dev asked to run npm test.", from: "dev-m1", at: NOW },
+    { kind: "issue", thread: null, ref: "#1", title: "Error message shows up in chat tab", text: "An untriaged GitHub issue.", from: null, at: "2026-11-19T10:00:00.000Z" },
+    { kind: "review", thread: TASK_ONE.id, ref: "step 3", title: "Quiet pass ready for review", text: "QA is reading the M3 diff.", from: "dev-m3", at: "2026-11-21T19:50:00.000Z" },
+  ],
+  review: [THREAD_ROW],
+  fleet: {
+    agents: [
+      { name: "dev-m1", address: "t7a", harness: "pi", state: "working", status: "working", summary: "Editing filters.ts", at: NOW, task: TASK_ONE.id, cwd: "/tmp/bot-herdr" },
+      { name: "dev-m3", address: "t10z", harness: "claude", state: "needsYou", status: "blocked", summary: "Waiting on the selection style answer", at: "2026-11-21T19:45:00.000Z", task: TASK_ONE.id, cwd: "/tmp/bot-herdr" },
+      { name: "qa-1", address: "t9r", harness: "opencode", state: "idle", status: "idle", summary: "M3 review is queued", at: "2026-11-21T19:10:00.000Z", task: TASK_ONE.id, cwd: "/tmp/bot-herdr" },
+    ],
+    goals: [
+      { task: TASK_ONE.id, title: "Redesign the task board", status: "running", state: "working", passed: 2, total: 6, iteration: 1, maxSpendUsd: 40, spendUsd: 1.32, summary: "M1 audit is green; the tokens come next." },
+      { task: TASK_TWO.id, title: "Answer the plan question", status: "waiting", state: "paused", passed: 0, total: 2, iteration: 0, maxSpendUsd: 15, spendUsd: 0.21, summary: "Paused until the plan question is answered." },
+    ],
+  },
+  spendToday: { window: "today", turns: 5, costUsd: 1.8236, tokens: 58265717, minutes: 118.5 },
+  skipped: [],
+};
+
+/** `bh scripts list --json`: a project script among the built-ins. */
+const SCRIPTS = [
+  { name: "check_changed", file: "/mods/bot-herdr/engine/scripts/check_changed.mjs", source: "built-in", purpose: "typecheck and lint only what changed on this branch", usage: "node {script} [files…] [--base <ref>]" },
+  { name: "find_tests_for", file: "/mods/bot-herdr/engine/scripts/find_tests_for.mjs", source: "built-in", purpose: "list the test files that cover the given source files", usage: "node {script} <file> [more files…]" },
+  { name: "seed_demo", file: "/.bot-herdr/scripts/seed_demo.mjs", source: "project", purpose: "seed the demo project data", usage: "node {script}" },
+];
+
 const ACCESS = { headless: true, access: "standard", allow: [], git: "worktree", repoHistory: true };
 const CLASSIFIER = { enabled: false, keyFound: false, model: "", harness: "", kind: "", host: "openrouter", features: {}, thresholds: {} };
 const RESILIENCE = { config: { autonomy: "guarded", fallbacks: [], guardrails: {} }, cooldowns: [], activeFailovers: [], task: null };
 
-/** The audit's page list: today's destinations plus one variant per sub-tab the Fix table names. */
+/** The audit's page list: the redesign's destinations and each sub-tab it holds, then the views
+ * they replaced — still rendered, so a page the navigation drops keeps its coverage until the
+ * thread view lands. */
 export const AUDIT_PAGES = [
+  { id: "home", props: { view: "home" } },
+  { id: "threads", props: { view: "threads" } },
+  { id: "agents-fleet", props: { view: "agents" } },
+  { id: "agents-terminals", props: { view: "agents", sub: "terminals" } },
+  { id: "library-knowledge", props: { view: "library", sub: "knowledge" } },
+  { id: "library-learning", props: { view: "library", sub: "learning" } },
+  { id: "library-scripts", props: { view: "library", sub: "scripts" } },
+  { id: "library-issues", props: { view: "library", sub: "issues" } },
+  { id: "settings", props: { view: "settings" } },
+  { id: "settings-usage", props: { view: "settings" } },
   { id: "chat", props: { view: "chat" } },
   { id: "tasks", props: { view: "work", tab: "tasks" } },
   { id: "tasks-board", props: { view: "work", tab: "tasks" } },
@@ -221,15 +293,48 @@ export const AUDIT_PAGES = [
   { id: "knowledge", props: { view: "work", tab: "knowledge" } },
   { id: "learning", props: { view: "learning" } },
   { id: "metrics", props: { view: "metrics" } },
-  { id: "settings", props: { view: "settings" } },
   { id: "settings-general", props: { view: "settings" } },
   { id: "switch", props: { view: "switch" } },
 ];
 
-const DATA = { tasks: [TASK_ONE, TASK_TWO], detail: TASK_DETAIL, plans: PLANS, plan: PLAN, issues: ISSUES, kinds: KINDS, knowAll: KNOW_ALL, lessons: LESSONS, metrics: METRICS, known: KNOWN, access: ACCESS, classifier: CLASSIFIER, resilience: RESILIENCE };
+const DATA = { tasks: [TASK_ONE, TASK_TWO], detail: TASK_DETAIL, plans: PLANS, plan: PLAN, issues: ISSUES, kinds: KINDS, knowAll: KNOW_ALL, lessons: LESSONS, metrics: METRICS, home: HOME, scripts: SCRIPTS, known: KNOWN, access: ACCESS, classifier: CLASSIFIER, resilience: RESILIENCE };
 
 /** The seed lines one page needs after its view initialises, before the first render. */
 const SEEDS = {
+  home: `page.data = DATA.home;
+  page.loading = false;
+  page.failed = false;`,
+  "agents-fleet": `page.data = DATA.home;
+  page.loading = false;
+  page.failed = false;`,
+  "library-knowledge": `page.body.dir = projectDir();
+  page.body.kinds = DATA.kinds;
+  page.body.knowAll = DATA.knowAll;
+  page.body.agent = DATA.knowAll[0].agent;
+  page.body.notes = [];`,
+  "library-learning": `page.body.dir = projectDir();
+  page.body.lessons = DATA.lessons;
+  page.body.candidatesCount = 2;
+  page.body.updated = "${NOW}";
+  page.body.loading = false;
+  page.body.busy = false;`,
+  "library-scripts": `page.body.data = DATA.scripts;
+  page.body.loading = false;
+  page.body.busy = false;`,
+  "library-issues": `page.body.dir = projectDir();
+  page.body.data = DATA.issues;
+  page.body.loading = false;
+  page.body.chip = "open";
+  page.body.opened = 1;
+  page.body.shown = true;`,
+  "settings-usage": `page.known = DATA.known;
+  page.section = "usage";
+  page.access = DATA.access;
+  page.classifier = DATA.classifier;
+  page.sync();
+  page.metrics.window = "today";
+  page.metrics.data = DATA.metrics;
+  page.metrics.busy = false;`,
   tasks: `page.dir = projectDir();
   page.tasks = DATA.tasks;
   page.busy = false;
@@ -297,6 +402,7 @@ export function fixtureSource(pageId) {
 import { setShared } from "herdr";
 import { projectDir } from "./mods/bot-herdr/bh.js";
 import { ROSTER_KEY } from "./mods/bot-herdr/roster.js";
+import { SUB } from "./mods/bot-herdr/pages.js";
 
 export const PAGE = ${JSON.stringify(page.id)};
 export const PROPS = ${JSON.stringify(page.props)};
@@ -304,6 +410,8 @@ const DATA = ${JSON.stringify(DATA)};
 const ROSTER = ${JSON.stringify(ROSTER)};
 
 export function prepare() {
+  // Each page opens as if for the first time: no sub-tab remembered by a page rendered before it.
+  setShared(SUB, {});
   setShared(ROSTER_KEY, ROSTER);
 }
 
@@ -324,12 +432,15 @@ export function shotFixtureSource() {
 import { setShared } from "herdr";
 import { projectDir } from "./bh-real.js";
 import { ROSTER_KEY } from "./roster.js";
+import { SUB } from "./pages.js";
 
 const DATA = ${JSON.stringify(DATA)};
 const ROSTER = ${JSON.stringify(ROSTER)};
 export const PAGES = ${JSON.stringify(Object.fromEntries(AUDIT_PAGES.map((p) => [p.id, p.props])), null, 2)};
 
 export function prepare() {
+  // Each page opens as if for the first time: no sub-tab remembered by the page shot before it.
+  setShared(SUB, {});
   setShared(ROSTER_KEY, ROSTER);
 }
 
@@ -357,6 +468,9 @@ export default class AuditPage extends View {
   }
 
   render(cx) {
+    // Prepared again so the shared state a page may have published (its sub-tab) cannot leak in
+    // from a page rendered in the same process: this page draws its own seeded state.
+    prepare();
     return this.inner.render(cx);
   }
 }
