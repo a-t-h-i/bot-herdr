@@ -232,6 +232,112 @@ const THREAD_ROW = {
   summary: { text: "Quiet pass is ready for QA", at: "2026-11-21T19:00:00.000Z", source: "activity", agent: "dev-m1" },
 };
 
+/** A plan that is not a task yet: its own thread. */
+const PLAN_THREAD = {
+  ...THREAD_ROW,
+  id: "p-20261119-0900",
+  kind: "plan",
+  title: "Fold machine text into one muted line",
+  state: "idle",
+  glyph: "○",
+  status: "ready",
+  planId: "p-20261119-0900",
+  agents: [],
+  steps: { done: 0, total: 0 },
+  openComments: 0,
+  activeAgents: [],
+  age: "1d",
+  updated: "2026-11-20T09:00:00.000Z",
+  branch: null,
+  path: null,
+  summary: { text: "Ready to start", at: "2026-11-20T09:00:00.000Z", source: "state", agent: null },
+};
+
+/** `bh thread list --json`: a thread that needs you, one in review, and a plan that is not a task. */
+const THREADS = {
+  command: "thread",
+  sub: "list",
+  at: NOW,
+  count: 3,
+  threads: [
+    { ...THREAD_ROW, id: TASK_TWO.id, title: TASK_TWO.title, state: "needsYou", glyph: "◆", status: "paused", planId: null, agents: ["qa-1"], steps: { done: 0, total: 2 }, age: "8h", summary: { text: "Antigravity is offline; QA cannot start", at: NOW, source: "board", agent: "qa-1" } },
+    THREAD_ROW,
+    PLAN_THREAD,
+  ],
+  skipped: [],
+};
+
+/** `bh thread show <id> --json`: the Goal thread with its conversation, plan, steps and diff stat. */
+const THREAD_SHOW = {
+  ...THREAD_ROW,
+  command: "thread",
+  sub: "show",
+  goal: { status: "running", passed: 2, total: 6, iteration: 1, maxSpendUsd: 40, awaitingQa: false },
+  plan: { id: PLAN.id, title: PLAN.title, status: "task", round: 2, task: TASK_ONE.id, markdown: PLAN.markdown },
+  steps: { done: 2, total: 6, items: [{ n: 1, title: "Audit tooling (bh ui-audit)", status: "active", agent: "dev-m1", report: null }] },
+  conversation: {
+    total: 3,
+    entries: [
+      { at: "2026-11-21T18:30:00.000Z", kind: "board", boardKind: "contract", from: "Orchestrator", to: "dev-m1", text: BOARD_CONTRACT, ref: "#1" },
+      { at: "2026-11-21T19:00:00.000Z", kind: "comment", from: "You", text: "Keep the chips quiet: underline, no fill.", ref: "c3" },
+      { at: "2026-11-21T19:40:00.000Z", kind: "reply", from: "dev-m1", text: "The audit renders every page now.\nNext: the Fix-table counters." },
+    ],
+  },
+  changes: {
+    available: true,
+    base: TASK_DETAIL.base,
+    branch: THREAD_ROW.branch,
+    from: "main",
+    files: [
+      { path: "mods/bot-herdr/engine/lib/ui-audit.mjs", added: 420, removed: 0 },
+      { path: "mods/bot-herdr/look.js", added: 36, removed: 12 },
+    ],
+    filesChanged: 2,
+    truncated: false,
+    added: 456,
+    removed: 12,
+  },
+  cost: { tokens: 1830000, costUsd: 1.32, minutes: 52, turns: 5 },
+  comments: [],
+  children: [],
+  questions: [],
+};
+
+/** `bh goal progress <task> --json`: the goal row's gate, elapsed, retries and the judge's reason. */
+const GOAL_PROGRESS = {
+  command: "goal progress",
+  at: NOW,
+  task: TASK_ONE.id,
+  title: TASK_ONE.title,
+  isGoal: true,
+  status: "running",
+  paused: false,
+  gate: { passed: 2, total: 6, reached: false, best: 2 },
+  elapsed: "11h",
+  retries: { used: 1, cap: 3, left: 2 },
+  lastReason: "zeroCountChips is 3: the board still draws empty filter chips.",
+};
+
+/** `bh thread peek <id> --json`: recent output, the open question with options, the reply target. */
+const PEEK = {
+  command: "thread",
+  sub: "peek",
+  id: TASK_TWO.id,
+  kind: "task",
+  title: TASK_TWO.title,
+  state: "needsYou",
+  glyph: "◆",
+  summary: { text: "Antigravity is offline; QA cannot start", at: NOW, source: "board", agent: "qa-1" },
+  cost: { tokens: 412000, costUsd: 0.21, minutes: 10, turns: 2 },
+  output: [
+    { at: "2026-11-21T19:18:00.000Z", from: "qa-1", text: "Starting the M3 review." },
+    { at: "2026-11-21T19:20:00.000Z", from: "qa-1", text: "agy did not answer within 30s." },
+  ],
+  question: { kind: "question", ref: "comment c4", text: "Switch QA to another harness?", from: "qa-1", at: NOW, options: ["Use OpenCode", "Wait for Antigravity"] },
+  needs: [],
+  replyTarget: { name: "qa-1", address: "t9r" },
+};
+
 /** `bh home --json`: what needs you (ranked), the reviews, the fleet and today's spend. */
 const HOME = {
   command: "home",
@@ -277,6 +383,12 @@ const RESILIENCE = { config: { autonomy: "guarded", fallbacks: [], guardrails: {
 export const AUDIT_PAGES = [
   { id: "home", props: { view: "home" } },
   { id: "threads", props: { view: "threads" } },
+  { id: "thread-chat", props: { view: "threads" } },
+  { id: "thread-conversation", props: { view: "threads" } },
+  { id: "thread-plan", props: { view: "threads" } },
+  { id: "thread-steps", props: { view: "threads" } },
+  { id: "thread-changes", props: { view: "threads" } },
+  { id: "peek", props: { view: "threads" } },
   { id: "agents-fleet", props: { view: "agents" } },
   { id: "agents-terminals", props: { view: "agents", sub: "terminals" } },
   { id: "library-knowledge", props: { view: "library", sub: "knowledge" } },
@@ -297,13 +409,59 @@ export const AUDIT_PAGES = [
   { id: "switch", props: { view: "switch" } },
 ];
 
-const DATA = { tasks: [TASK_ONE, TASK_TWO], detail: TASK_DETAIL, plans: PLANS, plan: PLAN, issues: ISSUES, kinds: KINDS, knowAll: KNOW_ALL, lessons: LESSONS, metrics: METRICS, home: HOME, scripts: SCRIPTS, known: KNOWN, access: ACCESS, classifier: CLASSIFIER, resilience: RESILIENCE };
+const DATA = { tasks: [TASK_ONE, TASK_TWO], detail: TASK_DETAIL, plans: PLANS, plan: PLAN, issues: ISSUES, kinds: KINDS, knowAll: KNOW_ALL, lessons: LESSONS, metrics: METRICS, home: HOME, threads: THREADS, threadShow: THREAD_SHOW, goalProgress: GOAL_PROGRESS, peek: PEEK, scripts: SCRIPTS, known: KNOWN, access: ACCESS, classifier: CLASSIFIER, resilience: RESILIENCE };
 
 /** The seed lines one page needs after its view initialises, before the first render. */
 const SEEDS = {
   home: `page.data = DATA.home;
   page.loading = false;
   page.failed = false;`,
+  threads: `page.data = DATA.threads;
+  page.failed = false;`,
+  "thread-chat": `page.data = DATA.threads;
+  page.failed = false;
+  page.opened = "orchestrator";`,
+  "thread-conversation": `page.data = DATA.threads;
+  page.failed = false;
+  page.opened = DATA.threadShow.id;
+  page.sub = "conversation";
+  page.detail = DATA.threadShow;
+  page.detailId = DATA.threadShow.id;
+  page.progress = DATA.goalProgress;
+  page.work.taskDetail = DATA.detail;
+  page.work.taskDetailId = DATA.threadShow.id;`,
+  "thread-plan": `page.data = DATA.threads;
+  page.failed = false;
+  page.opened = DATA.threadShow.id;
+  page.sub = "plan";
+  page.detail = DATA.threadShow;
+  page.detailId = DATA.threadShow.id;
+  page.progress = DATA.goalProgress;
+  page.work.taskDetail = DATA.detail;
+  page.work.taskDetailId = DATA.threadShow.id;`,
+  "thread-steps": `page.data = DATA.threads;
+  page.failed = false;
+  page.opened = DATA.threadShow.id;
+  page.sub = "steps";
+  page.detail = DATA.threadShow;
+  page.detailId = DATA.threadShow.id;
+  page.progress = DATA.goalProgress;
+  page.work.taskDetail = DATA.detail;
+  page.work.taskDetailId = DATA.threadShow.id;`,
+  "thread-changes": `page.data = DATA.threads;
+  page.failed = false;
+  page.opened = DATA.threadShow.id;
+  page.sub = "changes";
+  page.detail = DATA.threadShow;
+  page.detailId = DATA.threadShow.id;
+  page.progress = DATA.goalProgress;
+  page.work.taskDetail = DATA.detail;
+  page.work.taskDetailId = DATA.threadShow.id;`,
+  peek: `page.data = DATA.threads;
+  page.failed = false;
+  page.pick = 1;
+  page.peek.target = { kind: "thread", id: DATA.peek.id };
+  page.peek.answer = DATA.peek;`,
   "agents-fleet": `page.data = DATA.home;
   page.loading = false;
   page.failed = false;`,

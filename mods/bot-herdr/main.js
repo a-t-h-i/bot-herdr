@@ -1,7 +1,8 @@
 // bot-herdr: one mod, several views, picked by the layout block's props.
 //   { "view": "switch" }    the top bar: Home, Threads, Agents, Library and the Settings gear (switch.js)
 //   { "view": "home" }      what needs you, then the fleet and today's spend (home.js)
-//   { "view": "threads" }   a task's thread; the Orchestrator's chat until the thread view lands (threads.js)
+//   { "view": "threads" }   the thread list, and a thread's Conversation | Plan | Steps | Changes (threads.js)
+//   { "view": "status" }    the status bar: machine, branch, agent count, palette key (statusbar.js)
 //   { "view": "agents" }    Agents › Fleet, or (props.sub "terminals") the strip above herdr's panes (agents.js)
 //   { "view": "library" }   Library › Knowledge | Learning | Scripts | Issues (library.js)
 //   { "view": "scripts" }   Library › Scripts on its own
@@ -41,8 +42,9 @@ import { Agents } from "./agents.js";
 import { Library } from "./library.js";
 import { Scripts } from "./scripts.js";
 import Issues from "./issues.js";
+import { StatusBar } from "./statusbar.js";
 
-export const VIEWS = { home: Home, threads: Threads, agents: Agents, library: Library, scripts: Scripts, chat: Chat, switch: Switch, work: Work, issues: Issues, learning: Learning, "learning-doc": LearningDoc, settings: Settings, pick: Pick, lightbox: Lightbox, toast: Toast, file: FileView, plan: PlanDoc, note: NoteForm, metrics: Metrics, "settings-more": MoreSheet };
+export const VIEWS = { home: Home, threads: Threads, status: StatusBar, agents: Agents, library: Library, scripts: Scripts, chat: Chat, switch: Switch, work: Work, issues: Issues, learning: Learning, "learning-doc": LearningDoc, settings: Settings, pick: Pick, lightbox: Lightbox, toast: Toast, file: FileView, plan: PlanDoc, note: NoteForm, metrics: Metrics, "settings-more": MoreSheet };
 
 /** Resolves theme tokens safely so even a broken theme lookup keeps the fallback readable. */
 function safeColors() {

@@ -216,7 +216,7 @@ export class Switch {
     cx.spawn(async (cx) => {
       for (;;) {
         const command = await nextCommand();
-        if (command === "focus" || command === "chat") showPage("threads");
+        if (command === "focus" || command === "chat") showPage("chat");
         else if (PAGES.some((p) => p.id === command)) showPage(command);
         cx.notify();
       }

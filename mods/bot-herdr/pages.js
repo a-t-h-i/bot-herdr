@@ -23,7 +23,7 @@ export const PAGES = [
  * sub-tab inside it. `showPage` takes both names, so a link anywhere in the app keeps working.
  */
 const WHERE = {
-  // The Orchestrator chat, a task and a plan are one thread; the thread view arrives next.
+  // The Orchestrator chat, a task and a plan are each a thread: Threads lists them and opens one.
   chat: ["threads"],
   tasks: ["threads"],
   plans: ["threads"],
@@ -45,6 +45,8 @@ export const HOLD = "bot-herdr.hold";
 export const OUTGOING = "bot-herdr.outgoing";
 /** A task to show open on its thread: { id, at } (the chat's task widget sets it). */
 export const OPEN_TASK = "bot-herdr.open-task";
+/** The thread Threads should open: { id, at }; the id "orchestrator" is the Orchestrator's chat. */
+export const OPEN_THREAD = "bot-herdr.open-thread";
 
 /** The sub-tab `dest` is showing, or null when it does not remember one. */
 export function subOf(dest, all = shared(SUB)) {
@@ -102,17 +104,19 @@ export function viewShown(id, root = layout()) {
 }
 
 /**
- * Shows a destination, or the view that used to be one: "tasks" opens Threads (until the thread
- * view lands), "issues" opens Library › Issues, "metrics" Settings › Usage.
+ * Shows a destination, or the view that used to be one: "chat" opens the Orchestrator's thread
+ * with the keyboard in its composer, "tasks" and "plans" the thread list, "issues" Library ›
+ * Issues, "metrics" Settings › Usage.
  */
 export function showPage(id) {
   const where = WHERE[id];
   const dest = where ? where[0] : id;
   const sub = where?.[1] ?? null;
   if (sub) setSub(dest, sub);
+  if (id === "chat") setShared(OPEN_THREAD, { id: "orchestrator", at: Date.now() });
   run("layout.select", { stack: STAGE, child: sub === "terminals" ? "terminals" : STACK });
   run("layout.select", { stack: STACK, child: dest });
-  if (dest === "threads") setShared(FOCUS, Date.now());
+  if (id === "chat") setShared(FOCUS, Date.now());
 }
 
 /** Agents › Fleet | Terminals: Terminals is herdr's own pane stage, so the stage switches. */
@@ -132,11 +136,9 @@ export function showSettings(section = null) {
   showPage("settings");
 }
 
-/**
- * Opens a thread. The thread view arrives with the next step; until then Threads is the
- * Orchestrator's chat, which is where every thread's conversation is answered.
- */
-export function openThread(_id) {
+/** Opens a thread on Threads (its Conversation); with no id, the thread list. */
+export function openThread(id) {
+  if (id) setShared(OPEN_THREAD, { id: String(id), at: Date.now() });
   showPage("threads");
 }
 
@@ -149,7 +151,7 @@ export function openTerminal(address) {
 /** Sends a message as if typed in the chat (to the Orchestrator, unless it @s someone), and shows the chat. */
 export function sendFromChat(text) {
   setShared(OUTGOING, { text, at: Date.now() });
-  showPage("threads");
+  showPage("chat");
 }
 
 /** Asks the Orchestrator to make an agreed plan a task and start it (Plans page and plan sheet). */

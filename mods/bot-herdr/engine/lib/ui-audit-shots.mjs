@@ -321,8 +321,11 @@ export default class ShotPage extends View {
     const id = auditId(given);
     prepare();
     this.inner = new BotHerdr();
-    this.inner.init(PAGES[id] ?? PAGES.chat, cx);
-    if (this.inner.page) seedPage(this.inner.page, PAGES[id] ? id : "chat");
+    // A block that is not an audited page (the status bar) draws as its own view, unseeded.
+    const own = ownProps(given);
+    if (!id && own) return this.inner.init(own, cx);
+    this.inner.init(PAGES[id ?? "chat"], cx);
+    if (this.inner.page) seedPage(this.inner.page, id ?? "chat");
   }
 
   render(cx) {
@@ -334,7 +337,12 @@ export default class ShotPage extends View {
 
 function auditId(given) {
   const p = given && typeof given === "object" && given.audit ? given : props() ?? {};
-  return typeof p.audit === "string" && PAGES[p.audit] ? p.audit : "chat";
+  return typeof p.audit === "string" && PAGES[p.audit] ? p.audit : null;
+}
+
+function ownProps(given) {
+  const p = given && typeof given === "object" && given.view ? given : props() ?? {};
+  return p && typeof p.view === "string" && !p.audit ? p : null;
 }
 `;
 

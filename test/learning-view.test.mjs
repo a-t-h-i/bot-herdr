@@ -229,6 +229,8 @@ test("static security & GPUI guards on learning.js, pages.js, main.js, layout, a
   assert.deepEqual(find(layout, "pages").children.map((c) => c.id), ["home", "threads", "agents", "library", "settings"]);
   assert.equal(find(layout, "pages").active, "home", "Home opens by default");
   assert.deepEqual(find(layout, "stage").children.map((c) => c.id), ["pages", "terminals"], "Agents › Terminals is herdr's own pane stage");
+  assert.deepEqual(find(layout, "status").content, { mod: "bot-herdr", props: { view: "status" } }, "the status bar is the mod's own slim bar");
+  assert.match(mainSrc, /status:\s*StatusBar/, "main.js must register the status bar view");
 
   const iconPath = join(ROOT, "mods", "bot-herdr", "icons", "page-learning.svg");
   assert.equal(existsSync(iconPath), true, "icons/page-learning.svg must exist");

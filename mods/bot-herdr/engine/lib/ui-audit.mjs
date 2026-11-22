@@ -254,8 +254,19 @@ function treeHash(root) {
 export const REPLACES = {
   // Home is the overview Tasks used to be: everything running, with what needs you on top.
   home: ["tasks"],
-  // Threads shows the chat view until the thread view lands, so it is that page, moved.
-  threads: ["chat"],
+  // The thread list is the Tasks and Plans lists merged: one row per task, and per plan not yet a task.
+  threads: ["tasks", "plans"],
+  // The Orchestrator's thread is the chat page, moved under its breadcrumb.
+  "thread-chat": ["chat"],
+  // A thread's Conversation is the chat and the task board in one feed, with the goal row and composer.
+  "thread-conversation": ["chat", "tasks-board"],
+  // Plan is the Plans page's plan document; Steps the Tasks page's step cards.
+  "thread-plan": ["plans"],
+  "thread-steps": ["tasks"],
+  // Changes was herdr's own Changes panel (no spec tree of ours); the task page held its git state.
+  "thread-changes": ["tasks"],
+  // The peek drawer opens over the thread list, so it is that page plus the drawer.
+  peek: ["tasks", "plans"],
   // The Fleet list is the live agents Tasks used to name per task, without the task detail.
   "agents-fleet": ["tasks"],
   // The old Terminals destination had no body spec; the bar (switch) was all the audit saw of it.

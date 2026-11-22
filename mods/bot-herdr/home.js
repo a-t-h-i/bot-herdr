@@ -1,6 +1,6 @@
 // Home: what needs you first, then the fleet (the agents running now and the Goals in flight) and
-// today's spend — read from `bh home --json`. Every row opens its thread (openThread), which is
-// the Orchestrator's chat until the thread view lands. Nothing empty is drawn (a quiet line says
+// today's spend — read from `bh home --json`. Every row opens its thread (openThread), and Space
+// peeks it in the shared drawer (peek.js) without leaving Home. Nothing empty is drawn (a quiet line says
 // so instead), a page that is still reading is skeleton rows in the final layout, never a
 // spinner, and an empty project says what will appear here and offers the one thing to do.
 
@@ -16,6 +16,7 @@ import { bhJson, projectDir } from "./bh.js";
 import { mentionTone } from "./indicators.js";
 import { price, compact, duration, ago } from "./numbers.js";
 import { isChord, keyName, nextPick, opensRow } from "./rowkeys.js";
+import { PeekDrawer, PEEK_WIDTH } from "./peek.js";
 
 const REFRESH_MS = 10000;
 const MAX = 1140; // the work pages' widest column
@@ -53,6 +54,7 @@ export class Home {
     this.width = 900;
     this.pick = 0; // the row Enter opens
     this.handle = cx.focus_handle();
+    this.peek = new PeekDrawer(); // Space opens it for the picked row, Esc closes it
     this.load(cx);
     cx.timer.every(REFRESH_MS, (cx) => {
       if (viewShown("home") && activeStage() !== "terminals") this.load(cx);
@@ -82,10 +84,10 @@ export class Home {
     const d = this.data;
     if (!d) return [];
     return [
-      ...this.needs().map((n) => ({ id: n.thread ?? n.ref, open: () => openThread(n.thread) })),
-      ...this.reviews().map((t) => ({ id: t.id, open: () => openThread(t.id) })),
-      ...this.agents().map((a) => ({ id: a.address, open: () => openTerminal(a.address) })),
-      ...this.goals().map((g) => ({ id: g.task, open: () => openThread(g.task) })),
+      ...this.needs().map((n) => ({ id: n.thread ?? n.ref, open: () => openThread(n.thread), peek: n.thread ? { kind: "thread", id: n.thread } : null })),
+      ...this.reviews().map((t) => ({ id: t.id, open: () => openThread(t.id), peek: { kind: "thread", id: t.id } })),
+      ...this.agents().map((a) => ({ id: a.address, open: () => openTerminal(a.address), peek: { kind: "agent", agent: a } })),
+      ...this.goals().map((g) => ({ id: g.task, open: () => openThread(g.task), peek: { kind: "thread", id: g.task } })),
     ];
   }
 
@@ -110,9 +112,11 @@ export class Home {
     return Array.isArray(list) ? list : [];
   }
 
-  /** J / K / Home / End move the pick; Enter opens the picked row's thread or terminal. */
+  /** The peek's keys first (Esc, 1–9); J / K / Home / End move the pick; Space peeks; Enter opens. */
   keys(e, cx) {
     if (isChord(e)) return;
+    if (this.peek.keys(e, cx)) return cx.stop_propagation();
+    if (this.peek.typing) return;
     const rows = this.rows();
     const next = nextPick(keyName(e), this.pick, rows.length);
     if (next >= 0 && next !== this.pick) {
@@ -122,7 +126,10 @@ export class Home {
       return;
     }
     const picked = rows[this.pick];
-    if (opensRow(keyName(e)) && picked) {
+    if (keyName(e) === "space" && picked?.peek) {
+      this.peek.toggle(picked.peek, cx);
+      cx.stop_propagation();
+    } else if (opensRow(keyName(e)) && picked) {
       picked.open();
       cx.stop_propagation();
     }
@@ -133,7 +140,8 @@ export class Home {
     if (open && !this.shown) cx.timer.after(1, (cx) => this.load(cx));
     this.shown = open;
     const c = colors();
-    const content = Math.max(320, Math.min(MAX, this.width - SIZE.gutter * 2));
+    const peeking = this.peek.isOpen();
+    const content = Math.max(320, Math.min(MAX, this.width - (peeking ? PEEK_WIDTH : 0) - SIZE.gutter * 2));
     return div()
       .id("bh-home")
       .relative()
@@ -150,12 +158,16 @@ export class Home {
       .child(v_flex()
         .id("bh-home-scroll")
         .absolute()
-        .inset_0()
+        .top(0)
+        .bottom(0)
+        .left(0)
+        .right(peeking ? PEEK_WIDTH : 0)
         .overflow_y_scroll()
         .items_center()
         .child(v_flex().flex_none().w(content).py(SPACE[5]).gap(GAP)
           .child(this.header(c))
-          .child(this.body(c, content))));
+          .child(this.body(c, content))))
+      .when(peeking, (el) => el.child(this.peek.render(c)));
   }
 
   /** "Home" and the one count that says how the fleet is doing: "3 running · 1 needs you". */

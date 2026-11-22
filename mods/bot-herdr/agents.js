@@ -15,6 +15,7 @@ import { bhJson, projectDir } from "./bh.js";
 import { mentionTone } from "./indicators.js";
 import { count, ago } from "./numbers.js";
 import { isChord, keyName, nextPick, opensRow } from "./rowkeys.js";
+import { PeekDrawer, PEEK_WIDTH } from "./peek.js";
 
 const REFRESH_MS = 10000;
 const MAX = 1140; // the work pages' widest column
@@ -39,6 +40,7 @@ export class Agents {
     this.pick = 0; // the row Enter opens
     this.handle = cx.focus_handle();
     if (this.sub === "terminals") return;
+    this.peek = new PeekDrawer(); // Space opens it for the picked agent: harness, model, output, reply
     this.load(cx);
     cx.timer.every(REFRESH_MS, (cx) => {
       if (viewShown("agents")) this.load(cx);
@@ -65,9 +67,11 @@ export class Agents {
     return Array.isArray(list) ? list : [];
   }
 
-  /** J / K / Home / End move the pick; Enter opens the picked agent's terminal. */
+  /** The peek's keys first (Esc, 1–9); J / K / Home / End move; Space peeks; Enter opens the terminal. */
   keys(e, cx) {
     if (isChord(e)) return;
+    if (this.peek?.keys(e, cx)) return cx.stop_propagation();
+    if (this.peek?.typing) return;
     const list = this.agents();
     const next = nextPick(keyName(e), this.pick, list.length);
     if (next >= 0 && next !== this.pick) {
@@ -77,7 +81,10 @@ export class Agents {
       return;
     }
     const picked = list[this.pick];
-    if (opensRow(keyName(e)) && picked?.address) {
+    if (keyName(e) === "space" && picked?.address && this.peek) {
+      this.peek.toggle({ kind: "agent", agent: picked }, cx);
+      cx.stop_propagation();
+    } else if (opensRow(keyName(e)) && picked?.address) {
       openTerminal(picked.address);
       cx.stop_propagation();
     }
@@ -85,7 +92,8 @@ export class Agents {
 
   render(cx) {
     const c = colors();
-    const content = Math.max(320, Math.min(MAX, this.width - SIZE.gutter * 2));
+    const peeking = Boolean(this.peek?.isOpen());
+    const content = Math.max(320, Math.min(MAX, this.width - (peeking ? PEEK_WIDTH : 0) - SIZE.gutter * 2));
     // The terminals stage: the strip only; herdr draws the panes below it.
     if (this.sub === "terminals") {
       return div()
@@ -117,13 +125,17 @@ export class Agents {
       .child(v_flex()
         .id("bh-agents-scroll")
         .absolute()
-        .inset_0()
+        .top(0)
+        .bottom(0)
+        .left(0)
+        .right(peeking ? PEEK_WIDTH : 0)
         .overflow_y_scroll()
         .items_center()
         .child(v_flex().flex_none().w(content).py(SPACE[5]).gap(GAP)
           .child(h_flex().items_center().child(this.tabs(c)))
           .child(this.header(c))
-          .child(this.body(c, content))));
+          .child(this.body(c, content))))
+      .when(peeking, (el) => el.child(this.peek.render(c)));
   }
 
   /** Fleet | Terminals: Terminals switches the stage to herdr's own panes. */

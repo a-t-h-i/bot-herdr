@@ -235,6 +235,10 @@ export class Composer {
     // A paste with no text: the clipboard's image (or files copied in the file manager) goes on
     // as attachments, images with a preview.
     this.input.on("paste_other", (_e, cx) => this.pasteOther(cx));
+    // At rest the box is one input line; its repo, branch and model chips come up with the keyboard.
+    this.focused = false;
+    this.input.on("focus", (_e, cx) => this.setFocused(true, cx));
+    this.input.on("blur", (_e, cx) => this.setFocused(false, cx));
 
     // Keys while the text box has the keyboard ("A > Input": the text box inside our element).
     // Later bindings win over the text box's own at the same depth, and the menu ones are added
@@ -263,6 +267,17 @@ export class Composer {
   focus() {
     this.expanded = true;
     this.input.focus();
+  }
+
+  setFocused(on, cx) {
+    if (this.focused === on) return;
+    this.focused = on;
+    cx.notify();
+  }
+
+  /** At rest: no keyboard, nothing typed or attached, no pane up. The box is then one input line. */
+  atRest() {
+    return !this.focused && !this.text.trim() && !this.files.length && !this.pane && this.paneNow() !== "ask";
   }
 
   loadKnown(cx) {
@@ -1520,6 +1535,7 @@ export class Composer {
 
   height(width) {
     if (this.isFolded()) return 40;
+    if (this.atRest()) return SIZE.textTop * 2 + SIZE.line + 2;
     return SIZE.textTop + this.textRows(width) * SIZE.line + SIZE.tools + 2;
   }
 
@@ -1594,13 +1610,14 @@ export class Composer {
     const placeholder = !this.pane && this.paneNow() === "ask" ? "Or type your own reply…" : busy ? `${lead?.name ?? "Orchestrator"} is working. Enter steers it…` : this.placeholder ?? PLACEHOLDER;
     // Every height here is stated. The text box stretches to fill its parent, and a floating
     // surface may be offered the whole window, so nothing is left to size itself.
-    const textH = this.textRows(width) * SIZE.line;
+    const rest = this.atRest();
+    const textH = (rest ? 1 : this.textRows(width)) * SIZE.line;
     return v_flex()
       .id("bc-box")
       .relative()
       .flex_none()
       .w(width)
-      .h(SIZE.textTop + textH + SIZE.tools + SPACE[1])
+      .h(rest ? SIZE.textTop * 2 + textH : SIZE.textTop + textH + SIZE.tools + SPACE[1])
       .bg(c.fill)
       .border_1()
       .border_color(c.edge)
@@ -1643,7 +1660,7 @@ export class Composer {
               }),
           ),
       )
-      .child(this.tools(c, target, busy, empty, lead));
+      .when(!rest, (el) => el.child(this.tools(c, target, busy, empty, lead)));
   }
 
   /** A slim bar when the feed is scrolled away: click or type to grow it back, draft intact. */
