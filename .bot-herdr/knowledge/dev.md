@@ -18,6 +18,9 @@
 - Per-task locks must live beside the task folder (tasks/<id>.lock), never inside tasks/<id>/task.json, so deleteTask never removes an open lock fd and missing ids never create ghost directories.
 - core.mjs withLock clears locks older than 10s as stale; long-running gates/installs must use a PID claim file guarded by withLock (improve.mjs exclusive).
 - Self-improvement safety protects security-critical files whole (bh.mjs, core, runner, resilience, agent, roster, workspace, scripts, common, install.mjs, improve.mjs, package/pm/tsc configs) and keeps existing test/* files immutable, with every entry and RegExp deep-frozen.
+- engine/lib/core.mjs store() strips /.bot-herdr/worktrees/<name>, so bh run inside a task worktree reads and writes the main checkout's .bot-herdr store.
+- In bh.mjs, parseArgs booleans are global: a new value flag whose name is already in BOOLEANS (e.g. --summary) will not consume its value; remove it from the booleans list and keep boolean callers working by flag position.
+- The Learning store lives at .bot-herdr/learn/ via store() (task worktrees share the main checkout) and is user-facing upskilling only; plans, answered questions and knowledge are read-only sources, never where lessons are written.
 
 ## Standards
 - team.hc never runs hc through a shell (a brief is one argument); tests stand in for hc with a script named by BH_HC
@@ -26,6 +29,7 @@
 - Windows-only path probes use path.win32.join; path.join gives / off Windows and breaks them (engine/lib/media.mjs windowsBrowser).
 - A PATH sg is accepted as ast-grep only when sg --version matches /^ast-grep/i, avoiding Linux shadow-utils /usr/bin/sg.
 - Node 18.20+/20.12+/22+ refuse .cmd/.bat via execFileSync without a shell (CVE-2024-27980): use resolveLocalBin in common.mjs to run JS bins via process.execPath instead of npx.cmd.
+- REST timeouts need an explicit timer racing the fetch promise alongside AbortController: injected test transports ignore signal and AbortController alone does not bound a hung response.
 
 ## Decisions
 - Agent conversation state files under DATA keep their names; a root field in the state resets the session when the project changes (resumeState), so pre-change sessions survive.

@@ -5,6 +5,9 @@
 - A writing child worktree branches from the task last commit, so uncommitted task work is not in it: spawn with --shared to build on uncommitted work.
 - test/bench/baseline.mjs records brief sizes, bh latency and spawn-to-first-prompt time on an isolated temp project (node test/bench/baseline.mjs <out.json>); use it before and after performance work.
 - bh metrics reads every usage record; a record's cost is Claude Code's reported total_cost_usd, so the Orchestrator's long resumed session dominates spend ($718 reported over 7 days as of 2026-11-20).
+- Headless children (gemini/antigravity Dev and QA) often end their turn while a long check (bh check, npm test, ui-audit) runs in the background, and never report; brief them to run checks in the foreground, and if hc wait returns done without a report, hc send them to re-run in the foreground and finish.
+- The team roster (each agent's harness and model) is the user's to change in Settings › Team; bh team save refuses the Orchestrator. When a harness runs out of quota, ask the user to switch it there, then watch bh team for the change.
+- A child whose harness failed (for example on quota) can leave its worktree open, which blocks a new spawn of that agent. Check it has no changes, then run bh merge <name> --task <id> --drop before spawning again.
 
 ## Standards
 - gpui-kit declares no rotate or transform and .loop() takes no delay: check mods/bot-herdr/gpui-kit.d.ts (npx tsc -p mods/bot-herdr/jsconfig.json) before using a style method.
