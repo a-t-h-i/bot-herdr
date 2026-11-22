@@ -20,18 +20,18 @@ const HOLD_MS = 3000;
 const HERDR_TAB = 29;
 
 /**
- * The one selection style, app-wide: the picked item's label in the accent over a 2px accent
- * underline. Nothing is filled, outlined all round or pill-shaped to mean "chosen" (Principle 2
- * and the spec's Tabs and selection rule). A segmented control keeps its grey track, so a group
- * of choices reads as one control.
+ * The two selection idioms, one per control type (the spec's Tabs and selection rule): tabs pick
+ * a view, so the picked label is in the accent over a 2px accent underline, with no track or fill;
+ * a segmented choice (`choice: true`) picks a value, so it keeps its grey track and the picked item
+ * is filled grey, with no underline. Nothing is outlined all round or pill-shaped to mean "chosen".
  *
- * The one segmented control: the page switch, a task's tab strip, a plan's list choice, a setting.
+ * The one strip control: a page's sub-tabs, a task's tab strip; with `choice`, a setting's value.
  * `items` is [{ id, label, on, count }]; `onPick(id, cx)` receives the picked one. `bar` styles the
  * strip itself before its items are added: the page switch hands it the top bar's own styles, so
  * its tabs sit straight on the bar instead of on a second grey track inside a second frame.
  * `padX` narrows every item's padding together, so a strip can fit any window.
  */
-export function segmented(c, { id, items, onPick, grow = false, height = null, padX = SPACE[4], bar = null }) {
+export function segmented(c, { id, items, onPick, grow = false, height = null, padX = SPACE[4], bar = null, choice = false }) {
   // The track insets its items by 2px on every side, so the picked one sits centred in it.
   // `height` is the items' own (the page switch matches herdr's 29px tabs); by default the track
   // is a control's height. The 2px inset is optical, the one step off the 4px grid.
@@ -44,7 +44,7 @@ export function segmented(c, { id, items, onPick, grow = false, height = null, p
     .items_center()
     .when(grow, (el) => el.flex_1())
     .when(Boolean(bar), (el) => bar(el))
-    .when(!bar, (el) => el.rounded(SIZE.control).bg(c.well))
+    .when(!bar && choice, (el) => el.rounded(SIZE.control).bg(c.well))
     .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
     .children(items.map((item, i) =>
       clickable(
@@ -61,17 +61,19 @@ export function segmented(c, { id, items, onPick, grow = false, height = null, p
           .text_size(TYPE_SCALE.metadata)
           .font_medium()
           .when(item.grow, (el) => el.flex_1().justify_center())
-          // The underline keeps its 2px on every item, transparent until it is the picked one,
-          // so nothing moves when the pick changes.
-          .when(item.on, (el) => el.border_b(2).border_color(c.accent).text_color(c.accent))
-          .when(!item.on, (el) => el.border_b(2).border_color(alpha(c.accent, 0)).text_color(c.textSecondary).hover((s) => s.text_color(c.textPrimary)))
+          // A tab's underline keeps its 2px on every item, transparent until it is the picked one,
+          // so nothing moves when the pick changes. A choice fills its picked item grey instead.
+          .when(!choice && item.on, (el) => el.border_b(2).border_color(c.accent).text_color(c.accent))
+          .when(!choice && !item.on, (el) => el.border_b(2).border_color(alpha(c.accent, 0)))
+          .when(choice && item.on, (el) => el.bg(c.fill).text_color(c.textPrimary))
+          .when(!item.on, (el) => el.text_color(c.textSecondary).hover((s) => s.text_color(c.textPrimary)))
           .on_click((_e, cx) => onPick(item.id, cx))
           // An item that opens something under itself learns where it is on the press.
           .when(Boolean(item.onDown), (el) => el.on_mouse_down("left", (e, cx) => item.onDown(e, cx)))
           // An icon before the label, in the label's colour; the label is always there.
           .when(Boolean(item.icon), (el) => el.child(svg(ICON(item.icon)).flex_none().size(GLYPH.sm)))
           .child(item.label)
-          .when(item.count != null, (el) => el.child(div().text_size(TYPE_SCALE.metadata).font_semibold().text_color(item.on ? c.accent : c.textMuted).child(String(item.count)))),
+          .when(item.count != null, (el) => el.child(div().text_size(TYPE_SCALE.metadata).font_semibold().text_color(item.on && !choice ? c.accent : c.textMuted).child(String(item.count)))),
         c,
         `${id}-${item.id}`,
       )));

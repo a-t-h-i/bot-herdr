@@ -71,21 +71,6 @@ function searchBox(c, state, { hasValue, onClear }) {
     ));
 }
 
-/** Quiet neutral metadata tag for a lesson's primary provenance source. */
-function sourcePill(c, label) {
-  return div()
-    .flex_none()
-    .px(SPACE[2])
-    .py(1)
-    .rounded_full()
-    .bg(c.well)
-    .border_1()
-    .border_color(alpha(c.edge, 0.7))
-    .text_size(TYPE.xs)
-    .text_color(c.muted)
-    .child(label);
-}
-
 /** Circular read-state indicator: green check when read, quiet hollow circle when unread. */
 function readCheck(c, read) {
   return div()
@@ -265,7 +250,6 @@ export class Learning {
   heroCard(c, query) {
     const prog = readProgress(this.lessons);
     const pending = this.candidatesCount;
-    const pendingLabel = pending === 1 ? "1 new decision to explain" : `${pending} new decisions to explain`;
     return v_flex()
       .id("bh-learning-hero")
       .flex_none()
@@ -317,8 +301,7 @@ export class Learning {
           .gap(SPACE[3])
           .items_center()
           .flex_wrap()
-          .child(readProgressBar(c, prog))
-          .when(pending > 0, (el) => el.child(pill(c, pendingLabel, c.warning))),
+          .child(readProgressBar(c, prog)),
       )
       .child(searchBox(c, this.search, {
         hasValue: Boolean(query.trim()),
@@ -447,7 +430,6 @@ export class Learning {
               .flex_wrap()
               .child(div().text_size(TYPE.md).line_height(`${LINE.md}px`).font_semibold().text_color(c.ink)
                 .child(lesson.title || lesson.slug))
-              .child(sourcePill(c, primarySourceLabel(lesson)))
               .when(Boolean(lesson.stale), (el) => el.child(pill(c, "Stale", c.warning))),
           )
           .when(Boolean(lesson.summary), (el) => el.child(
@@ -460,8 +442,7 @@ export class Learning {
           .flex_none()
           .gap(SPACE[3])
           .items_center()
-          .child(div().flex_none().text_size(TYPE.xs).text_color(c.muted).child(meta))
-          .child(div().flex_none().text_size(TYPE.sm).font_medium().text_color(c.accent).child("Open →")),
+          .child(div().flex_none().text_size(TYPE.xs).text_color(c.muted).child(meta)),
       );
     return clickable(row, c, `bh-learn-row-${lesson.slug}`);
   }

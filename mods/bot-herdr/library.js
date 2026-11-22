@@ -6,7 +6,7 @@
 
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { SPACE } from "./look.js";
+import { SPACE, SIZE } from "./look.js";
 import { segmented, stateView } from "./switch.js";
 import { colors } from "./theme.js";
 import { setSub, subOf } from "./pages.js";
@@ -24,6 +24,8 @@ const SUBS = [
   { id: "issues", label: "Issues" },
 ];
 const SUB_IDS = SUBS.map((s) => s.id);
+/** The widest content column each sub-tab draws (work pages 1140, Learning's list 860). */
+const COLUMN = { knowledge: 1140, learning: 860, scripts: 1140, issues: 1140 };
 
 export class Library {
   init(given, cx) {
@@ -72,8 +74,14 @@ export class Library {
       .size_full()
       .bg(c.ground)
       .items_center()
-      .child(h_flex().flex_none().w_full().items_center().px(SPACE[4]).pt(SPACE[3]).child(this.tabs(c)))
+      .child(h_flex().flex_none().w(this.column()).items_center().pt(SPACE[3]).child(this.tabs(c)))
       .child(div().id("bh-library-body").relative().flex_1().w_full().min_h(0).child(this.bodyNode(cx)));
+  }
+
+  /** The sub-tab's own content column, so the strip lines up with what it sits above. */
+  column() {
+    const width = Number(this.body?.width) || 960;
+    return Math.max(320, Math.min(COLUMN[this.sub] ?? 1140, width - SIZE.gutter * 2));
   }
 
   /** The body: the chosen view's node, or a quiet line when it could not draw. */

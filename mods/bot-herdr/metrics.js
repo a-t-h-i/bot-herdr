@@ -119,6 +119,7 @@ export class Metrics {
   picker(c) {
     return segmented(c, {
       id: "bh-metrics-window",
+      choice: true,
       items: WINDOWS.map((w) => ({ id: w.id, label: w.label, on: w.id === this.window })),
       onPick: (id, cx) => this.pick(id, cx),
     });

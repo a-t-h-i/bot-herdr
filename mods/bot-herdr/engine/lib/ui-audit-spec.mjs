@@ -350,11 +350,31 @@ function collectTextFix(page, node, found, counts) {
   if (looksMachine(value, node)) found.raw.push(`${page}: ${value.slice(0, 60)}`);
 }
 
-/** A selected control's visual idiom, kept as a set so two styles cannot pass for one. */
+/**
+ * A selected control's visual idiom, kept per control type as a set so two styles cannot pass
+ * for one. An item on a grey track is a segmented choice, anything else a tab; one item that both
+ * fills (a track or a fill) and draws an accent line is two idioms at once and counts twice.
+ */
 function collectSelection(node, c, selection) {
   if (!isTrue(prop(node, "aria_selected"))) return;
   const sig = selectionSignature(node, c);
-  if (sig) selection.add(sig);
+  if (!sig) return;
+  const kind = isGrey(style(node.parent, "bg"), c) ? "segmented" : "tab";
+  selection.add(`${kind}:${sig}`);
+  const filled = kind === "segmented" || /grey-fill|accent-fill/.test(sig);
+  if (filled && /accent-outline|accent-underline/.test(sig)) selection.add(`${kind}:fill+line`);
+}
+
+const isGrey = (bg, c) => typeof bg === "string" && (sameColor(bg, c.fill) || sameColor(bg, c.well));
+
+/** Selection styles: the most idioms any one control type draws (tabs and segmented each get one). */
+function selectionCount(selection) {
+  const per = new Map();
+  for (const entry of selection) {
+    const kind = entry.slice(0, entry.indexOf(":"));
+    per.set(kind, (per.get(kind) ?? 0) + 1);
+  }
+  return Math.max(0, ...per.values());
 }
 
 /** An svg drawn in front of a title (the spec allows icons on navigation and icon-only buttons only). */
@@ -386,7 +406,7 @@ function buildCounters(destinations, found, stats) {
     zeroCountChips: { value: found.zero.length, detail: found.zero, target: 0 },
     repeatedDefaultStrings: { value: found.defaults.reduce((n, d) => n + d.count, 0), detail: found.defaults, target: 0 },
     statsPerCard: { value: stats, target: TARGETS.statsPerCard.max },
-    selectionStyles: { value: found.selection.size, detail: [...found.selection], target: TARGETS.selectionStyles.max },
+    selectionStyles: { value: selectionCount(found.selection), detail: [...found.selection], target: TARGETS.selectionStyles.max },
     rawMachineText: { value: found.raw.length, detail: found.raw, target: 0 },
     decorativeIcons: { value: found.icons.length, detail: found.icons, target: 0 },
     agentColourFills: { value: found.fills.length, detail: found.fills, target: 0 },
@@ -399,20 +419,29 @@ function selectionSignature(node, c) {
   const bg = style(node, "bg");
   const border = style(node, "border_color");
   const ink = style(node, "text_color");
-  if (typeof border === "string" && sameColor(border, c.accent)) signature.push("accent-outline");
-  if (typeof bg === "string" && (sameColor(bg, c.fill) || sameColor(bg, c.well))) signature.push("grey-fill");
+  const underline = style(node, "border_b") !== null && style(node, "border_1") === null;
+  if (typeof border === "string" && sameColor(border, c.accent)) signature.push(underline ? "accent-underline" : "accent-outline");
+  if (isGrey(bg, c)) signature.push("grey-fill");
   if (typeof bg === "string" && (sameColor(bg, c.accent) || isAlphaOf(bg, c.accent))) signature.push("accent-fill");
   if (typeof ink === "string" && sameColor(ink, c.accent)) signature.push("accent-text");
   if (style(node, "rounded_full") !== null) signature.push("pill");
   return signature.length ? signature.sort().join("+") : "";
 }
 
-/** Whether a drawn text is machine output at body size: JSON, a stack trace, a long path or branch. */
+/** Body text size: a truncated line smaller than this (metadata) is folded, not raw. */
+const BODY_SIZE = 13;
+
+/**
+ * Whether a drawn text is machine output at body size: JSON, a stack trace, a long path or branch.
+ * A truncated line is folded only when it is mono or metadata-sized (a machineLine); a truncated
+ * body-size line in the UI face is still raw machine text.
+ */
 export function looksMachine(text, node) {
   const value = String(text ?? "");
   const size = Number(style(node, "text_size") ?? style(node.parent, "text_size") ?? 13.5);
   if (size < 10) return false;
-  if (under(node, (n) => style(n, "truncate") !== null)) return false;
+  const folded = size < BODY_SIZE || under(node, (n) => style(n, "font_family") !== null);
+  if (folded && under(node, (n) => style(n, "truncate") !== null)) return false;
   if (value.length < 48) return false;
   return (
     /^\s*[[{]/.test(value) ||

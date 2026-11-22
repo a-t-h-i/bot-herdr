@@ -49,6 +49,9 @@ test("a board entry shows its type word, author and first line, and knows when i
   assert.equal(e.more, true);
   const [one] = TV.conversation({ conversation: { entries: [{ kind: "reply", from: "dev", text: "Done." }] } });
   assert.equal(one.more, false);
+  assert.equal(one.machine, false, "prose is drawn as prose");
+  const [json] = TV.conversation({ conversation: { entries: [{ kind: "board", from: "O", text: '{ "command": "ui-audit", "exit": { "pass": false } }' }] } });
+  assert.equal(json.machine, true, "a JSON body is drawn as a folded machine line");
 });
 
 test("the goal row: gate, elapsed, retries left and the judge's reason; nothing for a plain task", () => {
@@ -87,4 +90,6 @@ test("the audit renders every thread page and the peek, each against the M1 page
   }
   assert.deepEqual(REPLACES.threads, ["tasks", "plans"]);
   assert.deepEqual(REPLACES["thread-conversation"], ["chat", "tasks-board"]);
+  // One Library sub-tab shows at a time: each comes under its own predecessor, never their sum.
+  for (const [page, from] of [["library-knowledge", "knowledge"], ["library-learning", "learning"], ["library-issues", "issues"]]) assert.deepEqual(REPLACES[page], [from]);
 });

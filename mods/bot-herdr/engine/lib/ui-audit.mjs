@@ -271,12 +271,12 @@ export const REPLACES = {
   "agents-fleet": ["tasks"],
   // The old Terminals destination had no body spec; the bar (switch) was all the audit saw of it.
   "agents-terminals": ["switch"],
-  // One Library destination holds Knowledge, Learning and Issues: each sub-tab is compared
-  // against everything the destination took over.
-  "library-knowledge": ["knowledge", "learning", "issues"],
-  "library-learning": ["knowledge", "learning", "issues"],
-  "library-scripts": ["knowledge", "learning", "issues"],
-  "library-issues": ["knowledge", "learning", "issues"],
+  // Library shows one sub-tab at a time, so each is compared with the one page it replaces;
+  // Scripts had no page of its own and takes Knowledge's, where scripts were listed.
+  "library-knowledge": ["knowledge"],
+  "library-learning": ["learning"],
+  "library-scripts": ["knowledge"],
+  "library-issues": ["issues"],
   // Settings keeps its own baseline; Usage is the Metrics page moved inside it.
   "settings-usage": ["metrics"],
 };

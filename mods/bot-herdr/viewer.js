@@ -181,6 +181,7 @@ export class FileView {
           )
           .when(this.md && Boolean(this.code), (el) => el.child(segmented(c, {
             id: "bh-file-mode",
+            choice: true,
             items: [
               { id: "read", label: "Preview", on: this.mode === "read" },
               { id: "source", label: "Source", on: this.mode === "source" },

@@ -452,6 +452,7 @@ export class Threads {
       .child(div().flex_none().text_size(TYPE_SCALE.metadata).font_semibold().text_color(c.textPrimary).child(e.from))
       .when(Boolean(e.to), (el) => el.child(div().flex_none().text_size(TYPE_SCALE.metadata).text_color(c.textMuted).child(`→ ${e.to}`)))
       .child(div().flex_none().text_size(TYPE_SCALE.metadata).text_color(c.textMuted).child(ago(e.at)));
+    if (e.machine) return this.machineEntry(c, e, head, open);
     const body = open
       ? div().text_size(TYPE_SCALE.body).line_height(`${LINE.md}px`).text_color(c.textPrimary).child(e.text)
       : div().truncate().text_size(TYPE_SCALE.body).text_color(c.textPrimary).child(e.first);
@@ -463,6 +464,16 @@ export class Threads {
       else this.expanded.add(e.key);
       cx.notify();
     }), c, `bh-thread-entry-${e.key}`, { fill: c.hover });
+  }
+
+  /** A board entry whose body is JSON, a stack trace or a path: one muted mono line that unfolds. */
+  machineEntry(c, e, head, open) {
+    const id = `bh-thread-entry-${e.key}`;
+    const line = machineLine(c, { id: `${id}-text`, text: e.text, expanded: open, onToggle: (_e, cx) => {
+      toggleMachine(this.expanded, e.key);
+      cx.notify();
+    } });
+    return v_flex().id(id).role("article").accessibility_label(`${e.word} from ${e.from}: machine text`).gap(SPACE[1]).px(SPACE[3]).py(SPACE[2]).rounded(RADIUS.control).child(head).child(line);
   }
 
   /** ◎ the goal, its gate, elapsed time and retries left, the judge's last reason; its actions. */

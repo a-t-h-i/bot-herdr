@@ -343,6 +343,7 @@ export class Work {
     this.knownText = null; // the file as loaded, to tell an edit from it
     this.editing = false; // the knowledge file open as text, to rewrite it
     this.confirmDelete = null; // "agent:line" of the record whose Delete asks first
+    this.actionsOn = new Set(); // Knowledge cards whose Edit/Delete show on hover or a key on the card
     this.armed = null; // a two-step action waiting for its second click (see arm)
     this.notes = [];
     this.busy = false;
@@ -2656,6 +2657,7 @@ export class Work {
 
   knowNoteCard(c, card, index = 0) {
     const { agent, entry: e, notes, section } = card;
+    const key = `${agent}:${e.line}`;
     const on = this.addingAt("knowledge", agent, e.line);
     const body = /^\s{0,3}[-*+]\s+/.test(e.text) ? e.text.replace(/^\s{0,3}[-*+]\s+/, "") : e.text;
     return clickable(
@@ -2679,6 +2681,10 @@ export class Work {
           .child(div().text_size(TYPE.xs).font_medium().text_color(agentInk(c, agent)).child(agent.charAt(0).toUpperCase() + agent.slice(1)))
           .when(Boolean(section), (el) => el.child(div().text_size(TYPE.xs).text_color(c.faint).child(section)))
           .child(div().flex_1())
+          // The pair shows while the pointer is over the card, or a key goes to the focused card.
+          .on_hover((over, cx) => { if (over) this.actionsOn.add(key); else this.actionsOn.delete(key); cx.notify(); })
+          .on_key_down((_e, cx) => { this.actionsOn.add(key); cx.notify(); })
+          .when(this.actionsOn.has(key), (el) => el
           .child(focusable(
             pressable(
               div().size(CHIP).flex().items_center().justify_center().rounded(SIZE.nested).text_color(c.faint).hover((s) => s.bg(c.hover).text_color(c.ink))
@@ -2700,7 +2706,7 @@ export class Work {
               ),
               `bh-know-del-${agent}-${e.line}`,
               c,
-            )))
+            ))))
         .child(div().text_size(TYPE.md).line_height(`${LINE.md}px`).child(TextView.markdown(`bh-know-card-md-${agent}-${e.line}-${hash(e.text)}`, body)))
         .when(notes.length > 0, (el) => el.child(v_flex().gap(SPACE[2]).children(notes.map((n) => this.commentNote(c, { id: n.at, text: n.note, open: true }, this.noteActions(agent, e, n))))))
         .when(on, (el) => el.child(this.inlineBox(c).ml(0).mr(0))),

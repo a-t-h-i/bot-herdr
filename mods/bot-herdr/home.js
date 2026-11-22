@@ -367,7 +367,10 @@ export class Home {
         .rounded(RADIUS.control)
         .when(picked, (el) => el.bg(c.hover))
         .on_click(() => openThread(g?.task))
-        .child(div().flex_none().text_size(TYPE_SCALE.title).text_color(stateTone(c, state)).child(STATE[state].glyph))
+        // The state is glyph, colour and word, as on an agent row (never colour or glyph alone).
+        .child(h_flex().flex_none().gap(SPACE[1]).items_center().text_color(stateTone(c, state))
+          .child(div().text_size(TYPE_SCALE.title).child(STATE[state].glyph))
+          .child(div().text_size(TYPE_SCALE.metadata).child(STATE[state].word)))
         .child(v_flex().flex_1().min_w(0).gap(SPACE[1])
           .child(div().truncate().text_size(TYPE_SCALE.body).font_semibold().text_color(c.textPrimary).child(String(g?.title ?? g?.task ?? "Goal")))
           .when(Boolean(g?.summary), (el) => el.child(div().id(`bh-row-summary-goal-${g?.task ?? at}`).truncate().text_size(TYPE_SCALE.metadata).text_color(c.textSecondary).child(String(g.summary)))))

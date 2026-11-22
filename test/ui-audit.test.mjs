@@ -181,6 +181,18 @@ test("the Fix table fires on today's clutter and scores zero on a quiet page", (
   assert.equal(quiet.agentColourFills.value, 0);
 });
 
+test("a truncated body-size JSON line is raw machine text; a folded machineLine is not", () => {
+  const json = '{ \\"command\\": \\"ui-audit\\", \\"exit\\": { \\"pass\\": false }, \\"failures\\": [] }';
+  // M4's Conversation entry: the contract folded to one line, but at body size in the UI face.
+  const raw = spec('div .truncate .text_size[Number(13.0)] .text_color[Str("#eeeeef")]', `  text "${json}"`);
+  // machinetext.js machineLine: one muted metadata-size (mono when the app has a code face) line.
+  const folded = spec('div .truncate .text_size[Number(12.0)] .text_color[Str("#a1a2a3")]', `  text "${json}"`);
+  const mono = spec('div .truncate .text_size[Number(13.0)] .font_family[Str("Mono")]', `  text "${json}"`);
+  assert.equal(fixCounters({ "thread-conversation": raw }, { colors: graphite }).rawMachineText.value, 1);
+  assert.equal(fixCounters({ "thread-conversation": folded }, { colors: graphite }).rawMachineText.value, 0);
+  assert.equal(fixCounters({ "thread-conversation": mono }, { colors: graphite }).rawMachineText.value, 0);
+});
+
 test("each selection idiom is its own signature, so the counter cannot hide a second style", () => {
   const two = spec(
     'div :aria_selected[Bool(true)] .border_1 .border_color[Str("' + accent + '")]',
@@ -191,6 +203,23 @@ test("each selection idiom is its own signature, so the counter cannot hide a se
   const one = spec('div :aria_selected[Bool(true)] .border_1 .border_color[Str("' + accent + '")]', '  text "tab"');
   assert.equal(fixCounters({ two }, { colors: graphite }).selectionStyles.value, 2);
   assert.equal(fixCounters({ one }, { colors: graphite }).selectionStyles.value, 1);
+});
+
+test("tabs underline and segmented choices fill grey; one item doing both is two idioms", () => {
+  const well = graphite.well;
+  const underline = '.border_b[Number(2.0)] .border_color[Str("' + accent + '")] .text_color[Str("' + accent + '")]';
+  // M4: every strip drew its picked item underlined on a grey track.
+  const both = spec('h_flex .bg[Str("' + well + '")]', '  div :aria_selected[Bool(true)] ' + underline, '    text "Plan"');
+  const split = spec(
+    'h_flex',
+    '  div :aria_selected[Bool(true)] ' + underline,
+    '    text "Plan"',
+    'h_flex .bg[Str("' + well + '")]',
+    '  div :aria_selected[Bool(true)] .bg[Str("' + graphite.fill + '")]',
+    '    text "7 days"',
+  );
+  assert.equal(fixCounters({ both }, { colors: graphite }).selectionStyles.value, 2);
+  assert.equal(fixCounters({ split }, { colors: graphite }).selectionStyles.value, 1);
 });
 
 test("structural counters measure keyboard and label coverage per page", () => {

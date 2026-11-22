@@ -1,3 +1,4 @@
 node_modules/
 .DS_Store
 .bot-herdr/tasks/*/shots/
+data/bot-herdr/logs/

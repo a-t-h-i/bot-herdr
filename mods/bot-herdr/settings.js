@@ -850,7 +850,7 @@ export class Settings {
 
   /** A compact segmented choice for a setting row. */
   choice(c, id, options, value, onPick) {
-    return segmented(c, { id, items: options.map(([v, label]) => ({ id: v, label, on: v === value })), onPick });
+    return segmented(c, { id, choice: true, items: options.map(([v, label]) => ({ id: v, label, on: v === value })), onPick });
   }
 
   /** A quiet card: the frame every section sits in. */

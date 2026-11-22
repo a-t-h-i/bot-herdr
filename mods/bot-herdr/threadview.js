@@ -3,6 +3,8 @@
 // throw on corrupt, legacy or missing data (a bad record is dropped, a bad field reads as empty).
 // No gpui-kit, gpui-base or herdr imports, so `npm test` fuzzes every function here.
 
+import { machineKind } from "./machinefold.js";
+
 /** The seven states, in the order the thread list groups them: what needs you first. */
 export const STATE_ORDER = ["needsYou", "review", "working", "paused", "done", "failed", "idle"];
 
@@ -179,6 +181,7 @@ export function conversationEntry(raw, i) {
     at,
     first: leadLine(body),
     more: hasMore(body),
+    machine: Boolean(machineKind(body)),
     text: body,
   };
 }
