@@ -12,7 +12,7 @@ import { segmented, stateView, avatar } from "./switch.js";
 import { colors } from "./theme.js";
 import { viewShown, openTerminal, showAgentsTab, showPage } from "./pages.js";
 import { bhJson, projectDir } from "./bh.js";
-import { mentionTone } from "./indicators.js";
+import { mentionTone, agentStateMark } from "./indicators.js";
 import { count, ago } from "./numbers.js";
 import { isChord, keyName, nextPick, opensRow } from "./rowkeys.js";
 import { PeekDrawer, PEEK_WIDTH } from "./peek.js";
@@ -197,13 +197,11 @@ export class Agents {
         .rounded(RADIUS.control)
         .when(picked, (el) => el.bg(c.hover))
         .on_click(() => a?.address && openTerminal(a.address))
-        .child(avatar(c, name, mentionTone(c, name), CONTROL))
+        .child(avatar(c, name, mentionTone(c, name), CONTROL, { working: state === "working" }))
         .child(v_flex().flex_1().min_w(0).gap(SPACE[1])
           .child(div().truncate().text_size(TYPE_SCALE.body).font_semibold().text_color(c.textPrimary).child(name))
           .when(Boolean(a?.summary), (el) => el.child(div().truncate().text_size(TYPE_SCALE.metadata).text_color(c.textSecondary).child(String(a.summary)))))
-        .child(h_flex().flex_none().gap(SPACE[2]).items_center()
-          .child(div().text_size(TYPE_SCALE.body).text_color(stateTone(c, state)).child(STATE[state].glyph))
-          .child(div().text_size(TYPE_SCALE.metadata).text_color(c.textMuted).child(STATE[state].word)))
+        .child(agentStateMark(c, a, state, `bh-agent-activity-${String(a?.address ?? i)}`))
         .when(Boolean(when), (el) => el.child(div().flex_none().text_size(TYPE_SCALE.metadata).text_color(c.textMuted).child(when))),
       c,
       `bh-agent-row-${String(a?.address ?? i)}`,

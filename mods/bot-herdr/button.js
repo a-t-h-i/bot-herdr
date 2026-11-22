@@ -51,5 +51,5 @@ export function actionButton(c, id, label, onClick, { icon = null, tone = "secon
   const t = buttonTone(c, tone);
   const el = body(c, t, label, { icon, hint, tooltip, a11y });
   if (disabled) return el.opacity(0.5).cursor_not_allowed();
-  return clickable(el.on_click(onClick), c, id, { fill: t.hover });
+  return clickable(el.on_click(onClick), c, id, { fill: t.hover, edge: Boolean(t.edge) });
 }

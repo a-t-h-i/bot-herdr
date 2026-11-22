@@ -12,7 +12,7 @@ import { dirname, join, relative } from "node:path";
 import { resolveHerdrAppBin } from "../../../../install.mjs";
 import { palette } from "../../look.js";
 import { AUDIT_PAGES, WRAPPER_MAIN, fixtureSource } from "./ui-audit-fixtures.mjs";
-import { PRESET_NAMES, a11yCapabilities, a11yMarkdown, auditThemes, featurePresence, fixCounters, flattenThemeFile, parseSpec, structuralCounters } from "./ui-audit-spec.mjs";
+import { PRESET_NAMES, a11yCapabilities, a11yMarkdown, auditThemes, featurePresence, fixCounters, flattenThemeFile, parseSpec, structuralCounters, animationTotals } from "./ui-audit-spec.mjs";
 import { shotsStage } from "./ui-audit-shots.mjs";
 
 const CHECK_TIMEOUT_MS = 180000;
@@ -60,6 +60,7 @@ function audit(root, flags) {
     accentButtonsPerView: measured.structural.accentButtonsPerView,
     keyboardPathCoverage: measured.structural.keyboardPathCoverage,
     accessibleLabelCoverage: measured.structural.accessibleLabelCoverage,
+    animation: measured.structural.animation,
     fixes: measured.counts,
     tokens: measured.tokens,
     contrast: { themes: setup.contrast, passed: setup.contrast.every((t) => !t.failures.length) },
@@ -411,6 +412,9 @@ function reportText(result) {
     "",
     "Pages:",
     ...Object.entries(result.pages).map(([page, row]) => `  ${page.padEnd(16)} ${String(row.visibleElements).padStart(4)} elements · keyboard ${Math.round(row.keyboardPath * 100)}% · labels ${Math.round(row.accessibleLabel * 100)}%${row.renderError ? ` · render error: ${row.renderError}` : ""}`),
+    "",
+    "Animation (the activity glyphs):",
+    ...Object.entries(result.animation).map(([k, v]) => `  ${k.padEnd(14)} ${String(v)}`),
     "",
     `Contrast: ${result.contrast.themes.filter((t) => !t.failures.length).length}/${result.contrast.themes.length} themes clean`,
     `Hex outside look.js: ${result.tokens.hexOutsideTokens} · keyboard ${Math.round(result.keyboardPathCoverage * 100)}% · labels ${Math.round(result.accessibleLabelCoverage * 100)}% · primary buttons max ${result.accentButtonsPerView}/view`,

@@ -78,7 +78,7 @@ export class NoteForm {
         .when(Boolean(lead), (el) => el.child(lead))
         .child(label),
       c,
-      id,
+      id, { edge: true },
     );
   }
 

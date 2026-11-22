@@ -772,7 +772,7 @@ export class LearningDoc {
                 div().text_size(TYPE.xs).text_color(c.muted).child(`· ${link.note}`),
               )),
             c,
-            `bh-learn-link-${i}`,
+            `bh-learn-link-${i}`, { edge: true },
           ))),
       );
   }

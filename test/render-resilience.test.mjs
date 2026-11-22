@@ -16,6 +16,7 @@ import {
   isInterruptError,
   errorSignature,
 } from "../mods/bot-herdr/render-safe.js";
+import * as keymap from "../mods/bot-herdr/keymap.js";
 import * as feed from "../mods/bot-herdr/feed.js";
 import * as tasksview from "../mods/bot-herdr/tasksview.js";
 import * as issuesview from "../mods/bot-herdr/issuesview.js";
@@ -295,6 +296,11 @@ test("fuzz pure view-model modules under safeRender with corrupt and legacy fixt
     ["metrics:dailyLabel", (v) => metricsview.dailyLabel(v)],
     ["metrics:formatCost", (v) => metricsview.formatCost(v)],
     ["metrics:formatTokens", (v) => metricsview.formatTokens(v)],
+    // keymap.js: the keyboard map's pure table — hostile junk, not throws (no herdr/gpui imports)
+    ["keymap:collisions", (v) => keymap.collisions(v)],
+    ["keymap:contexts", (v) => keymap.contexts(v)],
+    ["keymap:overlayRows", (v) => keymap.overlayRows(v)],
+    ["keymap:row", (v) => keymap.row(v, v, v)],
   ];
 
   let totalRuns = 0;
@@ -414,4 +420,12 @@ test("the M4b views draw through their render-safe boundary and read data only t
   for (const name of ["threads.js", "peek.js", "statusbar.js", "threadview.js"]) {
     assert.equal(/#[0-9a-fA-F]{3,8}\b/.test(src(name)), false, `${name}: tokens only, no hex colours`);
   }
+});
+
+test("the keymap overlay draws through the dispatcher when the map is open, from the pure table", () => {
+  const mainSrc = readFileSync(join(ROOT, "mods", "bot-herdr", "main.js"), "utf8");
+  assert.match(mainSrc, /keymapOverlayCard\(/, "main.js draws the overlay card");
+  assert.match(mainSrc, /shared\(KEYMAP_OPEN\)/, "the card draws only while the map is open");
+  const keymapSrc = readFileSync(join(ROOT, "mods", "bot-herdr", "keymap.js"), "utf8");
+  assert.equal(/from\s+["'](?:gpui-kit|gpui-base|herdr)["']/.test(keymapSrc), false, "keymap.js stays import-free of herdr/gpui");
 });

@@ -7,13 +7,13 @@
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { settings } from "herdr";
-import { SIZE, TYPE_SCALE, LINE, SPACE, CONTROL, RADIUS, STATE, stateTone, clickable } from "./look.js";
+import { SIZE, TYPE_SCALE, LINE, SPACE, CONTROL, RADIUS, STATE, stateTone, clickable, looping } from "./look.js";
 import { stateView, avatar } from "./switch.js";
 import { sectionLabel } from "./plandoc.js";
 import { colors } from "./theme.js";
 import { activeStage, openThread, openTerminal, showPage, viewShown } from "./pages.js";
 import { bhJson, projectDir } from "./bh.js";
-import { mentionTone } from "./indicators.js";
+import { mentionTone, agentStateMark as stateMark } from "./indicators.js";
 import { price, compact, duration, ago } from "./numbers.js";
 import { isChord, keyName, nextPick, opensRow } from "./rowkeys.js";
 import { PeekDrawer, PEEK_WIDTH } from "./peek.js";
@@ -258,6 +258,8 @@ export class Home {
     const who = String(item?.from ?? "");
     const picked = at === this.pick;
     const label = `${kindWord(item?.kind)}: ${String(item?.title ?? "Needs you")}`;
+    // The needs-you glyph pulses: one amber pulse, nothing else (and nothing while reduced).
+    const glyph = div().flex_none().text_size(TYPE_SCALE.title).text_color(stateTone(c, "needsYou")).child(STATE.needsYou.glyph);
     return clickable(
       h_flex()
         .role("list_item")
@@ -272,7 +274,7 @@ export class Home {
         .rounded(RADIUS.control)
         .when(picked, (el) => el.bg(c.hover))
         .on_click(() => openThread(item?.thread))
-        .child(div().flex_none().text_size(TYPE_SCALE.title).text_color(stateTone(c, "needsYou")).child(STATE.needsYou.glyph))
+        .child(looping(glyph, "opacity", { from: 0.35, to: 1, period: 1400, easing: "ease-in-out" }))
         .child(v_flex().flex_1().min_w(0).gap(SPACE[1])
           .child(div().truncate().text_size(TYPE_SCALE.body).font_semibold().text_color(c.textPrimary).child(String(item?.title ?? "Needs you")))
           .when(Boolean(item?.text), (el) => el.child(div().id(`bh-row-summary-need-${item?.thread ?? item?.ref ?? at}`).truncate().text_size(TYPE_SCALE.metadata).text_color(c.textSecondary).child(String(item.text)))))
@@ -334,12 +336,13 @@ export class Home {
         .rounded(RADIUS.control)
         .when(picked, (el) => el.bg(c.hover))
         .on_click(() => openTerminal(a?.address))
-        .child(avatar(c, name, mentionTone(c, name), CONTROL))
+        .child(avatar(c, name, mentionTone(c, name), CONTROL, { working: state === "working" }))
         .child(v_flex().flex_1().min_w(0).gap(SPACE[1])
           .child(div().truncate().text_size(TYPE_SCALE.body).font_semibold().text_color(c.textPrimary).child(name))
           .when(Boolean(a?.summary), (el) => el.child(div().id(`bh-row-summary-agent-${a?.address ?? at}`).truncate().text_size(TYPE_SCALE.metadata).text_color(c.textSecondary).child(String(a.summary)))))
-        // The state is glyph, colour and word, in the one place it is read (never colour alone).
-        .child(div().flex_none().text_size(TYPE_SCALE.metadata).text_color(stateTone(c, state)).child(`${STATE[state].glyph} ${STATE[state].word}`))
+        // The state is glyph, colour and word, in the one place it is read (never colour alone);
+        // at work, the glyph is its activity's cycle and the word what it is doing.
+        .child(stateMark(c, a, state, `bh-home-activity-${a?.address ?? at}`))
         .when(Boolean(when), (el) => el.child(div().flex_none().text_size(TYPE_SCALE.metadata).text_color(c.textMuted).child(when))),
       c,
       `bh-home-agent-${a?.address ?? at}`,

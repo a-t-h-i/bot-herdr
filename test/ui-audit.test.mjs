@@ -12,6 +12,7 @@ import { dirname, join } from "node:path";
 import { palette, agentHue } from "../mods/bot-herdr/look.js";
 import {
   PRESET_NAMES,
+  animationCounters,
   auditThemes,
   compositeOver,
   contrastRatio,
@@ -191,6 +192,28 @@ test("each selection idiom is its own signature, so the counter cannot hide a se
   const one = spec('div :aria_selected[Bool(true)] .border_1 .border_color[Str("' + accent + '")]', '  text "tab"');
   assert.equal(fixCounters({ two }, { colors: graphite }).selectionStyles.value, 2);
   assert.equal(fixCounters({ one }, { colors: graphite }).selectionStyles.value, 1);
+});
+
+test("the animation counters read the activity glyphs from the printed spec: cycles, slots, ticks120, frozen", () => {
+  // A running cycle: the glyph has its width and a frames attr at the one 120 ms tick.
+  // A frozen cycle (Reduce motion): the glyph is still in its slot, its first frame a text child.
+  const glyphs = [
+    'div :id[Str("bh-agent-activity-1-glyph")] .w[Number(31.0)] :frames[Number(120.0), Str("⠁"), Str("⠂"), Str("⠄")]',
+    'div :id[Str("bh-agent-activity-2-glyph")] .w[Number(31.0)]',
+    '  text "⠁"',
+    'div :id[Str("bh-agent-activity-3-glyph")] .w[Number(31.0)] :frames[Number(60.0), Str("⠁")]',
+  ];
+  const anim = animationCounters(spec(glyphs.join("\n")));
+  assert.equal(anim.workingCycles, 3);
+  assert.equal(anim.glyphSlots, 3);
+  assert.equal(anim.ticks120, 1, "only the cycle on the one 120 ms tick counts");
+  assert.equal(anim.frozenGlyphs, 1, "the frozen cycle (first frame as a text child, no frames attr)");
+  // Anything that is not a -glyph is not a cycle, even with frames on it.
+  const none = animationCounters(spec('div :id[Str("plain-glyphless")] :frames[Number(120.0), Str("⠁")]'));
+  assert.equal(none.workingCycles, 0);
+  // A non-frozen cycle never counts as frozen, even though its idle form has no child text.
+  const live = animationCounters(spec('div :id[Str("bh-agent-activity-4-glyph")] .w[Number(31.0)]'));
+  assert.equal(live.frozenGlyphs, 0);
 });
 
 test("structural counters measure keyboard and label coverage per page", () => {

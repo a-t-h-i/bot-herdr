@@ -8,9 +8,9 @@
 
 import { div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextView, InputState, Input } from "gpui-base";
-import { terminals, spaces, focused, settings, shared, setShared, readTextFile, appHome } from "herdr";
+import { terminals, spaces, focused, settings, shared, setShared, readTextFile, appHome, window as herdrWindow } from "herdr";
 import * as fs from "fs/promises";
-import { SIZE, ICON, TYPE, LINE, SPACE, ROW, CHIP, CONTROL, TARGET, GLYPH, MOTION, SCRIM, textWidth, agentInk, clickable, isLight } from "./look.js";
+import { SIZE, ICON, TYPE, LINE, SPACE, ROW, CHIP, CONTROL, TARGET, GLYPH, MOTION, SCRIM, textWidth, agentInk, clickable, isLight, foldRegion } from "./look.js";
 import { actionButton } from "./button.js";
 import { stateView } from "./switch.js";
 import { colors } from "./theme.js";
@@ -482,6 +482,9 @@ export class Chat {
           if (what === "blocked") {
             wait.blocked = true;
             this.add({ kind: "note", space, text: `${wait.name} is waiting for you in its terminal.`, address }, cx);
+            // A toast only when the window is unfocused: when it is, an open window on the note
+            // alone would miss it entirely.
+            if (herdrWindow()?.active === false) this.composer.say(`${wait.name} needs you — open its terminal.`, cx, "warning");
           }
           if (what === "silent") {
             clearWait(this.waits, address);
@@ -625,6 +628,14 @@ export class Chat {
 
   // ── Drawing ────────────────────────────────────────────────────────────────────────────────
 
+  /** A press on the feed (or Esc while it holds the keyboard) folds the composer to its slim bar. */
+  foldBox(cx) {
+    if (this.commenting) return; // a comment box open takes the click
+    this.composer.expanded = false; // the slim bar; a click on it or typing grows it back
+    this.handle.focus(); // the text box is not drawn while folded: typing comes here
+    cx.notify();
+  }
+
   render(cx) {
     const withFrame = this.composer?.withFrame ? (fn) => this.composer.withFrame(fn) : (fn) => fn();
     return withFrame(() => this.renderFrame(cx));
@@ -715,7 +726,7 @@ export class Chat {
         cx.stop_propagation();
       })
       .child(
-        v_flex()
+        foldRegion(v_flex()
           .id("bh-feed")
           .absolute()
           .top(0)
@@ -725,12 +736,7 @@ export class Chat {
           .overflow_hidden()
           .justify_end()
           .items_center()
-          .on_mouse_down("left", (_e, cx) => {
-            if (this.commenting) return; // a comment box open takes the click
-            this.composer.expanded = false; // the slim bar; a click on it or typing grows it back
-            this.handle.focus(); // the text box is not drawn while folded: typing comes here
-            cx.notify();
-          })
+          .on_mouse_down("left", (_e, cx) => this.foldBox(cx)), "Conversation", (cx) => this.foldBox(cx))
           .on_scroll_wheel((e, cx) => this.scroll(e, view.total, cx))
           .when(view.total === 0, (el) => el.child(this.empty(c, width, team)))
           .when(view.total > 0, (el) =>
@@ -1036,7 +1042,7 @@ export class Chat {
                   .bg(c.fill).border_1().border_color(c.edge).text_color(c.muted).child(svg(ICON("expand")).size(GLYPH.sm)),
               ),
             c,
-            `bh-pic-box-${e.id}-${index}`,
+            `bh-pic-box-${e.id}-${index}`, { edge: true },
           )
           : div()
             .relative()
@@ -1113,7 +1119,7 @@ export class Chat {
         .child(div().flex_1().min_w(0).truncate().text_size(TYPE.sm).text_color(c.muted).child(`· ${names}`))
         .child(svg(ICON(open ? "chevron-down" : "chevron-right")).flex_none().size(GLYPH.sm).text_color(c.faint)),
       c,
-      `bh-kids-${e.id}`,
+      `bh-kids-${e.id}`, { edge: true },
     );
   }
 

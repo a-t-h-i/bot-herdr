@@ -2,7 +2,7 @@
 // spec's Fix table, measure keyboard and label coverage, and check every theme preset's contrast.
 // No fs, no spawning, no gpui imports, so `npm test` checks it directly.
 
-import { palette, contrastOf, mix, agentHue } from "../../look.js";
+import { palette, contrastOf, mix, agentHue, TICK_MS } from "../../look.js";
 
 /** The 16 theme presets the audit checks, in a stable order (files fill the gaps in snapshot). */
 export const PRESET_NAMES = ["graphite", "ink", "moss", "paper", "bot-herdr-light", "bot-herdr-dark", "dune-light", "dune-dark", "fern-light", "fern-dark", "harbor-light", "harbor-dark", "plum-light", "plum-dark", "atom-one-dark", "win98"];
@@ -393,6 +393,28 @@ function buildCounters(destinations, found, stats) {
   };
 }
 
+/**
+ * The animation rules the activity glyphs draw, read from the printed spec: how many glyph cycles
+ * the page has, whether each sits in its fixed-width slot, whether each runs on the one `TICK_MS`
+ * tick, and whether each is frozen on its first glyph under Reduce motion (no frames attr, the
+ * glyph as a text child — `framed()` in working.js).
+ */
+export function animationCounters(spec) {
+  const glyphs = walk(spec).filter((n) => elementId(n)?.endsWith("-glyph"));
+  const out = { workingCycles: glyphs.length, glyphSlots: 0, ticks120: 0, frozenGlyphs: 0 };
+  for (const g of glyphs) {
+    if (typeof style(g, "w") === "number") out.glyphSlots++;
+    const raw = prop(g, "frames");
+    if (typeof raw === "string" && raw) {
+      const m = /Number\((\d+(?:\.\d+)?)\)/.exec(raw);
+      if (m && Number(m[1]) === TICK_MS) out.ticks120++;
+    } else if (walk(g).some((n) => n !== g && textOf(n) !== null && String(textOf(n)).trim())) {
+      out.frozenGlyphs++;
+    }
+  }
+  return out;
+}
+
 /** The visual signature of a selected control, so four idioms count as four. */
 function selectionSignature(node, c) {
   const signature = [];
@@ -488,6 +510,16 @@ function themeFailures(colors) {
   return failures;
 }
 
+/** The animation rules across the audited pages (animationCounters per page, summed). */
+export function animationTotals(pages) {
+  const out = { workingCycles: 0, glyphSlots: 0, ticks120: 0, frozenGlyphs: 0 };
+  for (const spec of Object.values(pages)) {
+    const c = animationCounters(spec ?? { children: [] });
+    for (const k of Object.keys(out)) out[k] += c[k];
+  }
+  return out;
+}
+
 /** Per page: render errors (passed in), interactive coverage, and the accent-button maximum. */
 export function structuralCounters(pages, { errors = {}, accent = null } = {}) {
   const perPage = {};
@@ -508,6 +540,7 @@ export function structuralCounters(pages, { errors = {}, accent = null } = {}) {
     accentButtonsPerView: total.accent,
     keyboardPathCoverage: total.interactive ? round(total.keyboard / total.interactive) : 1,
     accessibleLabelCoverage: total.interactive ? round(total.labelled / total.interactive) : 1,
+    animation: animationTotals(pages),
   };
 }
 
