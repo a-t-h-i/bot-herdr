@@ -11,12 +11,12 @@ export function row(context, keys, action) {
   return { context: String(context ?? ""), keys: Array.isArray(keys) ? [...keys] : [], action: String(action ?? "") };
 }
 
-/** The map, in the spec's order: global bindings, then each page that takes keys. */
+/** The map, in the spec's order: global bindings, view-local bot-herdr keys, then each page. */
 export const KEYMAP = [
   row("global", ["Ctrl+Shift+P"], "Command palette (herdr's own binding)"),
-  row("global", ["Ctrl+1", "Ctrl+2", "Ctrl+3", "Ctrl+4", "Ctrl+5"], "The five destinations: Home, Threads, Agents, Library, Settings"),
   row("global", ["Ctrl+."], "Pause or resume the current goal"),
-  row("global", ["?"], "Show this map"),
+  row("views", ["Ctrl+1", "Ctrl+2", "Ctrl+3", "Ctrl+4", "Ctrl+5"], "Home, Threads, Agents, Library, Settings (in bot-herdr views)"),
+  row("views", ["?"], "Show this map (in bot-herdr views)"),
   row("home", ["J", "K", "Home", "End"], "Move the pick through the rows"),
   row("home", ["Space"], "Peek the picked row"),
   row("home", ["Enter"], "Open the picked row"),

@@ -13,7 +13,7 @@
 import { div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextView, InputState, Input } from "gpui-base";
 import { settings, shared, terminals } from "herdr";
-import { SIZE, ICON, TYPE, TYPE_SCALE, LINE, SPACE, CONTROL, CHIP, GLYPH, MARK, DOT, PIP, HAIR, MOTION, STATE, agentInk, stateTone, clickable, pressable, focusable, foldRegion, looping } from "./look.js";
+import { SIZE, ICON, TYPE, TYPE_SCALE, LINE, SPACE, CONTROL, CHIP, TARGET, GLYPH, MARK, DOT, PIP, HAIR, MOTION, HIGHLIGHT_MS, RADIUS, STATE, agentInk, stateTone, clickable, pressable, focusable, foldRegion, looping, reducedMotion } from "./look.js";
 import { actionButton } from "./button.js";
 import { segmented, stateView, pill, filterChip, chipHasResults } from "./switch.js";
 import { commentRow, openFirst, openPlan, sectionLabel, COMMENT_LINKS, arm, armed, startMenuTrigger, startMenuPanel, issueChips } from "./plandoc.js";
@@ -33,7 +33,8 @@ import { mockupFile, openInBrowser } from "./media.js";
 import { openLightbox } from "./lightbox.js";
 import { openFile, openLink } from "./viewer.js";
 import { OpenQuestions, publishCounts } from "./questions.js";
-import { seatStates, seatsOf, boardAge } from "./signals.js";
+import { seatStates, seatsOf, boardAge, newlyDone } from "./signals.js";
+import { isChord, keyName } from "./rowkeys.js";
 import { stepAgents, usageText } from "./steps.js";
 import { skillsLine } from "./skillsview.js";
 import {
@@ -96,6 +97,7 @@ const GAP = 14;
 const MAX = 1140;
 const REFRESH_MS = 4000;
 const QUESTIONS_MS = 2500; // the chat's cadence, so a card answered on one page goes from the others together
+const UNDO_MS = 5000; // how long a Knowledge entry/note delete offers inline Undo
 const PAGE_CHROME = SPACE[5] + CONTROL + GAP; // the page's top padding, its tab bar, and the gap under it
 
 const load = (key, fallback) => {
@@ -342,7 +344,13 @@ export class Work {
     this.knownText = null; // the file as loaded, to tell an edit from it
     this.editing = false; // the knowledge file open as text, to rewrite it
     this.confirmDelete = null; // "agent:line" of the record whose Delete asks first
-    this.actionsOn = new Set(); // Knowledge cards whose Edit/Delete show on hover or a key on the card
+    this.actionsOn = new Set(); // Knowledge cards whose Edit/Delete show on hover, focus or a key on the card
+    this.knowHandles = new Map(); // Knowledge card focus handles (key -> FocusHandle), created outside render
+    this.knowHandleSync = false;
+    this.knowUndos = []; // inline 5 s Undo records for Knowledge entry/note deletes
+    this.seenStepsDone = new Map(); // task id -> Map(stepKey -> boolean) for 2 s finish highlight
+    this.stepFinishing = new Map(); // `${taskId}:${stepN}` -> "on" | "fade"
+    this.typingCount = 0; // focused text inputs on Work (so view-local `?` stands down)
     this.armed = null; // a two-step action waiting for its second click (see arm)
     this.notes = [];
     this.busy = false;
@@ -351,12 +359,17 @@ export class Work {
     this.taskActionError = null; // a task command that failed: kept until the next action or Dismiss
     this.openWanted = null; // a task Chat asked to open, until the list knows its status chip
     this.descOpen = new Set(); // details and steps the user opened
-    this.comment = InputState.new({ placeholder: "Comment" });
-    this.idea = InputState.new({ placeholder: "What should the team plan?" });
+    const track = (state) => {
+      state.on("focus", () => { this.typingCount++; });
+      state.on("blur", () => { this.typingCount = Math.max(0, this.typingCount - 1); });
+      return state;
+    };
+    this.comment = track(InputState.new({ placeholder: "Comment" }));
+    this.idea = track(InputState.new({ placeholder: "What should the team plan?" }));
     this.idea.on("submit", (_e, cx) => this.startPlan(cx));
-    this.taskSearch = InputState.new({ placeholder: "Search tasks…" });
+    this.taskSearch = track(InputState.new({ placeholder: "Search tasks…" }));
     this.taskSearch.on("change", (_e, cx) => cx.notify());
-    this.newTaskInput = InputState.new({ placeholder: "Describe the new task…" });
+    this.newTaskInput = track(InputState.new({ placeholder: "Describe the new task…" }));
     this.newTaskInput.on("submit", (_e, cx) => this.createTask(cx));
     this.showPrevious = false; // the Plans page's list of plans, from the rail
     this.tucking = false; // the View plan tab has tucked into the composer (its sheet opens next)
@@ -365,11 +378,11 @@ export class Work {
     this.comment.on("submit", (_e, cx) => this.sendComment(cx));
     // A comment on one line of a plan, or one step of a task: { kind: "plan" | "task", id, at }.
     this.commenting = null;
-    this.inline = InputState.new({ placeholder: "Comment" });
+    this.inline = track(InputState.new({ placeholder: "Comment" }));
     this.inline.on("submit", (_e, cx) => this.sendInline(cx));
     this.editor = new MarkdownEditor({ value: "", placeholder: "The file itself, as Markdown" });
     this.editor.on("change", (_value, cx) => cx.notify());
-    this.knowSearch = InputState.new({ placeholder: "Search notes" });
+    this.knowSearch = track(InputState.new({ placeholder: "Search notes" }));
     this.knowSearch.on("change", (_e, cx) => cx.notify());
     this.knowFilter = new Set();
     this.noteAddedAt = /** @type {{ at?: number } | null} */ (shared(NOTE_ADDED))?.at ?? 0;
@@ -412,6 +425,7 @@ export class Work {
     const dir = projectDir();
     cx.spawn(async (cx) => {
       try {
+        this.cx = cx;
         this.switchTo(dir);
         if (this.tab === "tasks") await this.loadTasks(dir);
         if (this.tab === "plans") await this.loadPlans(dir);
@@ -456,7 +470,7 @@ export class Work {
     this.alignChip(list);
     this.openWanted = null;
     const id = this.pickOpenedId(list);
-    if (id) await this.fetchTaskDetail(id, dir);
+    if (id) await this.fetchTaskDetail(id, dir, this.cx);
     else {
       this.taskDetail = null;
       this.taskDetailId = null;
@@ -482,16 +496,19 @@ export class Work {
   }
 
   /** Fetches full detail for one task via `bh task show`, dropping stale or superseded responses. */
-  async fetchTaskDetail(id, dir) {
+  async fetchTaskDetail(id, dir, cx = null) {
     const seq = ++this.detailReqSeq;
     const detail = await bhJson(["task", "show", id], { cwd: dir });
     if (dir !== projectDir() || seq !== this.detailReqSeq || (this.opened && this.opened !== id)) return;
     if (!detail || Array.isArray(detail)) return;
     this.taskDetail = detail;
     this.taskDetailId = id;
+    const steps = Array.isArray(detail.steps) ? detail.steps : [];
+    const { finished, seen } = newlyDone(steps.map((s) => ({ id: `${id}:${s.n}`, done: s.status === "done" })), this.seenStepsDone.get(id) ?? null);
+    this.seenStepsDone.set(id, seen);
+    if (cx) for (const stepKey of finished) this.triggerStepHighlight(stepKey, cx);
     if (this.expandedTaskId !== id) {
       this.expandedTaskId = id;
-      const steps = Array.isArray(detail.steps) ? detail.steps : [];
       const active = steps.filter((s) => s.status === "active").map((s) => s.n);
       const firstBlocked = steps.find((s) => s.status === "blocked")?.n;
       this.expandedSteps = new Set(active.length ? active : firstBlocked != null ? [firstBlocked] : []);
@@ -499,11 +516,27 @@ export class Work {
     if (this.detailTab === "plan" && !detail.plan) this.detailTab = "steps";
   }
 
+  /** Holds a soft overlay on a newly finished step for 2 s, then fades it over MOTION.highlight. */
+  triggerStepHighlight(key, cx) {
+    if (reducedMotion() || !cx?.timer) return;
+    this.stepFinishing.set(key, "on");
+    cx.timer.after(HIGHLIGHT_MS, (cx) => {
+      if (!this.stepFinishing.has(key)) return;
+      this.stepFinishing.set(key, "fade");
+      cx.notify();
+      cx.timer.after(MOTION.highlight.duration + 32, (cx) => {
+        if (this.stepFinishing.get(key) !== "fade") return;
+        this.stepFinishing.delete(key);
+        cx.notify();
+      });
+    });
+  }
+
   /** Kicks an immediate detail fetch when the user clicks a different task row. */
   loadTaskDetail(id, dir, cx) {
     if (!id) return;
     cx.spawn(async (cx) => {
-      await this.fetchTaskDetail(id, dir);
+      await this.fetchTaskDetail(id, dir, cx);
       cx.notify();
     });
   }
@@ -574,7 +607,24 @@ export class Work {
     if (dir !== projectDir()) return;
     this.kinds = kinds;
     this.knowAll = all;
+    this.syncKnowHandles(all, this.cx);
     this.adoptKnowledge(all);
+  }
+
+  /** Creates stable FocusHandles for Knowledge cards outside render (never calls cx.focus_handle in render). */
+  syncKnowHandles(all, cx) {
+    if (!cx?.focus_handle || !Array.isArray(all)) return;
+    const live = new Set();
+    for (const { agent, text } of all) {
+      for (const s of outline(text ?? "").sections) {
+        for (const e of s.entries) {
+          const key = `${agent}:${e.line}`;
+          live.add(key);
+          if (!this.knowHandles.has(key)) this.knowHandles.set(key, cx.focus_handle());
+        }
+      }
+    }
+    for (const key of this.knowHandles.keys()) if (!live.has(key)) this.knowHandles.delete(key);
   }
 
   /** The knowledge file shown: the one picked (else the first), kept as it is while it has an unsaved edit. */
@@ -833,7 +883,7 @@ export class Work {
     this.reload(cx);
   }
 
-  /** Deletes one knowledge record: the file is written without it (the version before is archived). */
+  /** Deletes one knowledge record immediately and offers inline "Deleted · Undo" for 5 s to restore it exactly. */
   deleteEntry(agent, e, cx) {
     this.confirmDelete = null;
     const cur = (this.knowAll ?? []).find((x) => x.agent === agent);
@@ -847,19 +897,91 @@ export class Work {
       this.reload(cx);
       return;
     }
+    const prevText = String(base);
+    const removedNotes = notesOn(notes, e.text).map((n) => ({ ...n }));
     lines.splice(from, count);
     const text = lines.join("\n").replace(/\n{3,}/g, "\n\n");
-    for (const n of notesOn(notes, e.text)) this.act(["knowledge", "unnote", agent, "--at", n.at], cx);
+    if (cur) {
+      cur.text = text;
+      cur.notes = (cur.notes ?? []).filter((n) => !removedNotes.some((r) => r.at === n.at));
+    }
+    if (this.agent === agent) {
+      this.knownText = text;
+      this.editor.set_value(text);
+    }
+    for (const n of removedNotes) this.act(["knowledge", "unnote", agent, "--at", n.at], cx);
     this.act(["knowledge", "write", agent, "--data", enc(text)], cx, (r) => {
-      if (r.code === 0) {
-        if (cur) cur.text = text;
-        if (this.agent === agent) {
-          this.knownText = text;
-          this.editor.set_value(text);
-        }
-      }
+      if (r.code !== 0 && cur) cur.text = prevText;
     });
+    this.pushKnowUndo({
+      id: `entry-${agent}-${Date.now()}`,
+      kind: "entry",
+      agent,
+      prevText,
+      entryKey: e.key,
+      notes: removedNotes,
+    }, cx);
     cx.notify();
+  }
+
+  /** Deletes one knowledge note immediately and offers inline "Deleted · Undo" for 5 s to restore it. */
+  deleteKnowledgeNote(agent, e, n, cx) {
+    const cur = (this.knowAll ?? []).find((x) => x.agent === agent);
+    if (cur) cur.notes = (cur.notes ?? []).filter((x) => x.at !== n.at);
+    this.act(["knowledge", "unnote", agent, "--at", n.at], cx);
+    this.pushKnowUndo({
+      id: `note-${agent}-${hash(`${n.at}${n.note}`)}-${Date.now()}`,
+      kind: "note",
+      agent,
+      entryKey: e.key,
+      noteText: n.note,
+    }, cx);
+    cx.notify();
+  }
+
+  /** Keeps an inline Undo banner for 5 s, then lets it expire. */
+  pushKnowUndo(record, cx) {
+    this.knowUndos = [...this.knowUndos, record];
+    cx.timer.after(UNDO_MS, (cx) => {
+      const next = this.knowUndos.filter((u) => u.id !== record.id);
+      if (next.length === this.knowUndos.length) return;
+      this.knowUndos = next;
+      cx.notify();
+    });
+  }
+
+  /** Restores a deleted Knowledge entry (with its notes) or a deleted Knowledge note. */
+  undoKnowledgeDelete(u, cx) {
+    this.knowUndos = this.knowUndos.filter((x) => x.id !== u.id);
+    const cur = (this.knowAll ?? []).find((x) => x.agent === u.agent);
+    if (u.kind === "entry") {
+      if (cur) cur.text = u.prevText;
+      if (this.agent === u.agent) {
+        this.knownText = u.prevText;
+        this.editor.set_value(u.prevText);
+      }
+      this.act(["knowledge", "write", u.agent, "--data", enc(u.prevText)], cx, (r, cx) => {
+        if (r.code !== 0) return;
+        for (const n of u.notes ?? []) this.act(["knowledge", "note", u.agent, u.entryKey, "--data", enc(n.note)], cx);
+      });
+    } else if (u.kind === "note") {
+      this.act(["knowledge", "note", u.agent, u.entryKey, "--data", enc(u.noteText)], cx);
+    }
+    cx.notify();
+  }
+
+  /** Returns the pre-created FocusHandle for a Knowledge card (never calls cx.focus_handle during render). */
+  cardHandle(key) {
+    const h = this.knowHandles.get(key) ?? null;
+    if (!h && !this.knowHandleSync && this.cx?.timer) {
+      this.knowHandleSync = true;
+      this.cx.timer.after(1, (cx) => {
+        this.knowHandleSync = false;
+        this.syncKnowHandles(this.knowAll, cx);
+        cx.notify();
+      });
+    }
+    return h;
   }
 
   saveKnowledge(cx) {
@@ -1719,7 +1841,9 @@ export class Work {
     const termWorking = Boolean(term && liveTerminals.find((x) => (x.address ?? x.id) === term.id)?.status === "working");
     const done = s.status === "done" || s.status === "skipped";
     const time = this.stepTime(s);
+    const hl = this.stepFinishing.get(`${t.id}:${s.n}`);
     return v_flex()
+      .relative()
       .flex_none()
       .rounded(SIZE.control)
       .bg(c.fill)
@@ -1728,6 +1852,14 @@ export class Work {
       .px(SPACE[4])
       .py(SPACE[3])
       .gap(SPACE[3])
+      .when(Boolean(hl), (el) => el.child(div()
+        .id(`bh-step-hl-${t.id}-${s.n}`)
+        .absolute()
+        .inset_0()
+        .rounded(SIZE.control)
+        .bg(stateTone(c, "done"))
+        .opacity(hl === "on" ? 0.14 : 0)
+        .transition("opacity", MOTION.highlight)))
       .child(this.stepCardHeader(c, t, s, { expanded, next, done, who, time, liveNotes, working: s.status === "active" || termWorking }))
       .when(expanded, (el) => el.child(this.stepCardBody(c, t, s, { notes, term })));
   }
@@ -2628,6 +2760,21 @@ export class Work {
           agent: this.agent ?? (filter.size === 1 ? [...filter][0] : "orchestrator"),
           dir: this.dir,
         }), { tone: "primary" })))
+      .when(this.knowUndos.length > 0, (el) => el.child(v_flex().gap(SPACE[2]).children(this.knowUndos.map((u) =>
+        h_flex()
+          .id(`bh-know-undo-${u.id}`)
+          .role("status")
+          .h(CONTROL + SPACE[2])
+          .px(SPACE[3])
+          .gap(SPACE[2])
+          .items_center()
+          .rounded(RADIUS.control)
+          .bg(c.fill)
+          .border_1()
+          .border_color(c.edge)
+          .child(div().text_size(TYPE_SCALE.metadata).text_color(c.textSecondary).child("Deleted ·"))
+          .child(actionButton(c, `bh-know-undo-btn-${u.id}`, "Undo", (_ev, cx) => this.undoKnowledgeDelete(u, cx), { tone: "quiet" })),
+      ))))
       .child(h_flex().w(width).gap(SPACE[4]).items_start().children(
         columns.map((col) =>
           v_flex().flex_1().min_w(0).gap(SPACE[4]).children(
@@ -2638,7 +2785,7 @@ export class Work {
       .when(!cards.length, (el) => el.child(div().w_full().py(SPACE[5]).text_size(TYPE.md).text_color(c.muted).child("No notes match.")));
   }
 
-  /** A knowledge note's links: Resolve and Delete both take it back; Edit is unnote, then note again. */
+  /** A knowledge note's links: Resolve takes it back, Delete takes it back with 5 s inline Undo, Edit rewrites it. */
   noteActions(agent, e, n) {
     const w = this.commenting;
     const unnote = (cx) => this.act(["knowledge", "unnote", agent, "--at", n.at], cx);
@@ -2646,7 +2793,7 @@ export class Work {
       key: `bh-know-n-${agent}-${hash(`${n.at}${n.note}`)}`,
       editing: Boolean(w && w.kind === "knowledge" && w.id === agent && w.edit === n.at),
       resolve: unnote,
-      delete: unnote,
+      delete: (cx) => this.deleteKnowledgeNote(agent, e, n, cx),
       edit: (cx) => {
         this.agent = agent;
         this.editInline("knowledge", agent, e.line, n.at, n.note, cx);
@@ -2659,6 +2806,15 @@ export class Work {
     const key = `${agent}:${e.line}`;
     const on = this.addingAt("knowledge", agent, e.line);
     const body = /^\s{0,3}[-*+]\s+/.test(e.text) ? e.text.replace(/^\s{0,3}[-*+]\s+/, "") : e.text;
+    const handle = this.cardHandle(key);
+    const showActions = this.actionsOn.has(key) || Boolean(handle?.is_focused?.());
+    const openEditor = (cx) => {
+      this.agent = agent;
+      this.knownText = (this.knowAll?.find((x) => x.agent === agent)?.text ?? "");
+      this.editor.set_value(this.knownText);
+      this.editing = true;
+      cx.notify();
+    };
     return clickable(
       v_flex()
         .flex_none()
@@ -2672,6 +2828,29 @@ export class Work {
         .hover((s) => s.border_color(c.controlBorder))
         .opacity(this.rowsIn === false ? 0 : 1)
         .transition("opacity", { ...MOTION.row, delay: Math.min(index, 8) * MOTION.stagger })
+        .when(Boolean(handle), (el) => el.track_focus(handle))
+        // Hover and keyboard handlers sit on the outer focusable card so hovering the body or
+        // reaching the card by Tab reveals Edit and Delete.
+        .on_hover((over, cx) => {
+          if (over) this.actionsOn.add(key);
+          else this.actionsOn.delete(key);
+          cx.notify();
+        })
+        .on_key_down((ev, cx) => {
+          if (!this.actionsOn.has(key)) {
+            this.actionsOn.add(key);
+            cx.notify();
+          }
+          if (isChord(ev)) return;
+          const k = keyName(ev);
+          if (k === "e") {
+            cx.stop_propagation();
+            openEditor(cx);
+          } else if (k === "delete" || k === "backspace") {
+            cx.stop_propagation();
+            this.deleteEntry(agent, e, cx);
+          }
+        })
         .on_click((_e, cx) => { this.agent = agent; this.startInline("knowledge", agent, e.line, cx); })
         // The agent is marked by its dot and name only: no card wash, no stripe. Both use the
         // identity colour repaired for the card (3:1 for the dot, AA for the name).
@@ -2680,29 +2859,22 @@ export class Work {
           .child(div().text_size(TYPE.xs).font_medium().text_color(agentInk(c, agent)).child(agent.charAt(0).toUpperCase() + agent.slice(1)))
           .when(Boolean(section), (el) => el.child(div().text_size(TYPE.xs).text_color(c.faint).child(section)))
           .child(div().flex_1())
-          // The pair shows while the pointer is over the card, or a key goes to the focused card.
-          .on_hover((over, cx) => { if (over) this.actionsOn.add(key); else this.actionsOn.delete(key); cx.notify(); })
-          .on_key_down((_e, cx) => { this.actionsOn.add(key); cx.notify(); })
-          .when(this.actionsOn.has(key), (el) => el
-          .child(focusable(
-            pressable(
-              div().size(CHIP).flex().items_center().justify_center().rounded(SIZE.nested).text_color(c.faint).hover((s) => s.bg(c.hover).text_color(c.ink))
-                .on_click((_ev, cx) => { cx.stop_propagation?.(); this.agent = agent; this.knownText = (this.knowAll?.find((x) => x.agent === agent)?.text ?? ""); this.editor.set_value(this.knownText); this.editing = true; cx.notify(); })
-                .child(svg(ICON("external-link")).size(GLYPH.sm))
-                .role("button")
-                .accessibility_label(`Edit ${agent}'s knowledge`),
-            ),
-            `bh-know-edit-${agent}-${e.line}`,
-            c,
-          ))
-          .child(this.confirmDelete === `${agent}:${e.line}`
-            ? h_flex().gap(SPACE[2]).items_center()
-              .child(actionButton(c, `bh-know-del-yes-${e.line}`, "Delete", (_ev, cx) => { cx.stop_propagation(); this.deleteEntry(agent, e, cx); }, { tone: "danger" }))
-              .child(actionButton(c, `bh-know-del-no-${e.line}`, "Keep", (_ev, cx) => { cx.stop_propagation(); this.confirmDelete = null; cx.notify(); }))
-            : focusable(
+          .when(showActions, (el) => el
+            .child(focusable(
               pressable(
-                div().size(CHIP).flex().items_center().justify_center().rounded(SIZE.nested).text_color(c.faint).hover((s) => s.bg(c.well).text_color(c.danger))
-                  .on_click((_ev, cx) => { cx.stop_propagation(); this.confirmDelete = `${agent}:${e.line}`; this.agent = agent; cx.notify(); })
+                div().size(TARGET).flex().items_center().justify_center().rounded(SIZE.nested).text_color(c.faint).hover((s) => s.bg(c.hover).text_color(c.ink))
+                  .on_click((_ev, cx) => { cx.stop_propagation?.(); openEditor(cx); })
+                  .child(svg(ICON("external-link")).size(GLYPH.sm))
+                  .role("button")
+                  .accessibility_label(`Edit ${agent}'s knowledge`),
+              ),
+              `bh-know-edit-${agent}-${e.line}`,
+              c,
+            ))
+            .child(focusable(
+              pressable(
+                div().size(TARGET).flex().items_center().justify_center().rounded(SIZE.nested).text_color(c.faint).hover((s) => s.bg(c.well).text_color(c.danger))
+                  .on_click((_ev, cx) => { cx.stop_propagation(); this.deleteEntry(agent, e, cx); })
                   .child(svg(ICON("trash")).size(GLYPH.sm))
                   .role("button")
                   .accessibility_label(`Delete this ${agent} entry`),

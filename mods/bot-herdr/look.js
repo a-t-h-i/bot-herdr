@@ -263,6 +263,14 @@ export function spinning(el, ms) {
   return reducedMotion() ? el : el.spin(ms);
 }
 
+/** A spring on a property that snaps with no motion while motion is reduced. */
+export function springing(el, property, policy) {
+  return reducedMotion() ? el : el.spring(property, policy);
+}
+
+/** How long a newly finished thread or step holds its soft highlight before fading. */
+export const HIGHLIGHT_MS = 2000;
+
 /** Every motion's resting policy, on the three timings; MOTION hands them out through `timed`. */
 const POLICIES = {
   hover: { duration: TIMING.hover, easing: "ease-out" },

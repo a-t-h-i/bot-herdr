@@ -4,7 +4,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { ACTIVITIES, ACTIVITY_NAMES, VERB_MS, verbFor, framesFor } from "../mods/bot-herdr/working.js";
+import { ACTIVITIES, ACTIVITY_NAMES, VERB_MS, activityOf, verbFor, framesFor } from "../mods/bot-herdr/working.js";
+import { setMotionSource, springing } from "../mods/bot-herdr/look.js";
 
 test("the six cycles are the spec's: thinking, reading, editing, testing, waiting, orchestrating", () => {
   assert.deepEqual(ACTIVITY_NAMES, ["thinking", "reading", "editing", "testing", "waiting", "orchestrating"]);
@@ -46,5 +47,33 @@ test("reduced motion freezes every cycle on its first glyph", () => {
   for (const activity of ACTIVITY_NAMES) {
     assert.deepEqual(framesFor(activity, true), [ACTIVITIES[activity].frames[0]]);
     assert.deepEqual(framesFor(activity, false), ACTIVITIES[activity].frames);
+  }
+});
+
+test("activityOf classifies inflected and case-insensitive activity summaries", () => {
+  assert.equal(activityOf({ line: "Editing filters.ts" }), "editing");
+  assert.equal(activityOf({ line: "Writing x" }), "editing");
+  assert.equal(activityOf({ line: "edit look.js" }), "editing");
+  assert.equal(activityOf({ line: "Reading foo.js" }), "reading");
+  assert.equal(activityOf({ line: "Searching docs" }), "reading");
+  assert.equal(activityOf({ line: "finding files" }), "reading");
+  assert.equal(activityOf({ line: "Listing dir" }), "reading");
+  assert.equal(activityOf({ line: "Fetching spec" }), "reading");
+  assert.equal(activityOf({ line: "Run npm test" }), "testing");
+  assert.equal(activityOf({ line: "Waiting on qa" }), "waiting");
+});
+
+test("springing returns the element unchanged when reduced motion is on", () => {
+  const calls = [];
+  const el = { spring(prop, opts) { calls.push([prop, opts]); return "sprung"; } };
+  try {
+    setMotionSource(() => true);
+    assert.equal(springing(el, "left", { response: 220, damping: 0.9 }), el);
+    assert.equal(calls.length, 0);
+    setMotionSource(() => false);
+    assert.equal(springing(el, "left", { response: 220, damping: 0.9 }), "sprung");
+    assert.equal(calls.length, 1);
+  } finally {
+    setMotionSource(() => false);
   }
 });

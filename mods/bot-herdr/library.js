@@ -6,10 +6,13 @@
 
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
+import { setShared } from "herdr";
 import { SPACE, SIZE } from "./look.js";
 import { segmented, stateView } from "./switch.js";
 import { colors } from "./theme.js";
-import { setSub, subOf } from "./pages.js";
+import { setSub, subOf, showPage } from "./pages.js";
+import { KEYMAP_OPEN } from "./keymap.js";
+import { appKeyAction } from "./rowkeys.js";
 import { safeRender } from "./render-safe.js";
 import { Work } from "./work.js";
 import { Learning } from "./learning.js";
@@ -27,25 +30,51 @@ const SUB_IDS = SUBS.map((s) => s.id);
 /** The widest content column each sub-tab draws (work pages 1140, Learning's list 860). */
 const COLUMN = { knowledge: 1140, learning: 860, scripts: 1140, issues: 1140 };
 
+const SUB_INPUTS = ["search", "declineReason", "knowSearch", "inline", "taskSearch", "newTaskInput", "comment", "idea"];
+
 export class Library {
   init(given, cx) {
     // The sub-tab the destination remembers, else the one this block asks for, else Knowledge.
     this.sub = SUB_IDS.includes(given?.sub) ? given.sub : subOf("library") ?? "knowledge";
     this.published = this.sub; // the sub-tab this page last made shared, so it only follows others' changes
+    this.handle = cx.focus_handle();
+    this.typingCount = 0;
     setSub("library", this.sub);
     this.body = this.mount(this.sub, cx);
   }
 
   /** The chosen sub-tab's own view, initialised with the props it expects. */
   mount(sub, cx) {
+    this.typingCount = 0;
     const view = sub === "learning" ? new Learning() : sub === "issues" ? new Issues() : sub === "scripts" ? new Scripts() : new Work();
     const props = sub === "knowledge" ? { view: "work", tab: "knowledge" } : {};
     try {
       view.init(props, cx);
+      for (const field of SUB_INPUTS) {
+        const input = view[field];
+        if (typeof input?.on !== "function") continue;
+        input.on("focus", () => { this.typingCount++; });
+        input.on("blur", () => { this.typingCount = Math.max(0, this.typingCount - 1); });
+      }
       return view;
     } catch (err) {
       report(sub, err);
       return null;
+    }
+  }
+
+  /** View-local app keys: Ctrl+1..5 switch destinations, `?` opens the keymap when not typing. */
+  keys(e, cx) {
+    const typing = this.typingCount > 0 || Boolean(this.body && "editing" in this.body && this.body.editing);
+    const app = appKeyAction(e, { typing });
+    if (app?.kind === "page") {
+      showPage(app.page);
+      return cx.stop_propagation();
+    }
+    if (app?.kind === "keymap") {
+      setShared(KEYMAP_OPEN, true);
+      cx.stop_propagation();
+      cx.notify();
     }
   }
 
@@ -74,6 +103,8 @@ export class Library {
       .size_full()
       .bg(c.ground)
       .items_center()
+      .track_focus(this.handle)
+      .on_key_down((e, cx) => this.keys(e, cx))
       .child(h_flex().flex_none().w(this.column()).items_center().pt(SPACE[3]).child(this.tabs(c)))
       .child(div().id("bh-library-body").relative().flex_1().w_full().min_h(0).child(this.bodyNode(cx)));
   }

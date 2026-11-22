@@ -7,11 +7,17 @@ import assert from "node:assert/strict";
 
 import { KEYMAP, collisions, contexts, overlayRows } from "../mods/bot-herdr/keymap.js";
 
-test("the map names the spec's global keys and the keys of every page that takes keys", () => {
+test("the map names the spec's global keys, view-local bot-herdr keys and each page's keys", () => {
   const rows = overlayRows();
   const globals = rows.filter((r) => r.context === "global");
-  for (const key of ["Ctrl+Shift+P", "Ctrl+1", "Ctrl+2", "Ctrl+3", "Ctrl+4", "Ctrl+5", "Ctrl+.", "?"]) {
+  for (const key of ["Ctrl+Shift+P", "Ctrl+."]) {
     assert.ok(globals.some((r) => r.keys.includes(key)), `the global map names ${key}`);
+  }
+  const views = rows.filter((r) => r.context === "views");
+  for (const key of ["Ctrl+1", "Ctrl+2", "Ctrl+3", "Ctrl+4", "Ctrl+5", "?"]) {
+    const match = views.find((r) => r.keys.includes(key));
+    assert.ok(match, `the views map names ${key}`);
+    assert.match(match.action, /in bot-herdr views/i, `${key} says it runs in bot-herdr views`);
   }
   const threads = rows.filter((r) => r.context === "threads");
   for (const key of ["J", "K", "Home", "End", "Space", "Enter", "Esc", "1", "9", "Ctrl+Enter"]) {
@@ -39,7 +45,7 @@ test("the map has no collisions: one key, one row per context", () => {
 });
 
 test("contexts are the pages the map names, in the destinations order", () => {
-  assert.deepEqual(contexts(), ["global", "home", "threads", "agents"]);
+  assert.deepEqual(contexts(), ["global", "views", "home", "threads", "agents"]);
 });
 
 test("the pure helpers answer on hostile input: junk maps, not throws", () => {

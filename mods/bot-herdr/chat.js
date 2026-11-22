@@ -216,10 +216,13 @@ export class Chat {
     this.hovered = null; // entry id under the pointer: its actions show
     this.justAdded = new Set(); // newly added item ids waiting to animate their arrival
     this.arriving = new Set(); // ids drawn at rest for their one arrival frame
+    this.pendingIds = new Set(); // optimistically sent message ids muted until the engine acks them
     this.commenting = null; // the reply with its comment box open: { entry, edit: cid | null }
     this.commentBoxes = new Map(); // agent name → its comment box (a placeholder is fixed when made)
     this.composer = new Composer({
       sent: (message, cx) => this.sent(message, cx),
+      acked: (id, info, cx) => this.acked(id, info, cx),
+      failed: (id, cx) => this.dropPending(id, cx),
       relabel: (id, from, name, cx) => this.relabel(id, from, name, cx),
       born: (address, name, space) => this.expect(address, name, space),
       answered: (q, answers, cx, opts) => this.submit(q, answers, cx, opts),
@@ -391,11 +394,32 @@ export class Chat {
 
   // ── Out ────────────────────────────────────────────────────────────────────────────────────
 
-  /** Adds a message we sent; returns its feed id, so a recipient can be named later (`relabel`). */
-  sent({ text, files, paths, to }, cx) {
-    for (const t of to) if (t.address) this.expect(t.address, t.name);
+  /** Adds a message we sent; returns its feed id, so a recipient can be named later (`relabel`) or acked (`acked`). */
+  sent({ text, files, paths, to, pending = false }, cx) {
+    if (!pending) for (const t of to) if (t.address) this.expect(t.address, t.name);
     this.add({ kind: "me", text, files, paths, to: to.map((t) => t.name) }, cx);
-    return this.entries[this.entries.length - 1].id;
+    const id = this.entries[this.entries.length - 1].id;
+    if (pending && id) this.pendingIds.add(id);
+    return id;
+  }
+
+  /** Marks an optimistically sent message acknowledged by the engine, restoring full textPrimary contrast. */
+  acked(id, { to = null } = {}, cx) {
+    if (id) this.pendingIds.delete(id);
+    if (Array.isArray(to) && to.length) {
+      for (const t of to) if (t.address) this.expect(t.address, t.name);
+      const names = to.map((t) => t.name);
+      this.setFeed(this.entries.map((e) => (e.id === id ? { ...e, to: names } : e)));
+    }
+    cx.notify();
+  }
+
+  /** Drops an optimistically sent message whose send failed (the composer puts the draft back). */
+  dropPending(id, cx) {
+    if (!id) return;
+    this.pendingIds.delete(id);
+    this.setFeed(this.entries.filter((e) => e.id !== id));
+    cx.notify();
   }
 
   /** A message's recipient, once its real name is known: `from` in its `to` becomes `name`. */
@@ -894,6 +918,8 @@ export class Chat {
       ? (mv.closedMd ??= plainMarkdown(folded.text))
       : (mv.openMd ??= plainMarkdown(mv.text));
     const chips = (e.files ?? []).map((name, i) => this.sentChip(c, e, name, i));
+    const unacked = Boolean(e.pending || this.pendingIds?.has(e.id));
+    const ink = unacked ? c.textMuted : c.textPrimary;
     return v_flex()
       .id(`bh-e-${e.id}`)
       .flex_none()
@@ -910,7 +936,8 @@ export class Chat {
           .border_color(c.bubbleEdge)
           .text_size(TYPE.md)
           .line_height(`${LINE.md}px`)
-          .child(keepPress(div().child(selectable(`bh-mine-md-${e.id}-${open ? "o" : "c"}`, md))))
+          .text_color(ink)
+          .child(keepPress(div().text_color(ink).child(selectable(`bh-mine-md-${e.id}-${open ? "o" : "c"}`, md))))
           .when(folded.folded, (el) => el.child(
             clickable(
               div()

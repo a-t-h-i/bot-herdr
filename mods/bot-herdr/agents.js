@@ -6,7 +6,7 @@
 
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { settings } from "herdr";
+import { settings, shared, setShared } from "herdr";
 import { SIZE, TYPE_SCALE, LINE, SPACE, CONTROL, RADIUS, STATE, stateTone, clickable } from "./look.js";
 import { segmented, stateView, avatar } from "./switch.js";
 import { colors } from "./theme.js";
@@ -14,7 +14,9 @@ import { viewShown, openTerminal, showAgentsTab, showPage } from "./pages.js";
 import { bhJson, projectDir } from "./bh.js";
 import { mentionTone, agentStateMark } from "./indicators.js";
 import { count, ago } from "./numbers.js";
-import { isChord, keyName, nextPick, opensRow } from "./rowkeys.js";
+import { appKeyAction, isChord, keyName, nextPick, opensRow } from "./rowkeys.js";
+import { KEYMAP_OPEN } from "./keymap.js";
+import { OPEN_COUNTS, HOME_NEEDS, needsYouCount, needsYouIds, withHomeCount } from "./signals.js";
 import { PeekDrawer, PEEK_WIDTH } from "./peek.js";
 
 const REFRESH_MS = 10000;
@@ -56,7 +58,12 @@ export class Agents {
       this.busy = false;
       this.loading = false;
       this.failed = !got;
-      if (got) this.data = got;
+      if (got) {
+        this.data = got;
+        const count = needsYouCount(got);
+        setShared(OPEN_COUNTS, withHomeCount(shared(OPEN_COUNTS), count));
+        setShared(HOME_NEEDS, { count, ids: needsYouIds(got) });
+      }
       cx.notify();
     });
   }
@@ -67,8 +74,18 @@ export class Agents {
     return Array.isArray(list) ? list : [];
   }
 
-  /** The peek's keys first (Esc, 1–9); J / K / Home / End move; Space peeks; Enter opens the terminal. */
+  /** View-local app keys (Ctrl+1..5, ?), peek keys (Esc, 1–9), then J / K / Home / End / Space / Enter. */
   keys(e, cx) {
+    const app = appKeyAction(e, { typing: Boolean(this.peek?.typing) });
+    if (app?.kind === "page") {
+      showPage(app.page);
+      return cx.stop_propagation();
+    }
+    if (app?.kind === "keymap") {
+      setShared(KEYMAP_OPEN, true);
+      cx.stop_propagation();
+      return cx.notify();
+    }
     if (isChord(e)) return;
     if (this.peek?.keys(e, cx)) return cx.stop_propagation();
     if (this.peek?.typing) return;
@@ -104,6 +121,8 @@ export class Agents {
         .pt(SPACE[2])
         .pl(SPACE[3])
         .bg(c.ground)
+        .track_focus(this.handle)
+        .on_key_down((e, cx) => this.keys(e, cx))
         .child(this.tabs(c));
     }
     const open = viewShown("agents");

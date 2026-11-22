@@ -157,8 +157,8 @@ export const GLYPH_CHARS = Math.max(...Object.values(ACTIVITIES).flatMap((a) => 
 export const VERB_MS = 4000;
 
 const TESTS = /\b(test|tests|check|lint|tsc|typecheck|vitest|jest|pytest|mocha|ui-audit|verify)\b/i;
-const READS = /^(Read|Search|Find|List|Fetch|Search the web)\b/;
-const EDITS = /^(Edit|Write)\b/;
+const READS = /^(Read|Reading|Search|Searching|Find|Finding|List|Listing|Fetch|Fetching|Search the web)\b/i;
+const EDITS = /^(Edit|Editing|Write|Writing)\b/i;
 const WAITS = /^(Wait|Waiting)\b|\b(hc wait|bh inbox|bh board read)\b/i;
 const LEADS = /^(Start a subagent)\b|\b(bh spawn|bh brief|hc send|bh merge)\b/;
 

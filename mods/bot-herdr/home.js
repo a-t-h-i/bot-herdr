@@ -6,8 +6,8 @@
 
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { settings } from "herdr";
-import { SIZE, TYPE_SCALE, LINE, SPACE, CONTROL, RADIUS, STATE, stateTone, clickable, looping } from "./look.js";
+import { settings, shared, setShared } from "herdr";
+import { SIZE, TYPE_SCALE, LINE, SPACE, CONTROL, RADIUS, STATE, MOTION, HIGHLIGHT_MS, stateTone, clickable, reducedMotion } from "./look.js";
 import { stateView, avatar } from "./switch.js";
 import { sectionLabel } from "./plandoc.js";
 import { colors } from "./theme.js";
@@ -15,7 +15,9 @@ import { activeStage, openThread, openTerminal, showPage, viewShown } from "./pa
 import { bhJson, projectDir } from "./bh.js";
 import { mentionTone, agentStateMark as stateMark } from "./indicators.js";
 import { price, compact, duration, ago } from "./numbers.js";
-import { isChord, keyName, nextPick, opensRow } from "./rowkeys.js";
+import { appKeyAction, isChord, keyName, nextPick, opensRow } from "./rowkeys.js";
+import { KEYMAP_OPEN } from "./keymap.js";
+import { OPEN_COUNTS, HOME_NEEDS, needsYouCount, needsYouIds, withHomeCount, arrivedIds, newlyDone } from "./signals.js";
 import { PeekDrawer, PEEK_WIDTH } from "./peek.js";
 
 const REFRESH_MS = 10000;
@@ -53,11 +55,65 @@ export class Home {
     this.shown = false; // Home was showing at the last draw: opening it reads again
     this.width = 900;
     this.pick = 0; // the row Enter opens
+    this.seenNeeds = null; // needs-you ids seen at the last load, for the one-shot arrival pulse
+    this.pulsingNeeds = new Set(); // newly arrived needs-you ids animating 0.35 -> 1 once
+    this.seenDone = null; // thread/goal done states at the last load, for the 2 s finish highlight
+    this.finishing = new Map(); // id -> "on" | "fade" while a newly finished row highlights
+    this.publishedHomeSig = "";
     this.handle = cx.focus_handle();
     this.peek = new PeekDrawer(); // Space opens it for the picked row, Esc closes it
     this.load(cx);
     cx.timer.every(REFRESH_MS, (cx) => {
       if (viewShown("home") && activeStage() !== "terminals") this.load(cx);
+    });
+  }
+
+  /** Publishes Home's needs-you total to OPEN_COUNTS.home and HOME_NEEDS for the top-bar badge. */
+  publishHome(data) {
+    if (!data) return;
+    const count = needsYouCount(data);
+    const ids = needsYouIds(data);
+    const sig = `${count}:${ids.join(",")}`;
+    if (sig === this.publishedHomeSig) return;
+    this.publishedHomeSig = sig;
+    setShared(OPEN_COUNTS, withHomeCount(shared(OPEN_COUNTS), count));
+    setShared(HOME_NEEDS, { count, ids });
+  }
+
+  /** Tracks newly arrived needs-you items (one-shot pulse) and newly finished rows (2 s highlight). */
+  trackUpdates(data, cx) {
+    this.publishHome(data);
+    const { arrived, seen } = arrivedIds(needsYouIds(data), this.seenNeeds);
+    this.seenNeeds = seen;
+    if (arrived.length > 0 && !reducedMotion()) {
+      for (const id of arrived) this.pulsingNeeds.add(id);
+      cx.timer.after(16, (cx) => {
+        for (const id of arrived) this.pulsingNeeds.delete(id);
+        cx.notify();
+      });
+    }
+    const items = [
+      ...(Array.isArray(data?.review) ? data.review.map((t) => ({ id: t?.id, done: t?.state === "done" })) : []),
+      ...(Array.isArray(data?.fleet?.goals) ? data.fleet.goals.map((g) => ({ id: g?.task, done: g?.state === "done" })) : []),
+    ];
+    const { finished, seen: doneSeen } = newlyDone(items, this.seenDone);
+    this.seenDone = doneSeen;
+    for (const id of finished) this.triggerHighlight(id, cx);
+  }
+
+  /** Holds a soft overlay on a newly finished row for 2 s, then fades it over MOTION.highlight. */
+  triggerHighlight(id, cx) {
+    if (reducedMotion()) return;
+    this.finishing.set(id, "on");
+    cx.timer.after(HIGHLIGHT_MS, (cx) => {
+      if (!this.finishing.has(id)) return;
+      this.finishing.set(id, "fade");
+      cx.notify();
+      cx.timer.after(MOTION.highlight.duration + 32, (cx) => {
+        if (this.finishing.get(id) !== "fade") return;
+        this.finishing.delete(id);
+        cx.notify();
+      });
     });
   }
 
@@ -70,7 +126,10 @@ export class Home {
       this.busy = false;
       this.loading = false;
       this.failed = !got;
-      if (got) this.data = got;
+      if (got) {
+        this.data = got;
+        this.trackUpdates(got, cx);
+      }
       cx.notify();
     });
   }
@@ -112,8 +171,18 @@ export class Home {
     return Array.isArray(list) ? list : [];
   }
 
-  /** The peek's keys first (Esc, 1–9); J / K / Home / End move the pick; Space peeks; Enter opens. */
+  /** View-local app keys (Ctrl+1..5, ?), peek keys (Esc, 1–9), then J / K / Home / End / Space / Enter. */
   keys(e, cx) {
+    const app = appKeyAction(e, { typing: this.peek.typing });
+    if (app?.kind === "page") {
+      showPage(app.page);
+      return cx.stop_propagation();
+    }
+    if (app?.kind === "keymap") {
+      setShared(KEYMAP_OPEN, true);
+      cx.stop_propagation();
+      return cx.notify();
+    }
     if (isChord(e)) return;
     if (this.peek.keys(e, cx)) return cx.stop_propagation();
     if (this.peek.typing) return;
@@ -139,6 +208,7 @@ export class Home {
     const open = viewShown("home");
     if (open && !this.shown) cx.timer.after(1, (cx) => this.load(cx));
     this.shown = open;
+    if (this.data && !this.publishedHomeSig) this.publishHome(this.data);
     const c = colors();
     const peeking = this.peek.isOpen();
     const content = Math.max(320, Math.min(MAX, this.width - (peeking ? PEEK_WIDTH : 0) - SIZE.gutter * 2));
@@ -258,8 +328,17 @@ export class Home {
     const who = String(item?.from ?? "");
     const picked = at === this.pick;
     const label = `${kindWord(item?.kind)}: ${String(item?.title ?? "Needs you")}`;
-    // The needs-you glyph pulses: one amber pulse, nothing else (and nothing while reduced).
-    const glyph = div().flex_none().text_size(TYPE_SCALE.title).text_color(stateTone(c, "needsYou")).child(STATE.needsYou.glyph);
+    const needKey = `${item?.kind ?? "need"}:${item?.thread ?? ""}:${item?.ref ?? item?.title ?? at}`;
+    const pulsing = this.pulsingNeeds.has(needKey) && !reducedMotion();
+    // One amber pulse on arrival, then still (and no pulse under Reduce motion).
+    const glyph = div()
+      .id(`bh-home-need-glyph-${item?.thread ?? item?.ref ?? at}`)
+      .flex_none()
+      .text_size(TYPE_SCALE.title)
+      .text_color(stateTone(c, "needsYou"))
+      .opacity(pulsing ? 0.35 : 1)
+      .transition("opacity", MOTION.arrive)
+      .child(STATE.needsYou.glyph);
     return clickable(
       h_flex()
         .role("list_item")
@@ -274,7 +353,7 @@ export class Home {
         .rounded(RADIUS.control)
         .when(picked, (el) => el.bg(c.hover))
         .on_click(() => openThread(item?.thread))
-        .child(looping(glyph, "opacity", { from: 0.35, to: 1, period: 1400, easing: "ease-in-out" }))
+        .child(glyph)
         .child(v_flex().flex_1().min_w(0).gap(SPACE[1])
           .child(div().truncate().text_size(TYPE_SCALE.body).font_semibold().text_color(c.textPrimary).child(String(item?.title ?? "Needs you")))
           .when(Boolean(item?.text), (el) => el.child(div().id(`bh-row-summary-need-${item?.thread ?? item?.ref ?? at}`).truncate().text_size(TYPE_SCALE.metadata).text_color(c.textSecondary).child(String(item.text)))))
@@ -292,8 +371,10 @@ export class Home {
     const agents = (t?.agents ?? []).slice(0, AVATARS);
     const meta = threadMeta(t);
     const picked = at === this.pick;
+    const hl = t?.id ? this.finishing.get(String(t.id)) : null;
     return clickable(
       h_flex()
+        .relative()
         .role("list_item")
         .accessibility_label(`${STATE[state].word}: ${String(t?.title ?? "Thread")}`)
         .aria_selected(picked)
@@ -306,6 +387,7 @@ export class Home {
         .rounded(RADIUS.control)
         .when(picked, (el) => el.bg(c.hover))
         .on_click(() => openThread(t?.id))
+        .when(Boolean(hl), (el) => el.child(doneOverlay(c, `bh-home-thread-hl-${t.id}`, hl)))
         .child(div().flex_none().text_size(TYPE_SCALE.title).text_color(stateTone(c, state)).child(STATE[state].glyph))
         .child(div().flex_1().min_w(0).truncate().text_size(TYPE_SCALE.body).text_color(c.textPrimary).child(String(t?.title ?? "Thread")))
         .child(h_flex().flex_none().gap(SPACE[1]).children(agents.map((name) => avatar(c, name, mentionTone(c, name), 20))))
@@ -356,8 +438,10 @@ export class Home {
     const gate = Number(g?.total) ? `${Number(g.passed) || 0}/${Number(g.total)}` : "";
     const spend = Number(g?.maxSpendUsd) > 0 ? `${price(g.spendUsd)} of ${price(g.maxSpendUsd)}` : price(g?.spendUsd);
     const picked = at === this.pick;
+    const hl = g?.task ? this.finishing.get(String(g.task)) : null;
     return clickable(
       h_flex()
+        .relative()
         .role("list_item")
         .accessibility_label(`Goal: ${String(g?.title ?? "Goal")}, ${STATE[state].word}`)
         .aria_selected(picked)
@@ -370,6 +454,7 @@ export class Home {
         .rounded(RADIUS.control)
         .when(picked, (el) => el.bg(c.hover))
         .on_click(() => openThread(g?.task))
+        .when(Boolean(hl), (el) => el.child(doneOverlay(c, `bh-home-goal-hl-${g.task}`, hl)))
         // The state is glyph, colour and word, as on an agent row (never colour or glyph alone).
         .child(h_flex().flex_none().gap(SPACE[1]).items_center().text_color(stateTone(c, state))
           .child(div().text_size(TYPE_SCALE.title).child(STATE[state].glyph))
@@ -384,6 +469,18 @@ export class Home {
       { fill: c.hover },
     );
   }
+}
+
+/** Soft opacity overlay held for 2 s when a row turns done, then faded via MOTION.highlight. */
+function doneOverlay(c, id, phase) {
+  return div()
+    .id(id)
+    .absolute()
+    .inset_0()
+    .rounded(RADIUS.control)
+    .bg(stateTone(c, "done"))
+    .opacity(phase === "on" ? 0.14 : 0)
+    .transition("opacity", MOTION.highlight);
 }
 
 /** A quiet line where a section has nothing: said once, never as a zero count. */

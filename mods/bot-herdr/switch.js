@@ -8,14 +8,14 @@
 import { div, svg } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import { focused, shared, theme, nextCommand, window as herdrWindow, run, setShared } from "herdr";
-import { SIZE, TYPE, TYPE_SCALE, LINE, SPACE, CONTROL, CHIP, DOT, GLYPH, ICON, clickable, looping } from "./look.js";
+import { SIZE, TYPE, TYPE_SCALE, LINE, SPACE, CONTROL, TARGET, DOT, GLYPH, ICON, MOTION, clickable, looping, reducedMotion } from "./look.js";
 import { actionButton } from "./button.js";
 import { colors } from "./theme.js";
-import { PAGES, HOLD, activePage, showPage } from "./pages.js";
-import { OPEN_COUNTS } from "./signals.js";
+import { PAGES, HOLD, activePage, showPage, wakeGoal } from "./pages.js";
+import { OPEN_COUNTS, HOME_NEEDS, arrivedIds } from "./signals.js";
 import { alpha, breatheFor } from "./working.js";
 import { KEYMAP_OPEN } from "./keymap.js";
-import { bhJson, projectDir } from "./bh.js";
+import { bh, bhJson, projectDir } from "./bh.js";
 
 const HOLD_MS = 3000;
 /** herdr's own tabs (mods/tabs) are 29px tall; the page switch's tabs match them. */
@@ -137,7 +137,7 @@ export function filterChip(c, { id, label, count = null, on = false, onClick }) 
       .role("tab")
       .aria_selected(on)
       .flex_none()
-      .h(CHIP)
+      .h(TARGET)
       .px(SPACE[2])
       .gap(SPACE[1])
       .items_center()
@@ -239,8 +239,10 @@ export function stateView(c, { id, title, line = null, action = null, loading = 
 export class Switch {
   init(_props, cx) {
     this.where = null;
+    this.seenHomeNeeds = null;
+    this.homePulsing = false;
     // ctrl+shift+m (keys.json: "bot-herdr.focus") opens Threads and puts the keyboard in it;
-    // ? opens the map on any page; ctrl+. pauses or resumes the current goal.
+    // ctrl+. (keys.json: "bot-herdr.goal") pauses or resumes the current goal.
     cx.spawn(async (cx) => {
       for (;;) {
         const command = await nextCommand();
@@ -248,25 +250,20 @@ export class Switch {
         else if (command === "map") setShared(KEYMAP_OPEN, true);
         else if (command === "goal") this.goal(cx);
         else if (PAGES.some((p) => p.id === command)) showPage(command);
-        else {
-          // herdr's own tab.select:N (keys.json: ctrl-1..ctrl-5) picks the five layout tabs,
-          // which are the five destinations: Home, Threads, Agents, Library and Settings.
-          const tab = /^tab\.select:(\d+)$/.exec(String(command ?? ""));
-          if (tab) showPage(PAGES[Math.max(0, Number(tab[1]) - 1)]?.id ?? "home");
-        }
         cx.notify();
       }
     });
   }
 
-  /** Ctrl+.: pause or resume the in-flight goal (the fleet's goals from `bh home`). */
+  /** Ctrl+.: pause or resume the in-flight goal (the fleet's goals from `bh home`); resume wakes the Orchestrator. */
   async goal(cx) {
     const got = await bhJson(["home"], { cwd: projectDir() });
     const g = (got?.fleet?.goals ?? []).find((x) => x?.task && !x.stopped && x.state !== "reached" && x.state !== "done");
     if (!g) return;
     const resume = Boolean(g.paused || g.state === "paused");
     cx.spawn(async (cx) => {
-      await bhJson(["goal", resume ? "resume" : "pause", g.task, "--json"], { cwd: projectDir() });
+      const r = await bh(["goal", resume ? "resume" : "pause", g.task, "--json"], { cwd: projectDir() });
+      if (resume && r.code === 0) wakeGoal({ id: g.task, title: g.title });
       cx.notify();
     });
   }
@@ -289,10 +286,27 @@ export class Switch {
     const t = /** @type {Record<string, import("gpui-kit").Color>} */ (theme());
     const active = activePage();
     // A destination's open-question count, so a question is never missed from another page. A
-    // question is about a plan or a chat, and both are the same thread now.
+    // question is about a plan or a chat, and both are the same thread now. Home reads its total
+    // needs-you count from OPEN_COUNTS.home (with HOME_NEEDS as fallback so question polls never clobber it).
     const counts = /** @type {Record<string, number> | null} */ (shared(OPEN_COUNTS)) ?? {};
+    const homeNeeds = /** @type {{ count?: number, ids?: string[] } | null} */ (shared(HOME_NEEDS));
+    if (Array.isArray(homeNeeds?.ids)) {
+      const { arrived, seen } = arrivedIds(homeNeeds.ids, this.seenHomeNeeds);
+      this.seenHomeNeeds = seen;
+      if (arrived.length > 0 && !reducedMotion()) {
+        this.homePulsing = true;
+        cx.timer.after(16, (cx) => {
+          this.homePulsing = false;
+          cx.notify();
+        });
+      }
+    }
     const countOf = (id) => {
-      const n = id === "threads" ? (Number(counts.chat) || 0) + (Number(counts.plans) || 0) : Number(counts[id]);
+      const n = id === "threads"
+        ? (Number(counts.chat) || 0) + (Number(counts.plans) || 0)
+        : id === "home"
+          ? Number(counts.home ?? homeNeeds?.count)
+          : Number(counts[id]);
       return Number.isFinite(n) && n > 0 ? n : null;
     };
     const tabs = PAGES.filter((p) => !p.gear);
@@ -316,7 +330,7 @@ export class Switch {
         .min_w(0)
         .items_center()
         .gap(SPACE[1])
-        .children(tabs.map((p, i) => pageTab(c, { ...p, i, n: PAGES.length, height: HERDR_TAB, on: p.id === active, count: countOf(p.id), pulse: p.id === "home", onClick: () => showPage(p.id) })))
+        .children(tabs.map((p, i) => pageTab(c, { ...p, i, n: PAGES.length, height: HERDR_TAB, on: p.id === active, count: countOf(p.id), needsBadge: p.id === "home", pulsing: p.id === "home" && this.homePulsing, onClick: () => showPage(p.id) })))
         .child(div().flex_1())
         .child(pageTab(c, { ...gear, label: null, i: PAGES.length - 1, n: PAGES.length, height: HERDR_TAB, on: gear.id === active, a11y: gear.label, padX: SPACE[3], onClick: () => showPage(gear.id) })))
       // The window's own buttons are controls, not destinations: outside the tab list, at the end.
@@ -348,7 +362,7 @@ function windowButtons(c) {
  * with the same underline kept transparent otherwise so nothing moves when the pick changes
  * (Tabs and selection). An icon-only tab — the Settings gear — carries its name as its label.
  */
-function pageTab(c, { id, label = null, icon = null, on, count = null, i = 0, n = 1, height = HERDR_TAB, padX = SPACE[4], a11y = null, pulse = false, onClick }) {
+function pageTab(c, { id, label = null, icon = null, on, count = null, i = 0, n = 1, height = HERDR_TAB, padX = SPACE[4], a11y = null, needsBadge = false, pulsing = false, onClick }) {
   return clickable(
     div()
       .role("tab")
@@ -371,10 +385,18 @@ function pageTab(c, { id, label = null, icon = null, on, count = null, i = 0, n 
       .on_click(onClick)
       .when(Boolean(icon), (el) => el.child(svg(ICON(icon)).flex_none().size(GLYPH.sm)))
       .when(Boolean(label), (el) => el.child(label))
-      // The Home tab's badge pulses while needs-you exists on the app; under Reduce motion
-      // `looping` rests it at full opacity instead of fading.
-      .when(pulse && count != null, (el) => el.child(looping(div().text_size(TYPE_SCALE.metadata).font_semibold().text_color(on ? c.accent : c.textMuted).child(String(count)), "opacity", { from: 0.35, to: 1, period: 1400, easing: "ease-in-out" })))
-      .when(!pulse && count != null, (el) => el.child(div().text_size(TYPE_SCALE.metadata).font_semibold().text_color(on ? c.accent : c.textMuted).child(String(count)))),
+      // The Home tab's needs-you badge draws in amber and pulses once on arrival (still under Reduce motion).
+      .when(needsBadge && count != null, (el) => el.child(
+        div()
+          .id("bh-pages-home-badge")
+          .text_size(TYPE_SCALE.metadata)
+          .font_semibold()
+          .text_color(c.stateNeedsYou)
+          .opacity(pulsing && !reducedMotion() ? 0.35 : 1)
+          .transition("opacity", MOTION.arrive)
+          .child(String(count)),
+      ))
+      .when(!needsBadge && count != null, (el) => el.child(div().text_size(TYPE_SCALE.metadata).font_semibold().text_color(on ? c.accent : c.textMuted).child(String(count)))),
     c,
     `bh-pages-${id}`, { edge: true },
   );

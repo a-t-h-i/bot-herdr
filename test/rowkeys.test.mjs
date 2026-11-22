@@ -4,7 +4,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isChord, keyName, nextPick, opensRow } from "../mods/bot-herdr/rowkeys.js";
+import { appKeyAction, destinationForKey, isChord, keyName, nextPick, opensKeymap, opensRow } from "../mods/bot-herdr/rowkeys.js";
 
 test("nextPick moves J / K and the arrows by one and wraps, Home and End jump to the ends", () => {
   assert.equal(nextPick("j", 0, 3), 1);
@@ -28,4 +28,20 @@ test("Enter opens the picked row, and a chord belongs to the app", () => {
   assert.equal(isChord({ modifiers: { alt: true } }), true);
   assert.equal(isChord({ modifiers: {} }), false);
   assert.equal(keyName({ key: "J" }), "j");
+});
+
+test("view-local Ctrl+1..5 and ? map to destinations and keymap without clobbering text input", () => {
+  assert.equal(destinationForKey({ key: "1", modifiers: { control: true } }), "home");
+  assert.equal(destinationForKey({ key: "2", modifiers: { control: true } }), "threads");
+  assert.equal(destinationForKey({ key: "3", modifiers: { control: true } }), "agents");
+  assert.equal(destinationForKey({ key: "4", modifiers: { control: true } }), "library");
+  assert.equal(destinationForKey({ key: "5", modifiers: { platform: true } }), "settings");
+  assert.equal(destinationForKey({ key: "6", modifiers: { control: true } }), null);
+  assert.equal(destinationForKey({ key: "1", modifiers: {} }), null);
+  assert.equal(opensKeymap({ key: "?", key_char: "?", modifiers: {} }), true);
+  assert.equal(opensKeymap({ key: "/", modifiers: { shift: true } }), true);
+  assert.equal(opensKeymap({ key: "?", modifiers: { control: true } }), false);
+  assert.deepEqual(appKeyAction({ key: "?", key_char: "?", modifiers: {} }, { typing: false }), { kind: "keymap" });
+  assert.equal(appKeyAction({ key: "?", key_char: "?", modifiers: {} }, { typing: true }), null);
+  assert.deepEqual(appKeyAction({ key: "2", modifiers: { control: true } }, { typing: true }), { kind: "page", page: "threads" });
 });

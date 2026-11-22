@@ -7,7 +7,7 @@
 import { div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { hc } from "herdr";
-import { SIZE, TYPE_SCALE, LINE, SPACE, CONTROL, RADIUS, STATE, stateTone, clickable } from "./look.js";
+import { SIZE, TYPE_SCALE, LINE, SPACE, CONTROL, RADIUS, STATE, MOTION, stateTone, clickable, reducedMotion } from "./look.js";
 import { actionButton } from "./button.js";
 import { sectionLabel } from "./plandoc.js";
 import { bhJson, projectDir } from "./bh.js";
@@ -19,6 +19,7 @@ import { peekModel, costLine, optionForKey } from "./threadview.js";
 export const PEEK_WIDTH = 400;
 
 const FORMAT = { price, compact, duration };
+const OPTION_H = CONTROL + SPACE[2]; // fixed height so unchosen options fold cleanly to 0 over MOTION.fold
 
 export class PeekDrawer {
   /** Built in the owner's `init` (an input state needs a live host). */
@@ -28,6 +29,7 @@ export class PeekDrawer {
     this.loading = false;
     this.problem = null; // a send or read that failed, said in one line
     this.chosen = -1; // the question option picked (the rest fold away)
+    this.folded = false; // true once unchosen options finish folding (instant under Reduce motion)
     this.typing = false; // the reply box has the keyboard: the owner's row keys stand down
     this.sending = false;
     this.input = InputState.new({ placeholder: "Reply…" });
@@ -59,6 +61,7 @@ export class PeekDrawer {
     this.answer = null;
     this.problem = null;
     this.chosen = -1;
+    this.folded = false;
     this.load(cx);
     cx.notify();
   }
@@ -66,6 +69,8 @@ export class PeekDrawer {
   close(cx) {
     this.target = null;
     this.answer = null;
+    this.chosen = -1;
+    this.folded = false;
     this.typing = false;
     cx.notify();
   }
@@ -115,10 +120,19 @@ export class PeekDrawer {
     return true;
   }
 
-  /** A question option, picked: it gets the check, the rest fold away, and it goes as the reply. */
+  /** A question option, picked: it gets the check, the rest fold away over MOTION.fold (instant if reduced), and it goes as the reply. */
   pick(i, m, cx) {
     if (this.chosen >= 0) return;
     this.chosen = i;
+    this.folded = reducedMotion();
+    if (!this.folded) {
+      cx.timer.after(MOTION.fold.duration + 16, (cx) => {
+        if (this.chosen !== i) return;
+        this.folded = true;
+        cx.notify();
+      });
+    }
+    cx.notify();
     this.send(m.question.options[i], cx);
   }
 
@@ -142,6 +156,7 @@ export class PeekDrawer {
         this.load(cx);
       } else {
         this.chosen = -1;
+        this.folded = false;
         this.problem = `Couldn't send to ${to.name}. Check that it is still running, then send again.`;
       }
       cx.notify();
@@ -208,17 +223,29 @@ export class PeekDrawer {
   /** The open question: its text, then each option as a card numbered for its key. */
   questionCard(c, m) {
     const q = m.question;
-    const options = this.chosen >= 0 ? [this.chosen] : q.options.map((_o, i) => i);
+    const options = this.chosen >= 0 && this.folded ? [this.chosen] : q.options.map((_o, i) => i);
     return v_flex().id("bh-answer-card").role("group").accessibility_label(`Question: ${q.text}`).gap(SPACE[2]).p(SPACE[3]).rounded(RADIUS.card).border_1().border_color(c.edge)
       .child(div().text_size(TYPE_SCALE.body).font_semibold().line_height(`${LINE.md}px`).text_color(c.textPrimary).child(q.text))
       .when(!q.options.length, (el) => el.child(div().text_size(TYPE_SCALE.metadata).text_color(c.textMuted).child("Answer it in the reply box below.")))
-      .children(options.map((i) => this.option(c, q.options[i], i, m)));
+      .children(options.map((i) => this.option(c, q.options[i], i, m, this.chosen >= 0 && i !== this.chosen)));
   }
 
-  option(c, label, i, m) {
+  option(c, label, i, m, folding = false) {
     const picked = this.chosen === i;
+    if (folding) {
+      return h_flex()
+        .id(`bh-answer-card-${i}`)
+        .h(0)
+        .opacity(0)
+        .overflow_hidden()
+        .transition("height", MOTION.fold)
+        .transition("opacity", MOTION.fold);
+    }
     return clickable(
-      h_flex().role("button").accessibility_label(`Option ${i + 1}: ${label}`).min_h(CONTROL).px(SPACE[3]).gap(SPACE[3]).items_center().rounded(RADIUS.control).bg(c.ground)
+      h_flex().role("button").accessibility_label(`Option ${i + 1}: ${label}`).h(OPTION_H).px(SPACE[3]).gap(SPACE[3]).items_center().overflow_hidden().rounded(RADIUS.control).bg(c.ground)
+        .opacity(1)
+        .transition("height", MOTION.fold)
+        .transition("opacity", MOTION.fold)
         .on_click((_e, cx) => this.pick(i, m, cx))
         .child(div().flex_none().text_size(TYPE_SCALE.metadata).text_color(picked ? c.accent : c.textMuted).child(picked ? "✓" : String(i + 1)))
         .child(div().flex_1().min_w(0).text_size(TYPE_SCALE.body).text_color(c.textPrimary).child(label)),

@@ -2,3 +2,4 @@ node_modules/
 .DS_Store
 .bot-herdr/tasks/*/shots/
 data/bot-herdr/logs/
+mods/bot-herdr/engine/lib/gpui-kit.d.ts

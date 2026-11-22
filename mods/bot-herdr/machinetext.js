@@ -43,13 +43,18 @@ export function machineBody(c, { id, text }) {
     .child(TextView.markdown(`${id}-body-md`, fenced(text)).selectable());
 }
 
+const COPIED_MS = 1500;
+/** Machine-line ids whose Copy button was clicked within COPIED_MS, showing "Copied" inline. */
+const copiedIds = new Set();
+
 /**
  * One muted mono line of machine text, middle-truncated. A click (or Enter, once it has focus)
- * unfolds the whole text under the line; Copy hands it to the clipboard. `lead` says what it is
- * ("branch", "TypeError: …").
+ * unfolds the whole text under the line; Copy hands it to the clipboard and reads "Copied" for 1.5 s.
+ * `lead` says what it is ("branch", "TypeError: …").
  */
 export function machineLine(c, { id, text, lead = null, expanded = false, onToggle = null }) {
   const face = mono();
+  const copied = copiedIds.has(id);
   const shown = lead ? `${lead} ${middleTruncate(text)}` : middleTruncate(text);
   const line = div()
     .flex_1()
@@ -68,11 +73,19 @@ export function machineLine(c, { id, text, lead = null, expanded = false, onTogg
     .gap(SPACE_SCALE[1])
     .items_center()
     .child(line)
-    .child(actionButton(c, `${id}-copy`, null, (_e, cx) => cx.write_to_clipboard(String(text ?? "")), {
-      icon: "copy",
+    .child(actionButton(c, `${id}-copy`, copied ? "Copied" : null, (_e, cx) => {
+      cx.write_to_clipboard(String(text ?? ""));
+      copiedIds.add(id);
+      cx.notify();
+      cx.timer.after(COPIED_MS, (cx) => {
+        copiedIds.delete(id);
+        cx.notify();
+      });
+    }, {
+      icon: copied ? null : "copy",
       tone: "quiet",
-      tooltip: "Copy",
-      a11y: "Copy",
+      tooltip: copied ? "Copied" : "Copy",
+      a11y: copied ? "Copied" : "Copy",
     }));
   if (!expanded) return row;
   return v_flex().w_full().gap(SPACE_SCALE[1]).child(row).child(machineBody(c, { id, text }));

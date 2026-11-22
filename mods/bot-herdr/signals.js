@@ -33,6 +33,9 @@ export const RESUME_MS = 10 * 60000;
  */
 export const OPEN_COUNTS = "bot-herdr.open-questions";
 
+/** Home's needs-you snapshot `{ count, ids }`, kept beside OPEN_COUNTS so polls never clobber it. */
+export const HOME_NEEDS = "bot-herdr.home-needs";
+
 /**
  * Open questions split where the tabs show them: those asked for a plan go to the Plans tab, the
  * rest to the Chat.
@@ -45,6 +48,52 @@ export function openCounts(list) {
     else chat++;
   }
   return { chat, plans };
+}
+
+/** Total items that need you from a `bh home --json` payload. */
+export function needsYouCount(home) {
+  const header = Number(home?.header?.needsYou);
+  if (Number.isFinite(header) && header >= 0) return header;
+  return Array.isArray(home?.needsYou) ? home.needsYou.length : 0;
+}
+
+/** Stable ids of a `bh home` payload's needs-you items, to detect newly arrived ones. */
+export function needsYouIds(home) {
+  if (!Array.isArray(home?.needsYou)) return [];
+  return home.needsYou.map((n, i) => `${n?.kind ?? "need"}:${n?.thread ?? ""}:${n?.ref ?? n?.title ?? i}`);
+}
+
+/** Merges Home's needs-you total into an `OPEN_COUNTS` object without dropping chat/plans. */
+export function withHomeCount(counts, home) {
+  const n = Math.max(0, Number(home) || 0);
+  return { chat: Number(counts?.chat) || 0, plans: Number(counts?.plans) || 0, home: n };
+}
+
+/**
+ * Ids that arrived since `seen`: on the first load (`seen == null`), nothing counts as newly
+ * arrived so only real transitions trigger a one-shot pulse. Returns `{ arrived, seen }`.
+ */
+export function arrivedIds(ids, seen) {
+  const next = new Set((ids ?? []).filter(Boolean).map(String));
+  if (seen == null) return { arrived: [], seen: next };
+  return { arrived: [...next].filter((id) => !seen.has(id)), seen: next };
+}
+
+/**
+ * Items whose `done` flag just turned from false to true since `prev` (a Map of id -> boolean).
+ * On the first load (`prev == null`), nothing counts as newly finished. Returns `{ finished, seen }`.
+ */
+export function newlyDone(items, prev) {
+  const next = new Map();
+  const finished = [];
+  for (const item of items ?? []) {
+    if (!item?.id) continue;
+    const id = String(item.id);
+    const done = Boolean(item.done);
+    next.set(id, done);
+    if (prev != null && prev.get(id) === false && done) finished.push(id);
+  }
+  return { finished, seen: next };
 }
 
 /**

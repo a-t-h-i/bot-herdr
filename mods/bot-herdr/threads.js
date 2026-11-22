@@ -9,8 +9,8 @@
 
 import { div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { settings, shared, run } from "herdr";
-import { SIZE, TYPE_SCALE, LINE, SPACE, CONTROL, RADIUS, STATE, stateTone, clickable, looping } from "./look.js";
+import { settings, shared, setShared, run } from "herdr";
+import { SIZE, TYPE_SCALE, LINE, SPACE, CONTROL, RADIUS, STATE, MOTION, HIGHLIGHT_MS, stateTone, clickable, reducedMotion } from "./look.js";
 import { Chat } from "./chat.js";
 import { Work } from "./work.js";
 import { safeRender } from "./render-safe.js";
@@ -22,8 +22,10 @@ import { markdownWithFoldedCode, machineLine, toggleMachine } from "./machinetex
 import { mentionTone } from "./indicators.js";
 import { bh, bhJson, projectDir } from "./bh.js";
 import { ago } from "./numbers.js";
-import { activeStage, viewShown, wakeGoal, FOCUS, OPEN_TASK, OPEN_THREAD } from "./pages.js";
-import { isChord, keyName, nextPick, opensRow } from "./rowkeys.js";
+import { activeStage, showPage, viewShown, wakeGoal, FOCUS, OPEN_TASK, OPEN_THREAD } from "./pages.js";
+import { appKeyAction, isChord, keyName, nextPick, opensRow } from "./rowkeys.js";
+import { KEYMAP_OPEN } from "./keymap.js";
+import { arrivedIds, newlyDone } from "./signals.js";
 import { PeekDrawer, PEEK_WIDTH } from "./peek.js";
 import {
   ORCHESTRATOR, SUB_TABS, STATE_ORDER, GROUP_LABELS, threadRows, groupThreads, drawnOrder, stateCounts, subOrDefault, breadcrumb,
@@ -67,6 +69,10 @@ export class Threads {
     this.expanded = new Set(); // conversation entries opened in place
     this.machineOpen = new Set(); // folded machine text opened in the plan
     this.armed = null; // Clear, once clicked, waits for a second click
+    this.seenNeeds = null; // needs-you thread ids seen at last load, for the one-shot arrival pulse
+    this.pulsingNeeds = new Set(); // newly arrived needs-you thread ids pulsing 0.35 -> 1 once
+    this.seenDone = null; // thread done states at last load, for the 2 s finish highlight
+    this.finishing = new Map(); // thread id -> "on" | "fade" while newly finished
     this.width = 900;
     this.height = 640;
     this.shown = false;
@@ -108,8 +114,45 @@ export class Threads {
       const got = await bhJson(["thread", "list"], { cwd: projectDir() });
       this.busy = false;
       this.failed = !got;
-      if (got) this.data = got;
+      if (got) {
+        this.data = got;
+        this.trackListTransitions(got, cx);
+      }
       cx.notify();
+    });
+  }
+
+  /** Tracks newly arrived needs-you threads (one-shot pulse) and newly finished threads (2 s highlight). */
+  trackListTransitions(got, cx) {
+    const rows = threadRows(got);
+    const needIds = rows.filter((r) => r.state === "needsYou").map((r) => r.id);
+    const { arrived, seen } = arrivedIds(needIds, this.seenNeeds);
+    this.seenNeeds = seen;
+    if (arrived.length > 0 && !reducedMotion()) {
+      for (const id of arrived) this.pulsingNeeds.add(id);
+      cx.timer.after(16, (cx) => {
+        for (const id of arrived) this.pulsingNeeds.delete(id);
+        cx.notify();
+      });
+    }
+    const { finished, seen: doneSeen } = newlyDone(rows.map((r) => ({ id: r.id, done: r.state === "done" })), this.seenDone);
+    this.seenDone = doneSeen;
+    for (const id of finished) this.triggerHighlight(id, cx);
+  }
+
+  /** Holds a soft overlay on a newly finished thread row for 2 s, then fades it over MOTION.highlight. */
+  triggerHighlight(id, cx) {
+    if (reducedMotion()) return;
+    this.finishing.set(id, "on");
+    cx.timer.after(HIGHLIGHT_MS, (cx) => {
+      if (!this.finishing.has(id)) return;
+      this.finishing.set(id, "fade");
+      cx.notify();
+      cx.timer.after(MOTION.highlight.duration + 32, (cx) => {
+        if (this.finishing.get(id) !== "fade") return;
+        this.finishing.delete(id);
+        cx.notify();
+      });
     });
   }
 
@@ -192,8 +235,19 @@ export class Threads {
     }
   }
 
-  /** The page's keys: the peek's first, then Esc back, then the list's J / K / Space / Enter. */
+  /** View-local app keys (Ctrl+1..5, ?), peek keys, Esc back, then list J / K / Space / Enter. */
   keys(e, cx) {
+    const typing = Boolean(this.searching || this.peek.typing || this.chat.composer.focused || this.work.typingCount > 0 || this.work.editing);
+    const app = appKeyAction(e, { typing });
+    if (app?.kind === "page") {
+      showPage(app.page);
+      return cx.stop_propagation();
+    }
+    if (app?.kind === "keymap") {
+      setShared(KEYMAP_OPEN, true);
+      cx.stop_propagation();
+      return cx.notify();
+    }
     if (isChord(e)) return;
     if (this.peek.keys(e, cx)) return cx.stop_propagation();
     const key = keyName(e);
@@ -350,15 +404,32 @@ export class Threads {
     const s = STATE[t.state] ?? STATE.idle;
     const meta = [t.steps, t.age].filter(Boolean).join(" · ");
     const picked = at === this.pick;
-    // The needs-you glyph pulses: one amber pulse, nothing else (and nothing while reduced).
-    const glyph = div().flex_none().text_size(TYPE_SCALE.title).text_color(stateTone(c, t.state)).child(s.glyph);
+    const pulsing = t.state === "needsYou" && this.pulsingNeeds.has(t.id) && !reducedMotion();
+    const hl = this.finishing.get(t.id);
+    // One amber pulse on arrival, then still (and no pulse under Reduce motion).
+    const glyph = div()
+      .id(`bh-thread-glyph-${t.id}`)
+      .flex_none()
+      .text_size(TYPE_SCALE.title)
+      .text_color(stateTone(c, t.state))
+      .opacity(pulsing ? 0.35 : 1)
+      .transition("opacity", MOTION.arrive)
+      .child(s.glyph);
     return clickable(
       rowShell(c, picked).accessibility_label(`${s.word}: ${t.title}`)
         .on_click((_e, cx) => {
           this.pick = at;
           this.openThread(t.id, cx);
         })
-        .child(t.state === "needsYou" ? looping(glyph, "opacity", { from: 0.35, to: 1, period: 1400, easing: "ease-in-out" }) : glyph)
+        .when(Boolean(hl), (el) => el.child(div()
+          .id(`bh-thread-hl-${t.id}`)
+          .absolute()
+          .inset_0()
+          .rounded(RADIUS.control)
+          .bg(stateTone(c, "done"))
+          .opacity(hl === "on" ? 0.14 : 0)
+          .transition("opacity", MOTION.highlight)))
+        .child(glyph)
         .child(v_flex().flex_1().min_w(0).gap(SPACE[1])
           .child(div().truncate().text_size(TYPE_SCALE.body).text_color(c.textPrimary).child(t.title))
           .when(Boolean(t.summary), (el) => el.child(div().id(`bh-row-summary-thread-${t.id}`).truncate().text_size(TYPE_SCALE.metadata).text_color(c.textSecondary).child(t.summary))))
@@ -570,6 +641,7 @@ export class Threads {
 /** A list row's frame: one height, one pick style. */
 function rowShell(c, picked) {
   return h_flex()
+    .relative()
     .role("list_item")
     .aria_selected(picked)
     .w_full()

@@ -25,3 +25,33 @@ export const opensRow = (key) => ["enter", "return"].includes(String(key ?? "").
 
 /** Whether the key is a chord (Ctrl, Cmd or Alt held): chords belong to the app, not the row list. */
 export const isChord = (e) => Boolean(e?.modifiers?.control || e?.modifiers?.platform || e?.modifiers?.alt);
+
+/** The five top-bar destinations, in Ctrl+1..5 order. */
+export const DESTINATIONS = ["home", "threads", "agents", "library", "settings"];
+
+/** Which top-bar destination Ctrl+1..5 picks inside a bot-herdr view, or null for any other key. */
+export function destinationForKey(e) {
+  const m = e?.modifiers;
+  if (!(m?.control || m?.platform) || m?.alt || m?.shift) return null;
+  const n = Number(e?.key);
+  return Number.isInteger(n) && n >= 1 && n <= DESTINATIONS.length ? DESTINATIONS[n - 1] : null;
+}
+
+/** Whether the key opens or toggles the keyboard map (`?`, never as a Ctrl/Cmd/Alt chord). */
+export function opensKeymap(e) {
+  if (isChord(e)) return false;
+  const key = String(e?.key ?? "");
+  const ch = String(e?.key_char ?? "");
+  return ch === "?" || key === "?" || (key === "/" && Boolean(e?.modifiers?.shift));
+}
+
+/**
+ * View-local app keys shared by every destination root: Ctrl+1..5 switch destinations, and `?`
+ * opens the keyboard map when no text input has focus. Returns `{ kind, page? }` or null.
+ */
+export function appKeyAction(e, { typing = false } = {}) {
+  const page = destinationForKey(e);
+  if (page) return { kind: "page", page };
+  if (!typing && opensKeymap(e)) return { kind: "keymap" };
+  return null;
+}

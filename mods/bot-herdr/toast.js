@@ -7,7 +7,7 @@
 import { div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { props, settings, setShared, closeOverlay, run } from "herdr";
-import { ICON, TYPE, LINE, SPACE, GLYPH, MOTION, clickable, timed } from "./look.js";
+import { ICON, TYPE, LINE, SPACE, GLYPH, MOTION, clickable, timed, springing } from "./look.js";
 import { colors } from "./theme.js";
 import { activePage } from "./pages.js";
 import { TOAST_KEY, noteText } from "./toasts.js";
@@ -68,13 +68,16 @@ export class Toast {
           this.close();
         })
         .child(
-          h_flex()
-            .absolute()
-            .left(0)
-            .right(0)
-            .top(this.up ? 0 : SPACE[4])
+          springing(
+            h_flex()
+              .absolute()
+              .left(0)
+              .right(0)
+              .top(this.up ? 0 : SPACE[4]),
             // Up with a little give; going, straight down with no bounce while it fades.
-            .spring("top", this.out ? { response: 260, damping: 1 } : { response: 420, damping: 0.78 })
+            "top",
+            this.out ? { response: 260, damping: 1 } : { response: 420, damping: 0.78 },
+          )
             .h_full()
             .px(SPACE[4])
             .gap(SPACE[3])

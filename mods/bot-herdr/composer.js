@@ -28,7 +28,7 @@ import {
   shared, setShared, appHome,
 } from "herdr";
 import { showSettings, hold } from "./pages.js";
-import { SIZE, MOTION, ICON, TYPE, LINE, SPACE, ROW, CHIP, CONTROL, TARGET, MARK, DOT, PIP, HAIR, GLYPH, CLEAR, tint, readable, textWidth, rowsFor, baseName, upFrom, filterEntries, togglePick, sizeText, clickable, pressable, focusable, spinning, timed } from "./look.js";
+import { SIZE, MOTION, ICON, TYPE, LINE, SPACE, ROW, CHIP, CONTROL, TARGET, MARK, DOT, PIP, HAIR, GLYPH, CLEAR, tint, readable, textWidth, rowsFor, baseName, upFrom, filterEntries, togglePick, sizeText, clickable, pressable, focusable, spinning, springing, timed } from "./look.js";
 import { actionButton } from "./button.js";
 import { stateView } from "./switch.js";
 import { colors } from "./theme.js";
@@ -1295,6 +1295,13 @@ export class Composer {
     this.sending = true;
     // The arrow shoots up out of the key as the message goes.
     this.sendFx = { n: this.sendFx.n, phase: "launch" };
+    // Optimistic send: show the message muted in the feed at once until the engine acks it.
+    const initialTo = result.steps
+      .filter((s) => s.do === "send" || s.do === "start")
+      .map((s) => (s.do === "send" ? { address: s.address, name: this.nameOf(s.address) } : { address: null, name: s.tab ?? s.name }));
+    const pendingId = initialTo.length
+      ? this.hooks.sent?.({ text: sentText ?? "", files: keptFiles.map((f) => f.name), paths: keptFiles.map((f) => f.path), to: initialTo, pending: true }, cx)
+      : null;
     cx.notify();
     // A plain message (no @, no /command) to the Orchestrator may go to one agent instead.
     const first = result.steps[0];
@@ -1320,7 +1327,12 @@ export class Composer {
           failed.push(e instanceof Error ? e.message : String(e));
         }
       }
-      if (to.length) this.hooks.sent?.({ text: sentText ?? "", files: keptFiles.map((f) => f.name), paths: keptFiles.map((f) => f.path), to }, cx);
+      if (to.length) {
+        if (pendingId) this.hooks.acked?.(pendingId, { to }, cx);
+        else this.hooks.sent?.({ text: sentText ?? "", files: keptFiles.map((f) => f.name), paths: keptFiles.map((f) => f.path), to }, cx);
+      } else if (pendingId) {
+        this.hooks.failed?.(pendingId, cx);
+      }
       this.sending = false;
       this.landSend(cx);
       if (failed.length) {
@@ -1349,12 +1361,17 @@ export class Composer {
       this.trigger = null;
       this.mode = null;
     }
-    const id = this.hooks.sent?.({ text: question, files: [], paths: [], to: [{ address: null, name: "knowledge-scout" }] }, cx);
+    const id = this.hooks.sent?.({ text: question, files: [], paths: [], to: [{ address: null, name: "knowledge-scout" }], pending: true }, cx);
     cx.notify();
     cx.spawn(async (cx) => {
       const r = await bh(["knowledge", "ask", "--data", enc(question), "--json"], { cwd: projectDir() });
-      if (r.code !== 0) this.say((r.stderr || r.stdout).trim().split("\n")[0] || "Couldn't ask Scout.", cx, "error");
-      else this.hooks.relabel?.(id, "knowledge-scout", askedName(r.stdout) ?? "knowledge-scout", cx);
+      if (r.code !== 0) {
+        if (id) this.hooks.failed?.(id, cx);
+        this.say((r.stderr || r.stdout).trim().split("\n")[0] || "Couldn't ask Scout.", cx, "error");
+      } else {
+        if (id) this.hooks.acked?.(id, {}, cx);
+        this.hooks.relabel?.(id, "knowledge-scout", askedName(r.stdout) ?? "knowledge-scout", cx);
+      }
       cx.notify();
     });
   }
@@ -1805,23 +1822,35 @@ export class Composer {
     const textH = leaving ? H : h;
     const textTop = leaving ? 0 : top;
     const textLeft = Math.round((width - textW) / 2);
-    const shape = div()
-      .id(`bc-toast-shape-${t.n}`)
-      .absolute()
-      .top(top)
-      .left(left)
-      .w(w)
-      .h(h)
-      .bg(c.fill)
-      .border_1()
-      .border_color(c.edge)
-      .rounded(SIZE.radius)
-      .shadow_md()
-      .child(div().absolute().top(0).left(SIZE.radius).right(SIZE.radius).h(HAIR).bg(c.rim))
-      .spring("top", TOAST_SPRINGS.rise)
-      .spring("height", TOAST_SPRINGS.height)
-      .spring("width", TOAST_SPRINGS.width)
-      .spring("left", TOAST_SPRINGS.width);
+    const shape = springing(
+      springing(
+        springing(
+          springing(
+            div()
+              .id(`bc-toast-shape-${t.n}`)
+              .absolute()
+              .top(top)
+              .left(left)
+              .w(w)
+              .h(h)
+              .bg(c.fill)
+              .border_1()
+              .border_color(c.edge)
+              .rounded(SIZE.radius)
+              .shadow_md()
+              .child(div().absolute().top(0).left(SIZE.radius).right(SIZE.radius).h(HAIR).bg(c.rim)),
+            "top",
+            TOAST_SPRINGS.rise,
+          ),
+          "height",
+          TOAST_SPRINGS.height,
+        ),
+        "width",
+        TOAST_SPRINGS.width,
+      ),
+      "left",
+      TOAST_SPRINGS.width,
+    );
     const tone = toneOf(c, item.kind);
     let body = h_flex()
       .id(`bc-toast-body-${t.n}`)
@@ -1845,7 +1874,7 @@ export class Composer {
         this.dropToast(item.id, cx);
       }, { tone: "secondary" })));
     // Leaving, the words stay where they are (no spring to a new place) and only fade.
-    if (!leaving) body = body.spring("top", TOAST_SPRINGS.rise);
+    if (!leaving) body = springing(body, "top", TOAST_SPRINGS.rise);
     return div().id("bc-toast").absolute().left(0).right(0).top(-slot).h(slot).child(shape).child(body);
   }
 
@@ -1946,19 +1975,31 @@ export class Composer {
       .bg(c.well)
       .when(canSend, (el) => el.hover((s) => s.opacity(0.92)))
       .on_click((_e, cx) => this.send(cx))
-      .child(layer("bc-send-fill", fill)
-        .left((TARGET - fill) / 2)
-        .top((TARGET - fill) / 2)
-        .rounded_full()
-        .bg(c.accent)
-        .border_b(1)
-        .border_color(c.accentLip)
-        .opacity(canSend ? 1 : 0)
-        .transition("opacity", MOTION.hover)
-        .spring("width", canSend ? SEND_GROW : SEND_SHRINK)
-        .spring("height", canSend ? SEND_GROW : SEND_SHRINK)
-        .spring("left", canSend ? SEND_GROW : SEND_SHRINK)
-        .spring("top", canSend ? SEND_GROW : SEND_SHRINK))
+      .child(springing(
+        springing(
+          springing(
+            springing(
+              layer("bc-send-fill", fill)
+                .left((TARGET - fill) / 2)
+                .top((TARGET - fill) / 2)
+                .rounded_full()
+                .bg(c.accent)
+                .border_b(1)
+                .border_color(c.accentLip)
+                .opacity(canSend ? 1 : 0)
+                .transition("opacity", MOTION.hover),
+              "width",
+              canSend ? SEND_GROW : SEND_SHRINK,
+            ),
+            "height",
+            canSend ? SEND_GROW : SEND_SHRINK,
+          ),
+          "left",
+          canSend ? SEND_GROW : SEND_SHRINK,
+        ),
+        "top",
+        canSend ? SEND_GROW : SEND_SHRINK,
+      ))
       .child(layer(`bc-send-arrow-${fx.n}`, GLYPH.lg)
         .left(mid)
         .top(arrowTop)

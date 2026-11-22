@@ -3,7 +3,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { openCounts, seatStates, awaited, RESUME_MS, boardTone, boardAge, boardRows, BOARD_SHOWN } from "../mods/bot-herdr/signals.js";
+import { openCounts, needsYouCount, needsYouIds, withHomeCount, arrivedIds, newlyDone, seatStates, awaited, RESUME_MS, boardTone, boardAge, boardRows, BOARD_SHOWN } from "../mods/bot-herdr/signals.js";
 
 test("signals: open questions split where the tabs show them, plan and chat", () => {
   const list = [
@@ -80,4 +80,26 @@ test("signals: the board newest first, ten at a time until asked for all of it",
   assert.equal(all.rows[12].n, 1);
   assert.deepEqual(boardRows([], false), { rows: [], rest: 0 });
   assert.deepEqual(boardRows(null, true), { rows: [], rest: 0 });
+});
+
+test("signals: home needs-you count, arrival pulse detection, and newly-done transitions", () => {
+  const home = { header: { needsYou: 3 }, needsYou: [{ kind: "question", thread: "t1", ref: "q1" }, { kind: "blocker", thread: "t2", ref: "s1" }] };
+  assert.equal(needsYouCount(home), 3);
+  assert.equal(needsYouCount({ needsYou: [{ kind: "issue" }] }), 1);
+  assert.equal(needsYouCount(null), 0);
+  assert.deepEqual(withHomeCount({ chat: 1, plans: 2 }, 3), { chat: 1, plans: 2, home: 3 });
+  const ids = needsYouIds(home);
+  const first = arrivedIds(ids, null);
+  assert.deepEqual(first.arrived, [], "initial load never fires an arrival pulse");
+  const second = arrivedIds([...ids, "approval:t3:r1"], first.seen);
+  assert.deepEqual(second.arrived, ["approval:t3:r1"]);
+  const third = arrivedIds([...ids, "approval:t3:r1"], second.seen);
+  assert.deepEqual(third.arrived, [], "steady items do not re-pulse");
+
+  const d0 = newlyDone([{ id: "t1", done: false }, { id: "t2", done: true }], null);
+  assert.deepEqual(d0.finished, [], "already-done items on first load do not highlight");
+  const d1 = newlyDone([{ id: "t1", done: true }, { id: "t2", done: true }], d0.seen);
+  assert.deepEqual(d1.finished, ["t1"]);
+  const d2 = newlyDone([{ id: "t1", done: true }, { id: "t2", done: true }], d1.seen);
+  assert.deepEqual(d2.finished, []);
 });

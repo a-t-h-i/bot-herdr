@@ -24,6 +24,8 @@ import { SIZE, TYPE, LINE, SPACE, palette, setMotionSource, motionReduced, REDUC
 import { colors } from "./theme.js";
 import { actionButton } from "./button.js";
 import { KEYMAP_OPEN, overlayRows } from "./keymap.js";
+import { activePage, activeStage } from "./pages.js";
+import { keyName, opensKeymap } from "./rowkeys.js";
 import { safeInit, safeRender, formatRenderError, errorSignature } from "./render-safe.js";
 import { Chat } from "./chat.js";
 import { Switch } from "./switch.js";
@@ -161,6 +163,9 @@ function fallbackCard(c, err, showDetails, onRetry, onToggle) {
     .child(card);
 }
 
+/** Full-page views that may draw the keyboard map overlay (never top/bottom bars, toasts or popups). */
+const MAIN_PAGES = new Set(["home", "threads", "agents", "library", "settings", "chat", "work", "issues", "learning", "scripts", "metrics"]);
+
 export class BotHerdr extends View {
   init(given, cx) {
     this.loggedErrors = new Set();
@@ -169,7 +174,18 @@ export class BotHerdr extends View {
     this.page = null;
     this.viewName = "chat";
     this.initProps = {};
+    this.keymapHandle = cx.focus_handle();
+    this.keymapWasOpen = false;
     this.mountPage(given, cx);
+  }
+
+  /** Whether this BotHerdr block is the active main page view (not switch, status, toast or a popup). */
+  isMainPage() {
+    if (!MAIN_PAGES.has(this.viewName)) return false;
+    if (this.viewName === "agents" && this.initProps?.sub === "terminals") return false;
+    const active = activePage();
+    if (!active) return true;
+    return activeStage() !== "terminals" && active === this.viewName;
   }
 
   /** Reads view props without throwing if the host props lookup fails. */
@@ -261,19 +277,27 @@ export class BotHerdr extends View {
       this.lastError = error;
       return this.renderFallback(error);
     }
-    if (shared(KEYMAP_OPEN)) return keymapOverlayCard(safeColors(), node);
+    const mapOpen = this.isMainPage() && Boolean(shared(KEYMAP_OPEN));
+    if (mapOpen && !this.keymapWasOpen) {
+      this.keymapWasOpen = true;
+      cx.timer.after(1, () => this.keymapHandle?.focus());
+    } else if (!mapOpen && this.keymapWasOpen) {
+      this.keymapWasOpen = false;
+    }
+    if (mapOpen) return keymapOverlayCard(safeColors(), node, this.keymapHandle);
     return node;
   }
 }
 
-/** The map overlay over the active page while KEYMAP_OPEN: the keymap table in a small card. */
-function keymapOverlayCard(c, node) {
+/** The map overlay over the active main page while KEYMAP_OPEN: focused on open, Esc or `?` closes it. */
+function keymapOverlayCard(c, node, handle) {
   const rows = overlayRows();
   const card = clickable(
     v_flex()
       .id("bh-keymap")
       .role("dialog")
       .accessibility_label("Keyboard map")
+      .track_focus(handle)
       .absolute()
       .bottom(SPACE[5])
       .left(SPACE[5])
@@ -287,6 +311,12 @@ function keymapOverlayCard(c, node) {
       .border_1()
       .border_color(c.edge)
       .on_click(() => setShared(KEYMAP_OPEN, false))
+      .on_key_down((e, cx) => {
+        if (keyName(e) !== "escape" && !opensKeymap(e)) return;
+        setShared(KEYMAP_OPEN, false);
+        cx.stop_propagation();
+        cx.notify();
+      })
       .children(rows.map((r, i) =>
         h_flex()
           .id(`bh-keymap-row-${i}`)

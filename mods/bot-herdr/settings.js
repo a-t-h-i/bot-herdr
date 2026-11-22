@@ -15,7 +15,7 @@
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, TextareaState, Textarea } from "gpui-base";
 import { agents, panes, spaces, settings, shared, setShared, knownAgents, notify, props, closeOverlay, openOverlay } from "herdr";
-import { SIZE, ICON, TYPE, LINE, SPACE, CONTROL, CHIP, MARK, PIP, HAIR, GLYPH, clickable, pressable, focusable, textWidth, activatesOn, reducedMotion, REDUCE_MOTION_KEY } from "./look.js";
+import { SIZE, ICON, TYPE, LINE, SPACE, CONTROL, CHIP, TARGET, MARK, PIP, HAIR, GLYPH, clickable, pressable, focusable, textWidth, activatesOn, reducedMotion, springing, REDUCE_MOTION_KEY } from "./look.js";
 import { actionButton } from "./button.js";
 import { stateView, pill, avatar, segmented } from "./switch.js";
 import { mentionTone, alpha } from "./indicators.js";
@@ -31,7 +31,9 @@ import {
 } from "./resilienceview.js";
 import { settingsGridColumns } from "./tasksview.js";
 import { OPEN_RESILIENCE } from "./statusstrip.js";
-import { setSub, subOf } from "./pages.js";
+import { setSub, subOf, showPage } from "./pages.js";
+import { KEYMAP_OPEN } from "./keymap.js";
+import { appKeyAction } from "./rowkeys.js";
 import { Metrics } from "./metrics.js";
 import { safeRender } from "./render-safe.js";
 
@@ -205,7 +207,9 @@ export class Settings {
     this.addingStep = false;
     this.draftHarness = "";
     this.draftEffort = "";
-    this.draftModelInput = InputState.new({ placeholder: "Model id (optional)" });
+    this.handle = cx.focus_handle();
+    this.typingCount = 0;
+    this.draftModelInput = this.trackInput(InputState.new({ placeholder: "Model id (optional)" }));
     this.draftModelInput.on("submit", (_e, cx) => this.commitFallbackStep(cx));
     this.asking = {}; // harness → true while `bh models` runs for it
     this.waiting = {}; // harness → what to do with the answer (reopen its list)
@@ -218,7 +222,7 @@ export class Settings {
     this.problem = null;
     this.classifier = null; // what `bh config` reports (the key only as set / not set)
     this.access = null; // what `bh access` reports: { headless, access, allow }
-    this.allowInput = InputState.new({ placeholder: "npm test, git add, git commit" });
+    this.allowInput = this.trackInput(InputState.new({ placeholder: "npm test, git add, git commit" }));
     const saveAllow = (_e, cx) => {
       const v = this.allowInput.value().trim();
       if (this.access && v !== (this.access.allow ?? []).join(", ")) this.setAccess({ allow: v }, cx);
@@ -226,10 +230,10 @@ export class Settings {
     this.allowInput.on("submit", saveAllow);
     this.allowInput.on("blur", saveAllow);
 
-    this.keyInput = InputState.new({ placeholder: "sk-or-…" });
+    this.keyInput = this.trackInput(InputState.new({ placeholder: "sk-or-…" }));
     this.keyInput.on("submit", (_e, cx) => this.saveKey(cx));
     this.keyInput.on("blur", (_e, cx) => this.saveKey(cx));
-    this.modelInput = InputState.new({ placeholder: "The host's default" });
+    this.modelInput = this.trackInput(InputState.new({ placeholder: "The host's default" }));
     const saveModel = (_e, cx) => {
       const v = this.modelInput.value().trim();
       if (this.classifier && v !== (this.classifier.model ?? "")) this.config({ model: v }, cx);
@@ -237,8 +241,8 @@ export class Settings {
     this.modelInput.on("submit", saveModel);
     this.modelInput.on("blur", saveModel);
     // Clef's account id and Laya's base URL, saved as typed (on Enter or leaving the field).
-    this.accountIdInput = InputState.new({ placeholder: "Your Cloudflare account id" });
-    this.baseUrlInput = InputState.new({ placeholder: "The default base URL" });
+    this.accountIdInput = this.trackInput(InputState.new({ placeholder: "Your Cloudflare account id" }));
+    this.baseUrlInput = this.trackInput(InputState.new({ placeholder: "The default base URL" }));
     /** @type {Array<[import("gpui-base").InputState, string]>} */
     const savedFields = [[this.accountIdInput, "accountId"], [this.baseUrlInput, "baseUrl"]];
     for (const [state, field] of savedFields) {
@@ -495,6 +499,27 @@ export class Settings {
     cx.notify();
   }
 
+  /** Tracks focus on an InputState so view-local `?` never intercepts typing in a field. */
+  trackInput(state) {
+    state.on("focus", () => { this.typingCount++; });
+    state.on("blur", () => { this.typingCount = Math.max(0, this.typingCount - 1); });
+    return state;
+  }
+
+  /** View-local app keys: Ctrl+1..5 switch destinations, `?` opens the keymap when not typing. */
+  keys(e, cx) {
+    const app = appKeyAction(e, { typing: this.typingCount > 0 });
+    if (app?.kind === "page") {
+      showPage(app.page);
+      return cx.stop_propagation();
+    }
+    if (app?.kind === "keymap") {
+      setShared(KEYMAP_OPEN, true);
+      cx.stop_propagation();
+      cx.notify();
+    }
+  }
+
   /** Model text boxes are made here (never while drawing), one per agent. */
   sync() {
     const list = this.list();
@@ -505,7 +530,7 @@ export class Settings {
     }
     for (const a of list) {
       if (this.inputs[a.id]) continue;
-      const state = InputState.new({ value: a.model ?? "", placeholder: "The harness's default" });
+      const state = this.trackInput(InputState.new({ value: a.model ?? "", placeholder: "The harness's default" }));
       state.on("change", (_e, cx) => {
         const value = state.value().trim();
         const now = this.list().find((x) => x.id === a.id);
@@ -767,6 +792,8 @@ export class Settings {
       .size_full()
       .bg(c.ground)
       .text_color(c.ink)
+      .track_focus(this.handle)
+      .on_key_down((e, cx) => this.keys(e, cx))
       .on_size_change((size, cx) => {
         // px with the app's zoom multiplied in; drawn sizes are without it.
         const zoom = Number(settings().zoom) || 1;
@@ -820,11 +847,14 @@ export class Settings {
 
   /** One setting on one line: its name (and a short hint under it) on the left, its control on the right. */
   settingRow(c, label, control, hint = null) {
-    return h_flex().min_h(CONTROL + SPACE[3]).px(PAD).py(SPACE[3]).gap(SPACE[4]).items_center()
-      .child(v_flex().flex_1().min_w(0).gap(SPACE[1])
+    const left = hint
+      ? v_flex().flex_1().min_w(0).gap(SPACE[1])
         .child(div().text_size(TYPE.md).font_medium().text_color(c.ink).child(label))
-        .when(Boolean(hint), (el) => el.child(div().text_size(TYPE.xs).text_color(c.faint).child(hint))))
-      .child(div().flex_none().child(control));
+        .child(div().text_size(TYPE.xs).text_color(c.faint).child(hint))
+      : div().flex_1().min_w(0).text_size(TYPE.md).font_medium().text_color(c.ink).child(label);
+    return h_flex().min_h(CONTROL + SPACE[3]).px(PAD).py(SPACE[3]).gap(SPACE[4]).items_center()
+      .child(left)
+      .child(control.flex_none());
   }
 
   /**
@@ -836,6 +866,7 @@ export class Settings {
     return v_flex()
       .id(id)
       .w_full()
+      .pb(SPACE[2])
       .rounded(SIZE.radius)
       .bg(c.fill)
       .border_1()
@@ -844,8 +875,7 @@ export class Settings {
       .child(h_flex().h(CONTROL + SPACE[4]).px(PAD).gap(SPACE[3]).items_center()
         .child(div().flex_1().min_w(0).text_size(TYPE.md).font_semibold().child(title))
         .when(Boolean(right), (el) => el.child(right)))
-      .children(shown)
-      .child(div().h(SPACE[2]));
+      .children(shown);
   }
 
   /** A compact segmented choice for a setting row. */
@@ -1105,6 +1135,7 @@ export class Settings {
     if (!k) return stateView(c, { id: "bh-access-loading", title: "Loading…", loading: true });
     const on = k.headless !== false;
     const full = k.access === "full";
+    const reduced = reducedMotion();
     return this.group(c, {
       id: "bh-access",
       title: "Access",
@@ -1118,6 +1149,8 @@ export class Settings {
           (v, cx) => this.setAccess({ git: v }, cx))),
         this.settingRow(c, "Repo history", this.choice(c, "bh-repo-history", [["on", "Pushed"], ["off", "Local only"]], k.repoHistory === false ? "off" : "on",
           (v, cx) => this.setAccess({ repoHistory: v === "on" }, cx)), k.repoHistory === false ? ".bot-herdr/ is gitignored and untracked in every project" : null),
+        this.settingRow(c, "Reduce motion", this.toggle(c, "bh-reduce-motion", reduced, () => setShared(REDUCE_MOTION_KEY, !reduced), "Reduce motion"),
+          "Working animations hold their first glyph and fades are instant."),
       ],
     });
   }
@@ -1167,8 +1200,7 @@ export class Settings {
     });
   }
 
-  /** The Resilience tab: provider health & cooldowns, ordered fallback chain, and guardrail budgets. */
-  /** General tab: responsive 2-column grid (>= 860px) placing Access and Classifier cards side-by-side. */
+  /** General tab: responsive 2-column grid (>= 860px) placing Access (with Reduce motion) and Classifier cards side-by-side. */
   generalSection(c, content) {
     if (settingsGridColumns(content) === 2) {
       return h_flex()
@@ -1176,29 +1208,15 @@ export class Settings {
         .w(content)
         .gap(GAP)
         .items_start()
-        .child(v_flex().flex_1().min_w(0).gap(GAP).child(this.accessCard(c)).child(this.motionCard(c)))
-        .child(v_flex().flex_1().min_w(0).gap(GAP).child(this.classifierCard(c)));
+        .child(this.accessCard(c).flex_1().min_w(0))
+        .child(this.classifierCard(c).flex_1().min_w(0));
     }
     return v_flex()
       .id("bh-general-grid")
       .w(content)
       .gap(GAP)
       .child(this.accessCard(c))
-      .child(this.motionCard(c))
       .child(this.classifierCard(c));
-  }
-
-  /** Motion: the Reduce motion toggle (herdr cannot tell a mod the system's setting), kept for every view. */
-  motionCard(c) {
-    const on = reducedMotion();
-    return this.group(c, {
-      id: "bh-motion",
-      title: "Motion",
-      rows: [
-        this.settingRow(c, "Reduce motion", this.toggle(c, "bh-reduce-motion", on, () => setShared(REDUCE_MOTION_KEY, !on), "Reduce motion"),
-          "Working animations hold their first glyph and fades are instant."),
-      ],
-    });
   }
 
   resilienceSection(c, content) {
@@ -1458,35 +1476,46 @@ export class Settings {
       .child(div().text_size(TYPE.xs).text_color(c.faint).child(summary));
   }
 
-  /** A switch: a pill track, the knob centred in it, sliding to the side that's set. */
+  /** A switch: a 28 px hit target wrapping the visual pill track, the knob sliding (or snapping when reduced). */
   toggle(c, id, on, onClick, label = null) {
     const W = 36;
     const H = 20;
     const KNOB_D = 14;
     const inset = (H - 2 - KNOB_D) / 2; // inside the 1px border
+    const knob = springing(
+      div()
+        .absolute()
+        .top(inset)
+        .left(on ? W - 2 - KNOB_D - inset : inset),
+      "left",
+      { response: 220, damping: 0.9 },
+    )
+      .size(KNOB_D)
+      .rounded_full()
+      .bg(on ? c.accentInk : c.fill)
+      .shadow_sm();
     return focusable(
       div()
         .role("switch")
         .when(Boolean(label), (el) => el.accessibility_label(label))
-        .relative()
         .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
         .w(W)
-        .h(H)
+        .h(TARGET)
         .rounded_full()
         .cursor_pointer()
-        .bg(on ? c.accent : c.well)
-        .border_1()
-        .border_color(on ? c.accent : c.edge)
         .on_click(onClick)
         .child(div()
-          .absolute()
-          .top(inset)
-          .left(on ? W - 2 - KNOB_D - inset : inset)
-          .spring("left", { response: 220, damping: 0.9 })
-          .size(KNOB_D)
+          .relative()
+          .w(W)
+          .h(H)
           .rounded_full()
-          .bg(on ? c.accentInk : c.fill)
-          .shadow_sm()),
+          .bg(on ? c.accent : c.well)
+          .border_1()
+          .border_color(on ? c.accent : c.edge)
+          .child(knob)),
       id,
       c, { edge: true },
     );
