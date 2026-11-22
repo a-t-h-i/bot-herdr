@@ -12,11 +12,11 @@ const FIXTURE = {
   estimated: { tokens: true, cost: false },
 };
 
-test("metrics: time reads in hours and minutes", () => {
-  assert.equal(formatTime(12000000), "3 h 20 min");
-  assert.equal(formatTime(45 * 60000), "45 min");
-  assert.equal(formatTime(2 * 3600000), "2 h");
-  assert.equal(formatTime(0), "0 min");
+test("metrics: time reads compactly, as the design language's numbers do", () => {
+  assert.equal(formatTime(12000000), "3h 20m");
+  assert.equal(formatTime(45 * 60000), "45m");
+  assert.equal(formatTime(2 * 3600000), "2h");
+  assert.equal(formatTime(0), "0m");
 });
 
 test("metrics: tokens and cost", () => {
@@ -30,19 +30,22 @@ test("metrics: tokens and cost", () => {
   assert.equal(tokenLines({ input: 5, output: 5 }).cached, null);
 });
 
-test("metrics: estimated numbers get ≈ and a tooltip; a missing cost stays —", () => {
+test("metrics: an estimated number says ≈ once, in its column header, and keeps a tooltip", () => {
   const [time, turns, tokens, cost] = cells(FIXTURE);
-  assert.equal(time.value, "3 h 20 min");
+  assert.equal(time.value, "3h 20m");
   assert.equal(turns.value, (1234).toLocaleString());
-  assert.equal(tokens.value, "≈1.2M");
+  assert.equal(tokens.value, "1.2M");
+  assert.equal(tokens.label, "≈ Tokens");
   assert.equal(tokens.tip, ESTIMATED_TIP);
   assert.equal(cost.value, "$1.79");
+  assert.equal(cost.label, "Cost");
   assert.equal(cost.tip, null);
   const none = cells({ ...FIXTURE, costUsd: null, estimated: { tokens: false, cost: true } });
   assert.equal(none[2].value, "1.2M");
+  assert.equal(none[2].label, "Tokens");
   assert.equal(none[3].value, "—");
   assert.equal(none[3].tip, null);
-  assert.equal(cells({ ...FIXTURE, estimated: { cost: true } })[3].value, "≈$1.79");
+  assert.equal(cells({ ...FIXTURE, estimated: { cost: true } })[3].label, "≈ Cost");
 });
 
 test("metrics: the real bh metrics shape (30 days, unpriced agent, large numbers)", () => {
@@ -50,10 +53,11 @@ test("metrics: the real bh metrics shape (30 days, unpriced agent, large numbers
     tokens: { input: 800000, output: 43000, cacheRead: 140000000, cacheWrite: 2900000 }, estimated: { tokens: true, cost: true },
     daily: Array.from({ length: 30 }, (_, i) => ({ day: `2026-10-${String(i + 1).padStart(2, "0")}`, timeMs: i === 25 ? 3600000 : 0, turns: 0 })) };
   const [time, , tokens, cost] = cells(agent);
-  assert.equal(time.value, "10 h 24 min");
-  assert.equal(tokens.value, "≈843k");
+  assert.equal(time.value, "10h 24m");
+  assert.equal(tokens.value, "843k");
   assert.equal(tokens.sub, "+ 142.9M cached");
-  assert.equal(cost.value, "≈$732.29");
+  assert.equal(cost.value, "$732.29");
+  assert.equal(cost.label, "≈ Cost");
   assert.equal(cells({ ...agent, costUsd: null })[3].value, "—");
   assert.equal(barHeights(agent.daily, 44).length, 30);
 });
@@ -75,7 +79,7 @@ test("metrics: card columns by width, bars by the busiest day", () => {
   assert.equal(columnsFor(599), 1);
   const daily = [{ timeMs: 0 }, { timeMs: 30 * 60000 }, { timeMs: 60 * 60000 }];
   assert.deepEqual(barHeights(daily, 44), [2, 22, 44]);
-  assert.equal(dailyLabel(daily), "Daily time worked, oldest first: 0 min, 30 min, 1 h");
+  assert.equal(dailyLabel(daily), "Daily time worked, oldest first: 0m, 30m, 1h");
 });
 
 test("fitTabs: all fit; one overflows into More; the open last tab stays shown", () => {

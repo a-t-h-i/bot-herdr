@@ -5,6 +5,8 @@
 // `board`; step 14 adds `steps[].events`, `agentName`, `elapsedMs` and the task's `done`/`total`.
 // Both shapes are read here, so the switch is this file alone.
 
+import { compact, duration, usd } from "./numbers.js";
+
 /** The agents a step names: "dev", "dev, qa", "design-toast & qa" or a list. */
 export function stepAgents(s) {
   const raw = Array.isArray(s?.agent) ? s.agent : String(s?.agent ?? "").split(/\s*(?:,|&|\+|\band\b)\s*/);
@@ -12,16 +14,17 @@ export function stepAgents(s) {
 }
 
 /**
- * What a task or a step cost, in one line: "12.4k tokens · $1.23 · 38 min". A part that is 0 or
+ * What a task or a step cost, in one line: "12.4k tokens · $1.23 · 38m". A part that is 0 or
  * missing is left out (a harness that reports no tokens shows minutes only); "" when there is none.
+ * The numbers read the design language's way (numbers.js), so every page agrees.
  */
 export function usageText(u) {
   const tokens = Number(u?.tokens) || 0;
   const cost = Number(u?.costUsd) || 0;
   const minutes = Math.round(Number(u?.minutes) || 0);
   return [
-    tokens > 0 ? `${tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens)} tokens` : "",
-    cost > 0 ? `$${cost.toFixed(2)}` : "",
-    minutes > 0 ? `${minutes} min` : "",
+    tokens > 0 ? `${compact(tokens)} tokens` : "",
+    usd(cost),
+    minutes > 0 ? duration(minutes * 60000) : "",
   ].filter(Boolean).join(" · ");
 }

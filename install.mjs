@@ -279,6 +279,123 @@ function panelBesidePages(root) {
   return true;
 }
 
+// ── The redesign's layout migration ───────────────────────────────────────────────────────
+//
+// The redesign's layout holds five destinations — Home, Threads, Agents (Fleet | Terminals),
+// Library (Knowledge | Learning | Scripts | Issues) and Settings behind the gear, with Usage
+// inside it — where the old one held eleven (the page tabs, Orchestrator, Files, Changes and
+// Metrics). `migrateLayout(old, target)` maps an installed layout onto the shipped one without
+// losing anything the person chose: their theme and window keys, the sizes of the nodes both
+// layouts share, the active page when the redesign kept it, and any page of their own that the
+// redesign does not replace. The installed file is backed up first (timestamped) by `backupLayout`.
+
+/** Window choices a person makes, carried over as they are: a migration is not a restyle. */
+const APPEARANCE_KEYS = ["theme", "titlebar", "toast", "traffic_lights", "background", "terminal_padding", "divider"];
+
+/** Nodes whose geometry is the person's (the rail, the panel, the bars), not the redesign's. */
+const SHARED_SIZES = ["sidebar", "brand", "sidebar-lists", "spaces", "agents", "sidebar-footer", "topbar", "switch", "panel", "status"];
+
+/** The old destinations the redesign replaces: its new pages hold what these held. */
+const LEGACY_PAGES = new Set(["home", "chat", "tasks", "plans", "issues", "knowledge", "learning", "scripts", "metrics", "usage", "settings", "approvals", "review", "files", "changes", "agents", "library", "terminals"]);
+
+/** A deep copy of layout JSON, so neither layout keeps a reference the other can change. */
+const cloneLayout = (value) => JSON.parse(JSON.stringify(value));
+
+/** A layout as an object (an object is copied, text is parsed); null when it cannot be read. */
+function parseLayout(value) {
+  if (value && typeof value === "object") return cloneLayout(value);
+  if (typeof value !== "string" || !value.trim()) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Carries the person's window keys from the old layout onto the new one. Returns whether it changed. */
+function carryAppearance(target, old) {
+  let changed = false;
+  for (const key of APPEARANCE_KEYS) {
+    if (old[key] === undefined || JSON.stringify(old[key]) === JSON.stringify(target[key])) continue;
+    target[key] = cloneLayout(old[key]);
+    changed = true;
+  }
+  return changed;
+}
+
+/** Carries the geometry of every node both layouts share (its size, min and max). */
+function carrySize(target, old) {
+  let changed = false;
+  for (const id of SHARED_SIZES) {
+    const from = findNode(old, id);
+    const to = findNode(target, id);
+    if (!from || !to) continue;
+    for (const key of ["size", "min", "max"]) {
+      if (from[key] === undefined || JSON.stringify(from[key]) === JSON.stringify(to[key])) continue;
+      to[key] = cloneLayout(from[key]);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+/** Keeps a page the person added that the redesign does not replace, after the new pages. */
+function carryOwnPages(target, old) {
+  const next = findNode(target, "pages");
+  const previous = findNode(old, "pages");
+  if (!Array.isArray(next?.children) || !Array.isArray(previous?.children)) return false;
+  const known = new Set(next.children.map((child) => child?.id));
+  const kept = previous.children.filter((child) => child?.id && !known.has(child.id) && !LEGACY_PAGES.has(child.id));
+  if (!kept.length) return false;
+  next.children = [...next.children, ...kept.map(cloneLayout)];
+  return true;
+}
+
+/** Keeps the page the person was on, when the redesign still has it; else the redesign's own. */
+function carryActivePage(target, old) {
+  const next = findNode(target, "pages");
+  const previous = findNode(old, "pages");
+  if (!next || !previous?.active || next.active === previous.active) return false;
+  if (!next.children?.some((child) => child?.id === previous.active)) return false;
+  next.active = previous.active;
+  return true;
+}
+
+/**
+ * An existing layout mapped onto the redesign's layout: the target's structure, carrying the
+ * person's own choices (see the section comment). Idempotent — migrating the result again changes
+ * nothing — and never destructive: it only returns the layout to write, and null when the target
+ * itself cannot be read, so a caller keeps the installed file rather than replacing it with junk.
+ */
+export function migrateLayout(old, target) {
+  const next = parseLayout(target);
+  if (!next) return null;
+  const previous = parseLayout(old);
+  if (!previous) return next;
+  carryAppearance(next, previous);
+  carrySize(next, previous);
+  carryOwnPages(next, previous);
+  carryActivePage(next, previous);
+  return next;
+}
+
+/** A backup's name: `<layout>.<UTC stamp>.bak`, never the same one twice. */
+export function layoutBackupPath(file, at = new Date()) {
+  const stamp = at.toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+  let path = `${file}.${stamp}.bak`;
+  for (let n = 2; existsSync(path); n++) path = `${file}.${stamp}-${n}.bak`;
+  return path;
+}
+
+/** Copies an installed layout beside itself with a timestamp; "" when there is no file yet. */
+export function backupLayout(file, { at = new Date(), copy = cpSync } = {}) {
+  if (!existsSync(file)) return "";
+  const path = layoutBackupPath(file, at);
+  copy(file, path);
+  return path;
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
   await runInstall();
 }

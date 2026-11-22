@@ -3,6 +3,7 @@
 // every state transition, filter, grouping, progress model, and terminal lookup directly.
 
 import { STATE } from "./look.js";
+import { duration, usd } from "./numbers.js";
 
 export const DETAIL_TABS = ["steps", "iterations", "board", "comments", "plan"];
 export const STATUS_CHIPS = ["active", "blocked", "done", "archived"];
@@ -376,20 +377,14 @@ export function nextRefreshAction(state = { busy: false, queued: false }, event 
   return { state: { busy, queued }, action: "idle" };
 }
 
-/** Formats USD cost cleanly without Intl; returns "" when zero or invalid. */
-export function formatUsd(usd) {
-  const n = Number(usd);
-  return Number.isFinite(n) && n > 0 ? `$${n.toFixed(2)}` : "";
-}
+/** A cost in the design language's money form ("$0.64"), from numbers.js; "" when there is none. */
+export const formatUsd = usd;
 
-/** Formats worked milliseconds into compact text (`<1m`, `24m`, `1h 2m`); "" when <= 0. */
+/** Worked time in the design language's short form (`<1m`, `24m`, `1h 2m`); "" when <= 0. */
 export function formatWorked(ms) {
   const n = Number(ms);
   if (!Number.isFinite(n) || n <= 0) return "";
-  const m = Math.floor(n / 60000);
-  if (m < 1) return "<1m";
-  const h = Math.floor(m / 60);
-  return h ? `${h}h ${m % 60}m` : `${m}m`;
+  return duration(n);
 }
 
 /** Tone token name for a step timeline event (`check`, `board`, `report`, `merge`). */

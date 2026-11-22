@@ -5,13 +5,14 @@
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { settings } from "herdr";
-import { SIZE, TYPE, LINE, SPACE, CONTROL } from "./look.js";
+import { SIZE, TYPE, LINE, SPACE, CONTROL, TYPE_SCALE, RADIUS } from "./look.js";
 import { segmented, stateView, avatar } from "./switch.js";
+import { actionButton } from "./button.js";
 import { colors } from "./theme.js";
 import { activePage } from "./pages.js";
 import { bhJson, projectDir } from "./bh.js";
 import { mentionTone } from "./indicators.js";
-import { WINDOWS, DEFAULT_WINDOW, cells, columnsFor, barHeights, dailyLabel, rankOf } from "./metricsview.js";
+import { WINDOWS, DEFAULT_WINDOW, cells, hero, cardDetail, columnsFor, barHeights, dailyLabel, rankOf } from "./metricsview.js";
 
 const REFRESH_MS = 10000;
 const MAX = 1140; // the work pages' widest column
@@ -39,19 +40,23 @@ function cellRows(c, list, per, size) {
   return v_flex().gap(SPACE[4]).children(rows.map((row) => h_flex().gap(SPACE[4]).items_start().children(row.map((x) => cell(c, x, size)))));
 }
 
-/** The daily bars: in the agent's colour, as tall as its busiest day; said in words for a screen reader. */
-function bars(c, daily, tone) {
-  return h_flex()
+/** The daily bars: a neutral step, as tall as the busiest day, under a one-word label; said in words for a screen reader. */
+function bars(c, daily) {
+  return v_flex()
     .role("image")
     .accessibility_label(dailyLabel(daily))
-    .h(BARS_H + SPACE[3])
-    .pt(SPACE[3])
-    // A month of bars sits closer together, so each stays wide enough to read.
-    .gap((daily?.length ?? 0) > 14 ? SPACE[1] : SPACE[2])
-    .items_end()
-    .border_t_1()
-    .border_color(c.edge)
-    .children(barHeights(daily, BARS_H).map((h) => div().flex_1().h(h).rounded(SPACE[1]).bg(tone)));
+    .w_full()
+    .gap(SPACE[1])
+    .child(div().text_size(TYPE_SCALE.metadata).text_color(c.textMuted).child("Daily time"))
+    .child(h_flex()
+      .h(BARS_H + SPACE[3])
+      // A month of bars sits closer together, so each stays wide enough to read.
+      .gap((daily?.length ?? 0) > 14 ? SPACE[1] : SPACE[2])
+      .items_end()
+      .border_t_1()
+      .border_color(c.edge)
+      // A day's bar stays a bar: it grows to the room it has but never becomes a block.
+      .children(barHeights(daily, BARS_H).map((h) => div().flex_1().max_w(24).h(h).rounded(SPACE[1]).bg(c.controlBorder))));
 }
 
 export class Metrics {
@@ -62,6 +67,7 @@ export class Metrics {
     this.busy = false;
     this.shown = false; // the page was showing at the last draw: opening it reads again
     this.width = 900;
+    this.openCards = new Set(); // the cards whose other numbers are folded open
     this.reload(cx);
     cx.timer.every(REFRESH_MS, (cx) => {
       if (activePage() === "metrics") this.reload(cx);
@@ -145,18 +151,32 @@ export class Metrics {
     return rows.map((row, r) => h_flex().id(`bh-metrics-row-${r}`).gap(GAP).items_stretch().children(row));
   }
 
-  /** An agent's card: avatar, name, harness and rank; its six numbers; its days as bars. */
+  /** An agent's card: avatar, name and harness, ONE hero number (its cost), its days as quiet bars.
+   * Every other number is in the card's tooltip and under Details, never on the card (Principle 4). */
   card(c, a, i, width) {
     const tone = mentionTone(c, a.role && a.role !== "custom" ? a.role : a.name);
-    return v_flex().id(`bh-metrics-${a.id}`).flex_none().w(width).p(PAD).gap(SPACE[4])
-      .rounded(SIZE.radius).bg(c.fill).border_1().border_color(c.edge)
+    const lead = hero(a);
+    const id = `bh-metrics-${a.id}`;
+    const open = this.openCards.has(id);
+    return v_flex().id(id).flex_none().w(width).p(PAD).gap(SPACE[4])
+      .rounded(RADIUS.card).bg(c.fill).border_1().border_color(c.edge)
+      .tooltip(`${rankOf(i)} in this window · ${cardDetail(a)}`)
       .child(h_flex().h(CONTROL).gap(SPACE[3]).items_center()
         .child(avatar(c, a.name, tone, CONTROL))
         .child(v_flex().flex_1().min_w(0)
-          .child(div().truncate().text_size(TYPE.lg).line_height(`${LINE.lg}px`).font_semibold().child(a.name ?? a.id))
-          .when(Boolean(a.harness), (el) => el.child(div().truncate().text_size(TYPE.xs).text_color(c.muted).child(a.harness))))
-        .child(div().flex_none().text_size(TYPE.sm).text_color(c.muted).child(rankOf(i))))
-      .child(cellRows(c, cells(a), 3, TYPE.md))
-      .child(bars(c, a.daily, tone));
+          .child(div().truncate().text_size(TYPE_SCALE.title).line_height(`${LINE.lg}px`).font_semibold().child(a.name ?? a.id))
+          .when(Boolean(a.harness), (el) => el.child(div().truncate().text_size(TYPE_SCALE.metadata).text_color(c.textMuted).child(a.harness))))
+        .child(actionButton(c, `${id}-more`, open ? "Less" : "Details", (_e, cx) => {
+          if (open) this.openCards.delete(id);
+          else this.openCards.add(id);
+          cx.notify();
+        }, { tone: "quiet" })))
+      .child(v_flex().gap(SPACE[1])
+        .child(div().truncate().text_size(TYPE_SCALE.hero).font_semibold().text_color(c.ink)
+          .when(Boolean(lead.tip), (el) => el.tooltip(lead.tip))
+          .child(lead.value))
+        .child(div().text_size(TYPE_SCALE.metadata).text_color(c.textMuted).child(lead.label)))
+      .child(bars(c, a.daily))
+      .when(open, (el) => el.child(cellRows(c, cells(a).filter((x) => x.key !== "cost"), 3, TYPE_SCALE.body)));
   }
 }

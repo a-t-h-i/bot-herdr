@@ -62,18 +62,22 @@ Goals (autonomous verification loops)
   bh goal status [<task>] [--json]           criteria verdicts, budget, ratchet checkpoint, next round
   bh goal verify [<task>] [--hypothesis H]   verify frozen DONE criteria, apply monotonic ratchet
   bh goal log [<task>] [--limit N] [--json]  Gap Ledger iteration history
-  bh goal progress [<task>]                  how far the Goal has come (a placeholder: lands with the redesign)
+  bh goal progress [<task>] [--sync] [--json]  the goal row: gate, elapsed, retries left, the last reason
+                                  (--sync writes the task's progress.md checks table from it)
   bh goal pause|resume|stop|recover [<task>] [--reason R]
   bh goal propose-amend <task> --criterion ID --action edit|drop|add [--text T] --reason R
   bh goal approve-amend|reject-amend <task>  (the user's to approve or reject)
 
-Redesign foundation (placeholders until the Design Language Redesign milestones land)
+Redesign foundation (Home and Threads are real; approvals and review land with M6)
   bh ui-audit [--json] [--page P] [--theme T] [--shots DIR] [--baseline write] [--a11y FILE]
                                   the design-language audit: renders every page headless, counts
                                   the Fix table, checks all 16 themes' contrast, records the
                                   baseline (exit 0 whenever the audit ran; pass:false is a result)
-  bh home                         the Home page's data
-  bh thread                       a chat thread's stored conversation
+  bh home [--json]                Home: what needs you, then review, the fleet, today's spend
+  bh thread list|show|peek|summary [<id>] [--json]
+                                  one task is one thread: state, agents, steps, conversation,
+                                  plan, changes, and the one-line live summary (peek: output,
+                                  question, reply target)
   bh approvals                    approval cards for commands agents may not run on their own
   bh review                       review comments on a change
 
@@ -577,7 +581,7 @@ async function main(argv) {
   const { flags, rest } = parseArgs(
     argv.slice(1),
     ["option", "kinds", "skill", "issue", "source"],
-    [...BOOLEANS, "refresh", "peek", "board", "shared", "drop", "list", "dry-run", "no-install", "no-rollback", "branch", "worktree", "no-git", "no-revert", "goal", "ready", "post-comment", "close", "draft-pr", "no-close", "open", "unread"]
+    [...BOOLEANS, "refresh", "peek", "board", "shared", "drop", "list", "dry-run", "no-install", "no-rollback", "branch", "worktree", "no-git", "no-revert", "goal", "ready", "post-comment", "close", "draft-pr", "no-close", "open", "unread", "sync"]
   );
   const args = rest.slice(1);
 
@@ -887,7 +891,7 @@ async function main(argv) {
       const taskArg = /^t-\d{8}-\w+$/.test(args[0] ?? "") ? args[0] : T.currentTask(root)?.id;
       if (sub === "progress") {
         const { runGoalProgressCli } = await import("./lib/goal-progress.mjs");
-        return runGoalProgressCli({ root, sub: args[0], args: args.slice(1), flags, out });
+        return runGoalProgressCli({ root, task: args[0] ?? taskArg, flags, out });
       }
       if (sub === "status" || !sub) {
         need(taskArg, "bh goal status [<task>]");
@@ -1049,8 +1053,8 @@ async function main(argv) {
       throw new UsageError("bh issues list|fetch|show|triage|bundle|screenshot|finish");
     }
 
-    // Redesign foundation (p-20261121-siir): additive commands whose modules land their behaviour;
-    // here they only have to exist, so the plan's scripts can be written against them now.
+    // Redesign foundation (p-20261121-siir): Home, Threads and the audit are real; approvals and
+    // review keep their placeholders until M6 lands their stores.
     case "ui-audit": {
       const { runUiAuditCli } = await import("./lib/ui-audit.mjs");
       return runUiAuditCli({ root, sub, args, flags, out });

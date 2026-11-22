@@ -1,7 +1,8 @@
 // pre-M1 foundation: the additive bh dispatchers (ui-audit, home, thread, approvals, review,
 // goal progress) and the approvals permission hook. ui-audit is real from M1 on (test/ui-audit
-// .test.mjs covers it); the rest are placeholders: they must be listed in help, answer without
-// crashing, and leave a refused call to the existing reject path.
+// .test.mjs covers it), Home and Threads from M4 (test/home.test.mjs and test/thread-model.test.mjs
+// cover them); approvals and review keep their placeholders: they must be listed in help, answer
+// without crashing, and leave a refused call to the existing reject path.
 
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
@@ -20,7 +21,7 @@ after(() => {
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const bh = join(root, "mods", "bot-herdr", "engine", "bh.mjs");
-const runBh = (...args) => spawnSync(process.execPath, [bh, ...args], { cwd: tmp, encoding: "utf8", env: { ...process.env, BH_APP_HOME: join(tmp, "app") }, timeout: 60_000 });
+const runBh = (...args) => spawnSync(process.execPath, [bh, ...args], { cwd: tmp, encoding: "utf8", env: { ...process.env, BH_APP_HOME: join(tmp, "app"), HC_TERMINAL_ID: "", BH_AGENT: "" }, timeout: 60_000 });
 
 test("bh help lists the redesign foundation commands", () => {
   const r = runBh("help");
@@ -30,20 +31,31 @@ test("bh help lists the redesign foundation commands", () => {
   }
 });
 
-test("the placeholder commands answer without crashing", () => {
-  for (const cmd of [["home"], ["thread"], ["approvals"], ["review"], ["goal", "progress", "t-20260101-progress"]]) {
+test("the remaining placeholder commands answer without crashing", () => {
+  for (const cmd of [["approvals"], ["review"]]) {
     const r = runBh(...cmd);
     assert.equal(r.status, 0, `${cmd.join(" ")}: ${r.stderr}`);
     assert.match(r.stdout, /not implemented yet/, cmd.join(" "));
   }
 });
 
-test("the placeholder commands answer --json with a stable shape", () => {
-  const r = runBh("home", "--json");
-  assert.equal(r.status, 0, r.stderr);
-  const out = JSON.parse(r.stdout);
-  assert.equal(out.command, "home");
-  assert.equal(out.implemented, false);
+test("the redesigned read models answer --json with a stable shape", () => {
+  const home = runBh("home", "--json");
+  assert.equal(home.status, 0, home.stderr);
+  const page = JSON.parse(home.stdout);
+  assert.equal(page.command, "home");
+  assert.ok(Array.isArray(page.needsYou) && Array.isArray(page.review));
+  assert.ok(page.header && page.fleet && page.spendToday);
+  const threads = runBh("thread", "--json");
+  assert.equal(threads.status, 0, threads.stderr);
+  const list = JSON.parse(threads.stdout);
+  assert.equal(list.command, "thread");
+  assert.equal(list.sub, "list");
+  assert.deepEqual(list.threads, []);
+  const goal = runBh("goal", "progress", "--json");
+  assert.equal(goal.status, 0, goal.stderr);
+  assert.equal(JSON.parse(goal.stdout).command, "goal progress");
+  for (const r of [home, threads, goal]) assert.doesNotMatch(r.stdout, /not implemented yet/);
 });
 
 test("maybeHoldPermission holds nothing by default", async () => {
