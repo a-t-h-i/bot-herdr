@@ -578,7 +578,7 @@ function defaultRunTsc({ cwd }) {
 }
 
 function defaultRunInstall({ root }) {
-  const r = spawnSync(process.execPath, [join(root, "install.mjs")], { cwd: root, encoding: "utf8", timeout: GATE_TIMEOUT, windowsHide: true, env: { ...process.env, FORCE_COLOR: "0" } });
+  const r = spawnSync(process.execPath, [join(root, "install.mjs"), "--allow-older"], { cwd: root, encoding: "utf8", timeout: GATE_TIMEOUT, windowsHide: true, env: { ...process.env, FORCE_COLOR: "0" } });
   return { ok: (r.status ?? 1) === 0, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
 

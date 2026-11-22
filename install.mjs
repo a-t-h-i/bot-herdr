@@ -7,6 +7,7 @@
 //   node install.mjs --force    also replace the layout file
 //   node install.mjs --switch   then switch the open window to the layout
 //   node install.mjs --skip-tools   don't download the bundled rg, fd and ast-grep
+//   node install.mjs --allow-older  install even when this copy is older than the installed one
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
@@ -108,6 +109,37 @@ export function ensureLearningPage(root) {
   return changed;
 }
 
+/** The file in the installed mod that says which commit it came from. */
+export const STAMP = ".installed.json";
+
+/** This checkout's commit and its time ({ commit, time } in seconds), or null outside git. */
+export function sourceStamp(dir, git = (args) => spawnSync("git", args, { cwd: dir, encoding: "utf8", windowsHide: true })) {
+  try {
+    const r = git(["log", "-1", "--format=%H %ct"]);
+    const [commit, time] = String(r?.stdout ?? "").trim().split(/\s+/);
+    return (r?.status ?? 1) === 0 && commit && Number(time) > 0 ? { commit, time: Number(time) } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The stamp of the installed mod, or null when it has none. */
+export function readStamp(mod) {
+  try {
+    const got = JSON.parse(readFileSync(join(mod, STAMP), "utf8"));
+    return got && Number(got.time) > 0 ? { commit: String(got.commit ?? ""), time: Number(got.time) } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Why installing `source` over `installed` would go back in time, or "" when it would not. */
+export function olderThanInstalled(source, installed) {
+  if (!source || !installed || source.commit === installed.commit || source.time >= installed.time) return "";
+  const when = (t) => new Date(t * 1000).toISOString().slice(0, 16).replace("T", " ");
+  return `This copy (${source.commit.slice(0, 7)}, ${when(source.time)}) is older than the installed bot-herdr (${installed.commit.slice(0, 7)}, ${when(installed.time)}).`;
+}
+
 async function runInstall() {
   const args = new Set(process.argv.slice(2));
   const candidateHomes = [
@@ -126,11 +158,20 @@ async function runInstall() {
     process.exit(1);
   }
 
-  // The mod is ours: replace the whole folder.
+  // The mod is ours: replace the whole folder. But never with an older copy (an agent's worktree
+  // cut before a merge, a checkout that missed a pull): that quietly brings old pages back.
   const mod = join(appHome, "mods", "bot-herdr");
+  const source = sourceStamp(here);
+  const older = olderThanInstalled(source, readStamp(mod));
+  if (older && !args.has("--allow-older")) {
+    console.error(older);
+    console.error("Nothing was installed. Run `git pull` here first, or pass --allow-older to install this copy anyway.");
+    process.exit(1);
+  }
   rmSync(mod, { recursive: true, force: true });
   mkdirSync(dirname(mod), { recursive: true });
   cpSync(join(here, "mods", "bot-herdr"), mod, { recursive: true });
+  if (source) writeFileSync(join(mod, STAMP), `${JSON.stringify(source, null, 2)}\n`);
   console.log(`mod      ${mod}`);
 
   // The retrieval binaries live in the mod, but are cached under the app home: reinstalling wipes

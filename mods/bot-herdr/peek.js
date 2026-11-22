@@ -7,7 +7,7 @@
 import { div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { hc } from "herdr";
-import { SIZE, TYPE_SCALE, LINE, SPACE, CONTROL, RADIUS, STATE, MOTION, stateTone, clickable, reducedMotion } from "./look.js";
+import { SIZE, TYPE_SCALE, LINE, SPACE, CONTROL, RADIUS, STATE, MOTION, stateTone, threadTone, clickable, reducedMotion } from "./look.js";
 import { actionButton } from "./button.js";
 import { sectionLabel } from "./plandoc.js";
 import { bh, bhJson, projectDir } from "./bh.js";
@@ -285,8 +285,7 @@ export class PeekDrawer {
   head(c, m) {
     const s = STATE[m.state] ?? STATE.idle;
     return h_flex().flex_none().h(CONTROL + SPACE[5]).px(SPACE[4]).gap(SPACE[3]).items_center()
-      .child(div().flex_none().text_size(TYPE_SCALE.title).text_color(stateTone(c, m.state)).child(s.glyph))
-      .child(div().flex_1().min_w(0).truncate().text_size(TYPE_SCALE.title).font_semibold().text_color(c.textPrimary).child(m.title))
+      .child(div().flex_1().min_w(0).truncate().text_size(TYPE_SCALE.title).font_semibold().text_color(threadTone(c, m.state)).child(m.title))
       .child(actionButton(c, "bh-peek-close", null, (_e, cx) => this.close(cx), { icon: "x", tone: "quiet", tooltip: "Close (Esc)", a11y: "Close the peek" }));
   }
 

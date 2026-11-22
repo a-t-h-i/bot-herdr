@@ -5,7 +5,7 @@
 
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { TYPE_SCALE, SPACE, CONTROL, RADIUS, STATE, stateTone, clickable } from "./look.js";
+import { TYPE_SCALE, SPACE, CONTROL, RADIUS, STATE, stateTone, threadTone, clickable } from "./look.js";
 import { avatar } from "./switch.js";
 import { mentionTone } from "./indicators.js";
 import { keyName, opensRow } from "./rowkeys.js";
@@ -70,8 +70,7 @@ function forkRow(c, item, last, { onPeek, onOpen }) {
       .on_click((_e, cx) => onOpen(item, cx))
       .on_key_down(treeKeys(item, onPeek, onOpen))
       .child(div().flex_none().text_size(TYPE_SCALE.metadata).text_color(c.textMuted).child(last ? "└" : "├"))
-      .child(div().flex_none().text_size(TYPE_SCALE.metadata).text_color(stateTone(c, item.state)).child(s.glyph))
-      .child(div().flex_1().min_w(0).truncate().text_size(TYPE_SCALE.metadata).text_color(c.textPrimary).child(item.title))
+      .child(div().flex_1().min_w(0).truncate().text_size(TYPE_SCALE.metadata).text_color(threadTone(c, item.state)).child(item.title))
       .child(div().flex_none().text_size(TYPE_SCALE.metadata).text_color(c.textMuted).child("Fork")),
     c,
     item.rowId,
@@ -123,8 +122,7 @@ export function renderThreadMap(c, { model, onPeek = (_item, _cx) => {}, onOpen 
       .px(SPACE[2])
       .gap(SPACE[2])
       .items_center()
-      .child(div().flex_none().text_size(TYPE_SCALE.metadata).text_color(stateTone(c, model.parent.state)).child(s.glyph))
-      .child(div().flex_1().min_w(0).truncate().text_size(TYPE_SCALE.metadata).font_semibold().text_color(c.textSecondary).child(model.parent.title)))
+      .child(div().flex_1().min_w(0).truncate().text_size(TYPE_SCALE.metadata).font_semibold().text_color(threadTone(c, model.parent.state)).child(model.parent.title)))
     .children(items.map((item, i) => {
       const last = i === items.length - 1;
       return item.kind === "child"

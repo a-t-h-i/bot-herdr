@@ -228,3 +228,16 @@ test("installLayout: an installed layout (with metrics) becomes the shipped one,
   assert.equal(installLayout({ file, target: shippedLayout, force: true }).action, "replaced", "--force replaces the structure, still backing up");
   rmSync(dir, { recursive: true, force: true });
 });
+
+test("an older copy never installs over a newer one unless asked", async () => {
+  const { olderThanInstalled, sourceStamp } = await import("../install.mjs");
+  const newer = { commit: "bbbbbbbbbb", time: 2000 };
+  const old = { commit: "aaaaaaaaaa", time: 1000 };
+  assert.match(olderThanInstalled(old, newer), /older than the installed bot-herdr/);
+  assert.equal(olderThanInstalled(newer, old), "");
+  assert.equal(olderThanInstalled(old, null), "", "a first install, or one from before stamps, goes ahead");
+  assert.equal(olderThanInstalled(null, newer), "", "a copy outside git goes ahead");
+  assert.equal(olderThanInstalled(newer, newer), "");
+  assert.deepEqual(sourceStamp(".", () => ({ status: 0, stdout: "abc123 1700000000\n" })), { commit: "abc123", time: 1700000000 });
+  assert.equal(sourceStamp(".", () => ({ status: 128, stdout: "" })), null);
+});
