@@ -598,6 +598,32 @@ export class Threads {
     });
   }
 
+  /** Delete: the first click asks again; the second deletes the thread's task or plan. */
+  deleteButton(c) {
+    const sure = armed(this, "deleteArmed", this.opened);
+    return actionButton(c, "bh-thread-delete", sure ? "Delete for good?" : "Delete", (_e, cx) => {
+      if (!sure) return arm(this, "deleteArmed", this.opened, cx);
+      this.deleteArmed = null;
+      this.endThread("delete", cx);
+    }, { tone: "danger", icon: "trash", tooltip: "Delete this thread and its records" });
+  }
+
+  /** Runs `bh task|plan archive|delete <id>` for the open thread, then goes back to the list. */
+  endThread(verb, cx) {
+    const id = this.opened;
+    if (!id || id === ORCHESTRATOR || this.ending) return;
+    this.ending = true;
+    this.problem = null;
+    cx.notify();
+    cx.spawn(async (cx) => {
+      const r = await bh([id.startsWith("p-") ? "plan" : "task", verb, id], { cwd: projectDir() });
+      this.ending = false;
+      if (r.code === 0) return this.back(cx);
+      this.problem = String(r.stderr || r.stdout || `Could not ${verb} ${id}.`).trim().split("\n")[0].replace(/^bh: /, "");
+      cx.notify();
+    });
+  }
+
   /** Inline input for starting a forked thread with carried context. */
   forkBar(c) {
     return h_flex()
@@ -659,6 +685,8 @@ export class Threads {
           .child(h_flex().gap(SPACE[2]).items_center()
             .child(div().flex_1().min_w(0).child(this.crumbs(c, sub)))
             .child(actionButton(c, "bh-thread-fork", "Fork", (_e, cx) => this.toggleFork(cx), { tone: "secondary", tooltip: "Fork this thread with carried context" }))
+            .child(actionButton(c, "bh-thread-close", "Close", (_e, cx) => this.endThread("archive", cx), { tone: "quiet", icon: "archive", tooltip: "Archive this thread: it leaves the list, its files stay" }))
+            .child(this.deleteButton(c))
             .child(actionButton(c, "bh-thread-files", "Files", () => run("mod.open", { name: "files" }), { tone: "quiet", tooltip: "Open the Files window" })))
           .when(Boolean(map?.forkOf), (el) => el.child(renderForkOrigin(c, { forkOf: map.forkOf, onOpen: (id, cx) => this.openThread(id, cx) })))
           .when(this.forkOpen, (el) => el.child(this.forkBar(c)))
