@@ -61,7 +61,7 @@ export class Home {
     this.finishing = new Map(); // id -> "on" | "fade" while a newly finished row highlights
     this.publishedHomeSig = "";
     this.handle = cx.focus_handle();
-    this.peek = new PeekDrawer(); // Space opens it for the picked row, Esc closes it
+    this.peek = new PeekDrawer({ onChanged: (cx) => this.load(cx) }); // Space opens it for the picked row, Esc closes it
     this.load(cx);
     cx.timer.every(REFRESH_MS, (cx) => {
       if (viewShown("home") && activeStage() !== "terminals") this.load(cx);
@@ -142,8 +142,15 @@ export class Home {
   rows() {
     const d = this.data;
     if (!d) return [];
+    const needPeek = (n) => (n.kind === "approval"
+      ? { kind: "approval", id: n.ref, thread: n.thread ?? null, item: n }
+      : n.thread ? { kind: "thread", id: n.thread } : null);
     return [
-      ...this.needs().map((n) => ({ id: n.thread ?? n.ref, open: () => openThread(n.thread), peek: n.thread ? { kind: "thread", id: n.thread } : null })),
+      ...this.needs().map((n) => ({
+        id: n.thread ?? n.ref,
+        open: (cx) => (n.thread ? openThread(n.thread) : n.kind === "approval" ? this.peek.toggle(needPeek(n), cx) : null),
+        peek: needPeek(n),
+      })),
       ...this.reviews().map((t) => ({ id: t.id, open: () => openThread(t.id), peek: { kind: "thread", id: t.id } })),
       ...this.agents().map((a) => ({ id: a.address, open: () => openTerminal(a.address), peek: { kind: "agent", agent: a } })),
       ...this.goals().map((g) => ({ id: g.task, open: () => openThread(g.task), peek: { kind: "thread", id: g.task } })),
@@ -199,7 +206,7 @@ export class Home {
       this.peek.toggle(picked.peek, cx);
       cx.stop_propagation();
     } else if (opensRow(keyName(e)) && picked) {
-      picked.open();
+      picked.open(cx);
       cx.stop_propagation();
     }
   }
@@ -352,7 +359,10 @@ export class Home {
         .items_center()
         .rounded(RADIUS.control)
         .when(picked, (el) => el.bg(c.hover))
-        .on_click(() => openThread(item?.thread))
+        .on_click((_e, cx) => {
+          if (item?.kind === "approval" && !item?.thread) this.peek.toggle({ kind: "approval", id: item.ref, thread: null, item }, cx);
+          else openThread(item?.thread);
+        })
         .child(glyph)
         .child(v_flex().flex_1().min_w(0).gap(SPACE[1])
           .child(div().truncate().text_size(TYPE_SCALE.body).font_semibold().text_color(c.textPrimary).child(String(item?.title ?? "Needs you")))

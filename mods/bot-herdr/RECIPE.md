@@ -154,8 +154,25 @@ bot-herdr, dune, fern, harbor, plum × light/dark; the audit checks all 16 prese
   labels. Composite `#rrggbbaa` theme colours over their surface before checking contrast.
 - No hex outside `look.js`; at most one accent (primary) button per view; zero counts are never
   drawn; machine text (paths, branches, JSON, stack traces) is one muted mono line that expands.
-- The approval card, diff review comments and Summary/Normal/Verbose modes are not built yet
-  (the audit reports them missing); Threads › Changes shows the diff stat only.
+- **Approval cards** (`approvalcard.js`, `bh-approval-<id>`): drawn in the Peek when peeking an
+  approval row on Home and at the top of a thread's Conversation for pending approvals belonging to
+  that thread (`bh approvals list --json`). Shows the agent avatar and name, the title, the held
+  command as one folded mono line, and **Allow once** (primary), **Allow for this project** and
+  **Deny** (secondary); keys `1`/`2`/`3` answer (`bh approvals answer <id> once|project|deny`) and
+  the card folds away over `MOTION.fold`.
+- **Diff review with inline comments** (`diffreview.js`, `bh-diff-<path>`, `bh-diff-line-<path>-<new>`,
+  `bh-review-comment-<id>`, `bh-review-send`): in Threads › Changes, clicking or pressing Enter on a
+  file row expands its diff in place (`bh review diff`), mono with `+`/`−` gutters in `stateDone`/
+  `stateFailed` text (no fills) and muted line numbers. Clicking or pressing Enter on a line opens
+  one inline comment input (Enter saves via `bh review add`, Esc cancels); comments render beneath
+  their line with Remove (`bh review remove`), and **Send to Dev · N** (hidden when 0) sends open
+  comments via `bh review send`.
+- **Summary / Normal / Verbose** (`bh-view-mode`), **Thread map** (`threadmap.js`, `bh-thread-map`),
+  **Fork** (`bh-thread-fork`, `bh-fork-input`), **Queue & steer** (`bh-queue-<n>`, `bh-steer`), and
+  **Tiled agent panes** (`bh-agents-tile` using `layout.set` `{ terminal }` blocks): `v` cycles the
+  per-thread view mode; children and forks render as a tree under the thread header (Space peeks,
+  Enter opens) with clickable "Forked from" origin; Fork opens a prefilled context input (`bh thread
+  fork`); Enter queues while the target works and Ctrl+Enter steers (`hc interrupt` then `hc send`).
 - Assumes `bh` (Node ≥ 18) and `hc` on PATH, git for the Changes stat, and herdr-app with the
   shipped mods above.
 

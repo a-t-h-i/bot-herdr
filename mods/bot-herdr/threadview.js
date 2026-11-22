@@ -164,6 +164,7 @@ function entryWord(raw) {
   const kind = text(get(raw, "kind"));
   if (kind === "board") return text(get(raw, "boardKind")) || "note";
   if (kind === "comment") return "comment";
+  if (kind === "question") return "question";
   return "reply";
 }
 
@@ -322,4 +323,244 @@ export function paletteHint(binding, mac = false) {
   const mod = { cmd: mac ? "⌘" : "Ctrl+", ctrl: mac ? "⌃" : "Ctrl+", shift: mac ? "⇧" : "Shift+", alt: mac ? "⌥" : "Alt+", option: mac ? "⌥" : "Alt+" };
   const parts = keys.endsWith("--") ? [...keys.slice(0, -2).split("-"), "-"] : keys.split("-");
   return `${parts.map((p) => mod[p.toLowerCase()] ?? p.toUpperCase()).join("")}  commands`;
+}
+
+// ---- M6: Approvals, Diff review, View modes, Thread map, Fork -------------------------------
+
+/** The three choices an approval card offers, in key order (1, 2, 3). */
+export const APPROVAL_CHOICES = [
+  { id: "once", key: "1", label: "Allow once", tone: "primary" },
+  { id: "project", key: "2", label: "Allow for this project", tone: "secondary" },
+  { id: "deny", key: "3", label: "Deny", tone: "secondary" },
+];
+
+const APPROVAL_IDS = new Set(["once", "project", "deny"]);
+
+/** One pending approval record, or null when unkeyable, already answered, or unimplemented. */
+export function approvalRecord(raw) {
+  if (!raw || get(raw, "implemented") === false) return null;
+  const id = text(get(raw, "id"));
+  if (!id || text(get(raw, "status")) === "answered") return null;
+  const agent = text(get(raw, "agent"));
+  const from = text(get(raw, "from"));
+  return {
+    id,
+    task: text(get(raw, "task")) || null,
+    agent: agent || from || "Agent",
+    from: from || agent || "Agent",
+    title: text(get(raw, "title")) || "Approval needed",
+    command: text(get(raw, "command")),
+    kind: text(get(raw, "kind")) || "execute",
+    at: num(get(raw, "at")),
+  };
+}
+
+/** Pending approvals from `bh approvals list --json`; empty on null, failure or unimplemented. */
+export function approvalsList(answer) {
+  if (!answer || get(answer, "implemented") === false) return [];
+  const raw = Array.isArray(answer) ? answer : list(get(answer, "approvals"));
+  return raw.map(approvalRecord).filter(Boolean);
+}
+
+/** Pending approvals belonging to one task thread. */
+export function approvalsForTask(answer, taskId) {
+  const id = text(taskId);
+  if (!id) return [];
+  return approvalsList(answer).filter((r) => r.task === id);
+}
+
+/** Maps key "1"/"2"/"3" to an approval choice id, else null. */
+export function approvalChoiceForKey(key) {
+  const found = APPROVAL_CHOICES.find((c) => c.key === text(key));
+  return found ? found.id : null;
+}
+
+/** `bh approvals answer <id> once|project|deny` argv, or null when invalid. */
+export function approvalAnswerArgs(id, choice) {
+  const cleanId = text(id).trim();
+  const cleanChoice = text(choice).trim();
+  if (!cleanId || !APPROVAL_IDS.has(cleanChoice)) return null;
+  return ["approvals", "answer", cleanId, cleanChoice];
+}
+
+/** Stable element id for one diff line (`bh-diff-line-<path>-<new>`, or del fallback). */
+export function diffLineId(path, newLine, oldLine = null, index = 0) {
+  const p = text(path);
+  const n = num(newLine);
+  if (n > 0) return `bh-diff-line-${p}-${n}`;
+  const o = num(oldLine);
+  return `bh-diff-line-${p}-del-${o > 0 ? o : index}`;
+}
+
+/** Normalises one hunk line from `bh review diff`. */
+function diffRow(path, raw, index) {
+  const kindRaw = text(get(raw, "kind"));
+  const kind = kindRaw === "add" || kindRaw === "del" ? kindRaw : "ctx";
+  const oldLine = num(get(raw, "old")) || null;
+  const newLine = num(get(raw, "new")) || null;
+  return {
+    kind,
+    gutter: kind === "add" ? "+" : kind === "del" ? "−" : " ",
+    oldLine,
+    newLine,
+    lineId: diffLineId(path, newLine, oldLine, index),
+    text: text(get(raw, "text")),
+    commentable: newLine !== null && newLine > 0,
+  };
+}
+
+/** Shapes `bh review diff <task> <path> --json`; null on failure or `implemented: false`. */
+export function diffModel(answer) {
+  if (!answer || get(answer, "implemented") === false) return null;
+  const path = text(get(answer, "path"));
+  const rawHunks = list(get(answer, "hunks"));
+  if (!path && !rawHunks.length) return null;
+  let seq = 0;
+  const hunks = rawHunks.map((h) => ({
+    header: text(get(h, "header")),
+    rows: list(get(h, "lines")).map((l) => diffRow(path, l, seq++)),
+  })).filter((h) => h.header || h.rows.length);
+  return { path, truncated: Boolean(get(answer, "truncated")), hunks };
+}
+
+/** Shapes `bh review list <task> --json`; empty on failure or `implemented: false`. */
+export function reviewCommentsList(answer) {
+  if (!answer || get(answer, "implemented") === false) return [];
+  return list(get(answer, "comments")).map((raw) => {
+    const id = text(get(raw, "id"));
+    const path = text(get(raw, "path"));
+    const line = num(get(raw, "line"));
+    const body = text(get(raw, "text"));
+    if (!id || !path || !line || !body) return null;
+    return { id, at: num(get(raw, "at")), path, line, text: body, state: text(get(raw, "state")) === "sent" ? "sent" : "open" };
+  }).filter(Boolean);
+}
+
+/** Count of open (unsent) review comments. */
+export const openReviewCount = (comments) => list(comments).filter((c) => c && c.state !== "sent").length;
+
+/** Review comments anchored to one file and new-side line number. */
+export function commentsForLine(comments, path, line) {
+  const p = text(path);
+  const n = num(line);
+  if (!p || !n) return [];
+  return list(comments).filter((c) => c && c.path === p && num(c.line) === n);
+}
+
+/** `bh review add <task> <path> <line> "<text>"` argv, or null when invalid. */
+export function reviewAddArgs(task, path, line, body) {
+  const t = text(task).trim();
+  const p = text(path).trim();
+  const n = num(line);
+  const msg = text(body).trim();
+  if (!t || !p || !n || !msg) return null;
+  return ["review", "add", t, p, String(n), msg];
+}
+
+/** `bh review remove <task> <id>` argv, or null when invalid. */
+export function reviewRemoveArgs(task, id) {
+  const t = text(task).trim();
+  const cid = text(id).trim();
+  return t && cid ? ["review", "remove", t, cid] : null;
+}
+
+/** `bh review send <task>` argv, or null when invalid. */
+export function reviewSendArgs(task) {
+  const t = text(task).trim();
+  return t ? ["review", "send", t] : null;
+}
+
+/** The three conversation density modes; Normal is the default. */
+export const VIEW_MODES = [
+  { id: "summary", label: "Summary" },
+  { id: "normal", label: "Normal" },
+  { id: "verbose", label: "Verbose" },
+];
+export const DEFAULT_VIEW_MODE = "normal";
+
+const SUMMARY_WORDS = new Set(["question", "blocker", "approval", "decision", "done"]);
+
+/** Valid view mode id, else Normal. */
+export const viewModeOrDefault = (mode) => (VIEW_MODES.some((m) => m.id === mode) ? mode : DEFAULT_VIEW_MODE);
+
+/** Next view mode in the cycle Summary → Normal → Verbose → Summary. */
+export function nextViewMode(mode) {
+  const cur = viewModeOrDefault(mode);
+  const i = VIEW_MODES.findIndex((m) => m.id === cur);
+  return VIEW_MODES[(i + 1) % VIEW_MODES.length].id;
+}
+
+/** Filters conversation entries for the chosen view mode (Summary keeps needs-you, decisions and done). */
+export function filterConversation(entries, mode = DEFAULT_VIEW_MODE) {
+  const items = list(entries).filter(Boolean);
+  if (viewModeOrDefault(mode) !== "summary") return items;
+  return items.filter((e) => SUMMARY_WORDS.has(text(get(e, "word")).toLowerCase()) || Boolean(get(e, "needsYou")));
+}
+
+/** One-line summary text for a thread detail record. */
+export function threadSummary(show) {
+  const s = get(show, "summary");
+  return firstLine(typeof s === "string" ? s : get(s, "text"));
+}
+
+/** Maps a child record's raw state word onto the design language's state key. */
+function childStateOf(raw) {
+  const s = text(raw).toLowerCase();
+  if (s === "open" || s === "running" || s === "active" || s === "working") return "working";
+  if (s === "merged" || s === "done" || s === "closed") return "done";
+  if (s === "failed" || s === "error") return "failed";
+  if (s === "blocked" || s === "needsyou") return "needsYou";
+  if (s === "paused") return "paused";
+  return stateOf(raw);
+}
+
+/** Thread map tree from `bh thread show`: parent, children, forks, and optional `forkOf`. */
+export function threadMapModel(show, { rows = [] } = {}) {
+  const id = text(get(show, "id"));
+  const parent = { id, title: text(get(show, "title")) || id || "Thread", state: stateOf(get(show, "state")) };
+  const children = list(get(show, "children")).map((c, i) => {
+    const name = text(get(c, "name")) || text(get(c, "agent"));
+    if (!name) return null;
+    const agent = text(get(c, "agent")) || name;
+    return {
+      kind: "child",
+      key: name,
+      rowId: `bh-thread-map-${name}`,
+      name,
+      agent,
+      step: num(get(c, "step")),
+      state: childStateOf(get(c, "state")),
+      branch: text(get(c, "branch")),
+      address: text(get(c, "address")),
+      index: i,
+    };
+  }).filter(Boolean);
+  const forks = list(get(show, "forks")).map((f) => {
+    const fid = text(get(f, "id"));
+    if (!fid) return null;
+    return {
+      kind: "fork",
+      key: fid,
+      rowId: `bh-thread-map-${fid}`,
+      id: fid,
+      title: text(get(f, "title")) || fid,
+      state: stateOf(get(f, "state")),
+    };
+  }).filter(Boolean);
+  const forkOfId = text(get(show, "forkOf"));
+  const known = list(rows).find((r) => text(get(r, "id")) === forkOfId);
+  const forkOf = forkOfId ? { id: forkOfId, title: text(get(show, "forkOfTitle")) || text(get(known, "title")) || forkOfId } : null;
+  return { parent, children, forks, forkOf, hasTree: children.length > 0 || forks.length > 0 };
+}
+
+/** Prefill text for the Fork inline input: the thread's summary line, else its title. */
+export function forkPrefill(detail, row = null) {
+  return threadSummary(detail) || firstLine(get(row, "summary")) || firstLine(get(detail, "title"));
+}
+
+/** `bh thread fork <id> "<text>"` argv, or null when missing id or context. */
+export function forkArgs(id, carry) {
+  const tid = text(id).trim();
+  const body = text(carry).trim();
+  return tid && body ? ["thread", "fork", tid, body] : null;
 }

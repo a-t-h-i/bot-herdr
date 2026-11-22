@@ -28,7 +28,8 @@ import {
   shared, setShared, appHome,
 } from "herdr";
 import { showSettings, hold } from "./pages.js";
-import { SIZE, MOTION, ICON, TYPE, LINE, SPACE, ROW, CHIP, CONTROL, TARGET, MARK, DOT, PIP, HAIR, GLYPH, CLEAR, tint, readable, textWidth, rowsFor, baseName, upFrom, filterEntries, togglePick, sizeText, clickable, pressable, focusable, spinning, springing, timed } from "./look.js";
+import { SIZE, MOTION, ICON, TYPE, TYPE_SCALE, LINE, SPACE, ROW, CHIP, CONTROL, TARGET, RADIUS, MARK, DOT, PIP, HAIR, GLYPH, CLEAR, tint, readable, textWidth, rowsFor, baseName, upFrom, filterEntries, togglePick, sizeText, clickable, pressable, focusable, spinning, springing, timed } from "./look.js";
+import { composerSendMode, composerPlaceholder } from "./signals.js";
 import { actionButton } from "./button.js";
 import { stateView } from "./switch.js";
 import { colors } from "./theme.js";
@@ -215,6 +216,8 @@ export class Composer {
     this.pageHeight = 700;
     this.sending = false;
     this.outboxQueue = []; // cross-page sendText items queued while a send is in flight
+    this.queuedMessages = []; // messages queued while target agent is working (removable until sent)
+    this.queueSeq = 0;
     this.sendFx = { n: 0, phase: "rest" }; // the send key's arrow: "rest" | "launch" | "land" | "rise"
     this.width = SIZE.maxWidth;
     this.justBriefed = new Set(); // briefed this session; the label can take a moment to show
@@ -254,7 +257,7 @@ export class Composer {
     try {
       cx.bind_keys([
         { keystroke: "enter", action: "bot_herdr_send", context: "BotHerdr > Input" },
-        { keystroke: "ctrl-enter", action: "bot_herdr_send", context: "BotHerdr > Input" },
+        { keystroke: "ctrl-enter", action: "bot_herdr_steer", context: "BotHerdr > Input" },
         { keystroke: "pageup", action: "bot_herdr_page_up", context: "BotHerdr > Input" },
         { keystroke: "pagedown", action: "bot_herdr_page_down", context: "BotHerdr > Input" },
         { keystroke: "ctrl-end", action: "bot_herdr_latest", context: "BotHerdr > Input" },
@@ -270,6 +273,7 @@ export class Composer {
 
     this.loadKnown(cx);
     cx.timer.every(60000, (cx) => this.loadKnown(cx));
+    cx.timer.every(1500, (cx) => this.flushQueued(cx));
   }
 
   focus() {
@@ -1234,6 +1238,15 @@ export class Composer {
   }
 
   send(cx) {
+    this.submitInput(cx, false);
+  }
+
+  /** Ctrl+Enter (or Steer button): interrupts a working target agent, then sends. */
+  steer(cx) {
+    this.submitInput(cx, true);
+  }
+
+  submitInput(cx, steer) {
     if (this.sending) return;
     // With a question up, what you type answers it.
     if (!this.pane && this.paneNow() === "ask") {
@@ -1249,11 +1262,51 @@ export class Composer {
       if (option) return at.question.multi ? this.toggleAsk(q, option.label, cx) : this.answerAsk(q, { picks: [option.label] }, cx);
       return this.answerAsk(q, { text: typed }, cx);
     }
-    this.dispatchContent(this.input.content(), this.files, { fromInput: true }, cx);
+    const content = this.input.content();
+    const text = String(content?.text ?? "").trim();
+    const target = this.target();
+    const busy = target?.status === "working";
+    const mode = composerSendMode({ busy, steer });
+    if (mode === "queue" && (text || this.files.length) && !/^\s*\//.test(text)) {
+      this.queuedMessages.push({
+        n: ++this.queueSeq,
+        text: text || this.files.map((f) => f.name).join(", "),
+        content,
+        files: [...this.files],
+        address: target?.address ?? null,
+      });
+      this.files = [];
+      this.input.set_value("");
+      this.text = "";
+      this.pane = null;
+      this.trigger = null;
+      this.mode = null;
+      this.dismissed = null;
+      cx.notify();
+      return;
+    }
+    this.dispatchContent(content, this.files, { fromInput: true, steer: mode === "steer" }, cx);
   }
 
-  /** Plans and dispatches one message (`fromInput: false` for queued cross-page sends). */
-  dispatchContent(content, keptFiles, { fromInput = false } = {}, cx) {
+  /** Removes a queued message before it is delivered. */
+  removeQueued(n, cx) {
+    this.queuedMessages = this.queuedMessages.filter((item) => item.n !== n);
+    cx.notify();
+  }
+
+  /** Delivers the oldest queued message once its target agent is no longer working. */
+  flushQueued(cx) {
+    if (!this.queuedMessages.length || this.sending) return;
+    const next = this.queuedMessages[0];
+    const all = agents();
+    const agent = next.address ? all.find((a) => a.address === next.address) : this.target();
+    if (agent?.status === "working") return;
+    this.queuedMessages.shift();
+    this.dispatchContent(next.content, next.files, { fromInput: false }, cx);
+  }
+
+  /** Plans and dispatches one message (`fromInput: false` for queued sends; `steer: true` interrupts first). */
+  dispatchContent(content, keptFiles, { fromInput = false, steer = false } = {}, cx) {
     const all = agents();
     const target = this.target();
     const result = plan(content, {
@@ -1327,6 +1380,10 @@ export class Composer {
       }
       for (const step of steps) {
         try {
+          if (steer && step.do === "send" && step.address) {
+            const liveAgent = all.find((a) => a.address === step.address);
+            if (liveAgent?.status === "working") await hc(["interrupt", step.address]);
+          }
           await this.runStep(step, all);
           if (step.do === "send") to.push({ address: step.address, name: this.nameOf(step.address) });
           if (step.do === "start") to.push({ address: null, name: step.tab ?? step.name });
@@ -1558,10 +1615,16 @@ export class Composer {
     return rows;
   }
 
+  /** Height reserved by queued message rows shown above the composer. */
+  queueH() {
+    const n = this.queuedMessages?.length ?? 0;
+    return n > 0 ? n * (CONTROL + SPACE[1]) + SPACE[2] : 0;
+  }
+
   height(width) {
     if (this.isFolded()) return 40;
-    if (this.atRest()) return SIZE.textTop * 2 + SIZE.line + 2;
-    return SIZE.textTop + this.textRows(width) * SIZE.line + SIZE.tools + 2;
+    const base = this.atRest() ? SIZE.textTop * 2 + SIZE.line + 2 : SIZE.textTop + this.textRows(width) * SIZE.line + SIZE.tools + 2;
+    return base + this.queueH();
   }
 
   /** The attachments row: taller when it shows images. */
@@ -1604,10 +1667,12 @@ export class Composer {
     const menu = this.paneView(c, width);
     const folded = this.isFolded();
     const attach = !folded && this.files.length > 0 ? this.attachments(c, width) : null;
+    const queued = !folded && this.queuedMessages.length > 0 ? this.queueView(c, width) : null;
     return v_flex()
       .id("bc")
       .key_context(contexts.join(" "))
       .on_action("bot_herdr_send", (_e, cx) => this.send(cx))
+      .on_action("bot_herdr_steer", (_e, cx) => this.steer(cx))
       .on_action("bot_herdr_pick", (_e, cx) => this.pick(this.rows()[this.at], cx))
       .on_action("bot_herdr_up", (_e, cx) => this.move(-1, cx))
       .on_action("bot_herdr_down", (_e, cx) => this.move(1, cx))
@@ -1620,8 +1685,35 @@ export class Composer {
       .when(Boolean(this.toast), (el) => el.child(this.toastView(c, width)))
       // Painted before the pane, so the pane covers the box's top edge where they join.
       .child(folded ? this.slim(c, width) : this.box(c, width, Boolean(menu)))
+      .when(Boolean(queued), (el) => el.child(queued))
       .when(Boolean(attach), (el) => el.child(attach))
       .when(Boolean(menu), (el) => el.child(menu));
+  }
+
+  /** Muted rows above the composer for messages queued while the target agent is working. */
+  queueView(c, width) {
+    return v_flex()
+      .id("bh-queue")
+      .flex_none()
+      .w(width)
+      .pb(SPACE[2])
+      .gap(SPACE[1])
+      .children(this.queuedMessages.map((item) => h_flex()
+        .id(`bh-queue-${item.n}`)
+        .role("status")
+        .accessibility_label(`Queued message: ${item.text}`)
+        .w_full()
+        .h(CONTROL)
+        .px(SPACE[3])
+        .gap(SPACE[2])
+        .items_center()
+        .rounded(RADIUS.control)
+        .bg(c.well)
+        .border_1()
+        .border_color(c.edge)
+        .child(div().flex_none().text_size(TYPE_SCALE.metadata).text_color(c.textMuted).child("Queued"))
+        .child(div().flex_1().min_w(0).truncate().text_size(TYPE_SCALE.metadata).text_color(c.textSecondary).child(item.text.replace(/\s+/g, " ")))
+        .child(actionButton(c, `bh-queue-${item.n}-remove`, "Remove", (_e, cx) => this.removeQueued(item.n, cx), { tone: "quiet", tooltip: "Remove queued message" }))));
   }
 
   // The composer box: the text and the tools row. Attachments sit above it as thumbnails.
@@ -1632,7 +1724,13 @@ export class Composer {
     const target = this.target();
     const busy = target?.status === "working";
     const empty = !this.text.trim() && !this.files.length;
-    const placeholder = !this.pane && this.paneNow() === "ask" ? "Or type your own reply…" : busy ? `${lead?.name ?? "Orchestrator"} is working. Enter steers it…` : this.placeholder ?? PLACEHOLDER;
+    const placeholder = composerPlaceholder({
+      asking: !this.pane && this.paneNow() === "ask",
+      busy,
+      leadName: lead?.name ?? "Orchestrator",
+      customPlaceholder: this.placeholder,
+      fallback: PLACEHOLDER,
+    });
     // Every height here is stated. The text box stretches to fill its parent, and a floating
     // surface may be offered the whole window, so nothing is left to size itself.
     const rest = this.atRest();
@@ -1649,9 +1747,9 @@ export class Composer {
       .rounded(SIZE.radius)
       .shadow_md()
       .on_drop((e, cx) => this.addFiles(e.paths, cx))
-      // Enter and Ctrl+Enter from the text box inside send (bound in init): the box hears them
-      // first; the pane's own inputs, outside it, still reach the composer's handler above.
+      // Enter queues while busy (or sends when idle); Ctrl+Enter steers (interrupts then sends).
       .on_action("bot_herdr_send", (_e, cx) => this.send(cx))
+      .on_action("bot_herdr_steer", (_e, cx) => this.steer(cx))
       .on_mouse_down("left", (_e, cx) => {
         cx.stop_propagation(); // the box keeps its own presses: the scrim behind must not see them
         this.expanded = true;
@@ -1937,6 +2035,7 @@ export class Composer {
         "bc-lead-model",
       )))
       .child(div().flex_1())
+      .when(busy && !empty, (el) => el.child(actionButton(c, "bh-steer", "Steer", (_e, cx) => this.steer(cx), { tone: "secondary", tooltip: "Interrupt and steer (Ctrl+Enter)" })))
       .when(busy, (el) =>
         el.child(focusable(
           pressable(

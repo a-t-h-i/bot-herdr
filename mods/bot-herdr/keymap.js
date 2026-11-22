@@ -25,7 +25,8 @@ export const KEYMAP = [
   row("threads", ["Enter"], "Open the picked row"),
   row("threads", ["Esc"], "Close the peek, then go back"),
   row("threads", ["1", "2", "3", "4", "5", "6", "7", "8", "9"], "Pick an option on a question card"),
-  row("threads", ["Ctrl+Enter"], "Send the composer"),
+  row("threads", ["V"], "Cycle Summary, Normal and Verbose"),
+  row("threads", ["Ctrl+Enter"], "Send or steer the composer"),
   row("agents", ["J", "K", "Space", "Enter"], "Move, peek and open the fleet"),
 ];
 

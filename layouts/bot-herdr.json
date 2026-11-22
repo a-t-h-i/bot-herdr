@@ -201,6 +201,7 @@
                     {
                       "id": "panes",
                       "type": "row",
+                      "gap": 8,
                       "children": [
                         {
                           "id": "main",

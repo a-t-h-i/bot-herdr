@@ -1145,7 +1145,7 @@ export class Chat {
         .on_click((_ev, cx) => this.openKids(e.id, cx))
         .children(e.children.slice(0, KID_BADGES).map((k) => agentBadge(c, k.from?.name ?? "Agent", CHIP)))
         .when(n > KID_BADGES, (el) => el.child(div().text_size(TYPE.xs).text_color(c.faint).child(`+${n - KID_BADGES}`)))
-        .child(div().flex_none().text_size(TYPE.sm).font_medium().text_color(c.ink).child(`${n} child report${n === 1 ? "" : "s"}`))
+        .child(div().flex_none().text_size(TYPE.sm).font_medium().text_color(c.ink).child(`${n} child thread${n === 1 ? "" : "s"}`))
         .child(div().flex_1().min_w(0).truncate().text_size(TYPE.sm).text_color(c.muted).child(`· ${names}`))
         .child(svg(ICON(open ? "chevron-down" : "chevron-right")).flex_none().size(GLYPH.sm).text_color(c.faint)),
       c,

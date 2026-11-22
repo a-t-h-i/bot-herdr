@@ -9,8 +9,8 @@
 
 import { div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { settings, shared, setShared, run } from "herdr";
-import { SIZE, TYPE_SCALE, LINE, SPACE, CONTROL, RADIUS, STATE, MOTION, HIGHLIGHT_MS, stateTone, clickable, reducedMotion } from "./look.js";
+import { terminals, settings, shared, setShared, run } from "herdr";
+import { SIZE, TYPE_SCALE, LINE, SPACE, CONTROL, RADIUS, STATE, MOTION, HIGHLIGHT_MS, stateTone, clickable, activates, reducedMotion } from "./look.js";
 import { Chat } from "./chat.js";
 import { Work } from "./work.js";
 import { safeRender } from "./render-safe.js";
@@ -22,14 +22,19 @@ import { markdownWithFoldedCode, machineLine, toggleMachine } from "./machinetex
 import { mentionTone } from "./indicators.js";
 import { bh, bhJson, projectDir } from "./bh.js";
 import { ago } from "./numbers.js";
-import { activeStage, showPage, viewShown, wakeGoal, FOCUS, OPEN_TASK, OPEN_THREAD } from "./pages.js";
+import { activeStage, showPage, openTerminal, viewShown, wakeGoal, FOCUS, OPEN_TASK, OPEN_THREAD } from "./pages.js";
 import { appKeyAction, isChord, keyName, nextPick, opensRow } from "./rowkeys.js";
 import { KEYMAP_OPEN } from "./keymap.js";
 import { arrivedIds, newlyDone } from "./signals.js";
 import { PeekDrawer, PEEK_WIDTH } from "./peek.js";
+import { renderApprovalCard } from "./approvalcard.js";
+import { renderDiffView } from "./diffreview.js";
+import { renderThreadMap, renderForkOrigin } from "./threadmap.js";
 import {
-  ORCHESTRATOR, SUB_TABS, STATE_ORDER, GROUP_LABELS, threadRows, groupThreads, drawnOrder, stateCounts, subOrDefault, breadcrumb,
-  conversation, planModel, changesModel, goalRowModel, goalRowParts,
+  ORCHESTRATOR, SUB_TABS, STATE_ORDER, GROUP_LABELS, VIEW_MODES, threadRows, groupThreads, drawnOrder, stateCounts, subOrDefault, breadcrumb,
+  conversation, planModel, changesModel, goalRowModel, goalRowParts, approvalsForTask, approvalAnswerArgs,
+  diffModel, reviewCommentsList, openReviewCount, reviewAddArgs, reviewRemoveArgs, reviewSendArgs,
+  viewModeOrDefault, nextViewMode, filterConversation, threadSummary, threadMapModel, forkPrefill, forkArgs,
 } from "./threadview.js";
 
 const REFRESH_MS = 10000;
@@ -67,7 +72,42 @@ export class Threads {
     this.pick = 0;
     this.listPick = 0; // the pick to come back to from a thread
     this.expanded = new Set(); // conversation entries opened in place
-    this.machineOpen = new Set(); // folded machine text opened in the plan
+    this.machineOpen = new Set(); // folded machine text opened in the plan or approval cards
+    this.viewModes = new Map(); // thread id -> "summary" | "normal" | "verbose"
+    this.approvals = []; // pending approvals belonging to the open thread
+    this.approvalAnswered = new Map(); // approval id -> choice while folding
+    this.approvalFolded = new Set(); // approval ids finished folding
+    this.expandedDiffs = new Set(); // file paths expanded in Changes
+    this.diffs = new Map(); // path -> diffModel | null
+    this.diffLoading = new Set(); // file paths currently reading diff
+    this.reviewComments = []; // bh review list for the open thread
+    this.reviewCommenting = null; // { path, line } for the one open inline review box
+    this.reviewSaving = false;
+    this.reviewSending = false;
+    this.reviewTyping = false;
+    this.reviewInput = InputState.new({ placeholder: "Add a review comment…" });
+    this.reviewInput.on("submit", (_e, cx) => this.saveReviewComment(cx));
+    this.reviewInput.on("focus", (_e, cx) => {
+      this.reviewTyping = true;
+      cx.notify();
+    });
+    this.reviewInput.on("blur", (_e, cx) => {
+      this.reviewTyping = false;
+      cx.notify();
+    });
+    this.forkOpen = false;
+    this.forking = false;
+    this.forkTyping = false;
+    this.forkInput = InputState.new({ placeholder: "What to carry into the forked thread…" });
+    this.forkInput.on("submit", (_e, cx) => this.submitFork(cx));
+    this.forkInput.on("focus", (_e, cx) => {
+      this.forkTyping = true;
+      cx.notify();
+    });
+    this.forkInput.on("blur", (_e, cx) => {
+      this.forkTyping = false;
+      cx.notify();
+    });
     this.armed = null; // Clear, once clicked, waits for a second click
     this.seenNeeds = null; // needs-you thread ids seen at last load, for the one-shot arrival pulse
     this.pulsingNeeds = new Set(); // newly arrived needs-you thread ids pulsing 0.35 -> 1 once
@@ -84,7 +124,7 @@ export class Threads {
     });
     this.search.on("focus", (_e, cx) => this.setSearching(true, cx));
     this.search.on("blur", (_e, cx) => this.setSearching(false, cx));
-    this.peek = new PeekDrawer();
+    this.peek = new PeekDrawer({ onChanged: (cx) => this.refresh(cx) });
     this.handle = cx.focus_handle();
     this.openAt = /** @type {{ at?: number } | null} */ (shared(OPEN_THREAD))?.at ?? 0;
     this.taskAt = /** @type {{ at?: number } | null} */ (shared(OPEN_TASK))?.at ?? 0;
@@ -156,16 +196,22 @@ export class Threads {
     });
   }
 
-  /** Reads one thread, and its goal progress when it is a Goal. */
+  /** Reads one thread, its goal progress, its pending approvals and its review comments. */
   loadDetail(id, cx) {
     cx.spawn(async (cx) => {
       const dir = projectDir();
-      const got = await bhJson(["thread", "show", id], { cwd: dir });
+      const [got, ap, rv] = await Promise.all([
+        bhJson(["thread", "show", id], { cwd: dir }),
+        bhJson(["approvals", "list"], { cwd: dir }),
+        bhJson(["review", "list", id], { cwd: dir }),
+      ]);
       if (this.opened !== id) return;
       if (got) {
         this.detail = got;
         this.detailId = id;
       }
+      this.approvals = approvalsForTask(ap, id);
+      this.reviewComments = reviewCommentsList(rv);
       this.progress = got?.goal ? await bhJson(["goal", "progress", id], { cwd: dir }) : null;
       cx.notify();
     });
@@ -193,9 +239,16 @@ export class Threads {
     this.sub = subOrDefault(sub);
     this.problem = null;
     this.expanded = new Set();
+    this.forkOpen = false;
+    this.reviewCommenting = null;
     if (this.detailId !== id) {
       this.detail = null;
       this.progress = null;
+      this.approvals = [];
+      this.reviewComments = [];
+      this.expandedDiffs.clear();
+      this.diffs.clear();
+      this.diffLoading.clear();
     }
     if (id !== ORCHESTRATOR) {
       this.loadDetail(id, cx);
@@ -235,11 +288,13 @@ export class Threads {
     }
   }
 
-  /** View-local app keys (Ctrl+1..5, ?), peek keys, Esc back, then list J / K / Space / Enter. */
+  /** View-local app keys (Ctrl+1..5, ?), peek keys, Esc back, `v` view mode, then list keys. */
   keys(e, cx) {
     const typing = Boolean(
       this.searching
       || this.peek.typing
+      || this.reviewTyping
+      || this.forkTyping
       || this.chat.composer.focused
       || this.chat.composer.typingCount > 0
       || this.chat.typingCount > 0
@@ -261,8 +316,22 @@ export class Threads {
     if (isChord(e)) return;
     if (this.peek.keys(e, cx)) return cx.stop_propagation();
     const key = keyName(e);
+    if (key === "escape" && this.forkOpen) {
+      this.forkOpen = false;
+      cx.stop_propagation();
+      return cx.notify();
+    }
+    if (key === "escape" && this.reviewCommenting) {
+      this.reviewCommenting = null;
+      cx.stop_propagation();
+      return cx.notify();
+    }
     if (key === "escape" && this.opened && !this.chat.composer.focused) {
       this.back(cx);
+      return cx.stop_propagation();
+    }
+    if (this.opened && this.opened !== ORCHESTRATOR && !typing && key === "v") {
+      this.setViewMode(nextViewMode(this.viewMode()), cx);
       return cx.stop_propagation();
     }
     if (this.opened || this.searching || this.peek.typing) return;
@@ -323,7 +392,7 @@ export class Threads {
   }
 
   column() {
-    const room = this.width - (this.peek.isOpen() && !this.opened ? PEEK_WIDTH : 0);
+    const room = this.width - (this.peek.isOpen() ? PEEK_WIDTH : 0);
     return Math.max(320, Math.min(MAX, room - SIZE.gutter * 2));
   }
 
@@ -479,25 +548,137 @@ export class Threads {
       .child(div().flex_1().min_h(0).relative().child(error ? stateView(c, { id: "bh-threads-chat-error", title: "The chat could not be drawn", line: error.detail }) : node));
   }
 
-  /** The breadcrumb, the second row and the sub-tab's body. */
+  /** Active conversation density mode for the open thread (Normal by default). */
+  viewMode() {
+    return viewModeOrDefault(this.viewModes.get(this.opened));
+  }
+
+  /** Stores the view mode per thread in memory and redraws. */
+  setViewMode(mode, cx) {
+    if (!this.opened || this.opened === ORCHESTRATOR) return;
+    this.viewModes.set(this.opened, viewModeOrDefault(mode));
+    cx.notify();
+  }
+
+  /** Opens or closes the inline Fork context input, prefilled with the thread's summary line. */
+  toggleFork(cx) {
+    this.forkOpen = !this.forkOpen;
+    if (this.forkOpen) {
+      const row = this.rows().find((r) => r.id === this.opened) ?? null;
+      this.forkInput.set_value(forkPrefill(this.detail, row));
+      this.forkInput.focus();
+    }
+    cx.notify();
+  }
+
+  /** Runs `bh thread fork <id> "<text>"` and opens the newly forked thread. */
+  submitFork(cx) {
+    const args = forkArgs(this.opened, this.forkInput.value());
+    if (!args || this.forking) return;
+    this.forking = true;
+    cx.notify();
+    cx.spawn(async (cx) => {
+      const got = await bhJson(args, { cwd: projectDir() });
+      this.forking = false;
+      this.forkOpen = false;
+      if (got && got.implemented !== false && got.id) {
+        this.load(cx);
+        this.openThread(String(got.id), cx);
+        return;
+      }
+      if (got && got.implemented !== false && got.error) this.problem = String(got.error);
+      cx.notify();
+    });
+  }
+
+  /** Inline input for starting a forked thread with carried context. */
+  forkBar(c) {
+    return h_flex()
+      .id("bh-fork-input")
+      .w_full()
+      .gap(SPACE[2])
+      .items_center()
+      .on_key_down((e, cx) => {
+        if (keyName(e) !== "escape") return;
+        this.forkOpen = false;
+        cx.stop_propagation();
+        cx.notify();
+      })
+      .child(h_flex().flex_1().min_w(0).h(CONTROL).px(SPACE[3]).items_center().rounded(SIZE.control).bg(c.fill).border_1().border_color(c.controlBorder ?? c.edge)
+        .accessibility_label("Context to carry into the forked thread")
+        .child(Input.new(this.forkInput).flex_1().min_w(0).h_full().text_size(TYPE_SCALE.body).text_color(c.textPrimary)))
+      .child(actionButton(c, "bh-fork-submit", "Create fork", (_e, cx) => this.submitFork(cx), { tone: "secondary", disabled: this.forking, tooltip: "Create forked thread (Enter)" }))
+      .child(actionButton(c, "bh-fork-cancel", "Cancel", (_e, cx) => {
+        this.forkOpen = false;
+        cx.notify();
+      }, { tone: "quiet", tooltip: "Cancel (Esc)" }));
+  }
+
+  /** Peeks a child worker or forked thread from the thread map. */
+  peekMapItem(item, cx) {
+    if (item.kind === "fork") return this.peek.toggle({ kind: "thread", id: item.id }, cx);
+    const live = this.findChildTerminal(item);
+    this.peek.toggle({
+      kind: "agent",
+      agent: { name: item.name, address: live?.address ?? item.address ?? item.name, state: item.state, task: this.opened },
+    }, cx);
+  }
+
+  /** Opens a forked thread or a child worker's terminal (or Steps when no terminal is live). */
+  openMapItem(item, cx) {
+    if (item.kind === "fork") return this.openThread(item.id, cx);
+    const live = this.findChildTerminal(item);
+    if (live?.address) return openTerminal(live.address);
+    this.sub = "steps";
+    cx.notify();
+  }
+
+  /** Finds a live terminal for a child worker by address or name. */
+  findChildTerminal(item) {
+    const wanted = String(item.address || item.name || "").toLowerCase();
+    return terminals().find((t) => t?.state === "live" && (String(t.address ?? "").toLowerCase() === wanted || String(t.name ?? "").toLowerCase() === wanted)) ?? null;
+  }
+
+  /** The breadcrumb, the second row (sub-tabs + view mode), optional thread map, and the sub-tab body. */
   threadPage(c, cx) {
     const content = this.column();
     const sub = subOrDefault(this.sub);
-    return v_flex().size_full().items_center()
-      .child(v_flex().flex_none().w(content).pt(SPACE[5]).gap(SPACE[3])
-        .child(h_flex().gap(SPACE[3]).items_center()
-          .child(div().flex_1().min_w(0).child(this.crumbs(c, sub)))
-          .child(actionButton(c, "bh-thread-files", "Files", () => run("mod.open", { name: "files" }), { tone: "quiet", tooltip: "Open the Files window" })))
-        .child(segmented(c, {
-          id: "bh-thread-tabs",
-          items: SUB_TABS.map((t) => ({ id: t.id, label: t.label, on: t.id === sub })),
-          onPick: (id, cx) => {
-            this.sub = subOrDefault(id);
-            cx.notify();
-          },
-        }))
-        .when(Boolean(this.problem), (el) => el.child(div().text_size(TYPE_SCALE.metadata).text_color(c.danger).child(this.problem))))
-      .child(div().flex_1().min_h(0).w_full().relative().child(this.subBody(c, sub, content, cx)));
+    const mode = this.viewMode();
+    const map = this.detail && this.detailId === this.opened ? threadMapModel(this.detail, { rows: this.rows() }) : null;
+    const peeking = this.peek.isOpen();
+    return div().size_full().relative()
+      .child(v_flex().absolute().top(0).bottom(0).left(0).right(peeking ? PEEK_WIDTH : 0).items_center()
+        .child(v_flex().flex_none().w(content).pt(SPACE[5]).gap(SPACE[3])
+          .child(h_flex().gap(SPACE[2]).items_center()
+            .child(div().flex_1().min_w(0).child(this.crumbs(c, sub)))
+            .child(actionButton(c, "bh-thread-fork", "Fork", (_e, cx) => this.toggleFork(cx), { tone: "secondary", tooltip: "Fork this thread with carried context" }))
+            .child(actionButton(c, "bh-thread-files", "Files", () => run("mod.open", { name: "files" }), { tone: "quiet", tooltip: "Open the Files window" })))
+          .when(Boolean(map?.forkOf), (el) => el.child(renderForkOrigin(c, { forkOf: map.forkOf, onOpen: (id, cx) => this.openThread(id, cx) })))
+          .when(this.forkOpen, (el) => el.child(this.forkBar(c)))
+          .child(h_flex().gap(SPACE[3]).items_center()
+            .child(segmented(c, {
+              id: "bh-thread-tabs",
+              items: SUB_TABS.map((t) => ({ id: t.id, label: t.label, on: t.id === sub })),
+              onPick: (id, cx) => {
+                this.sub = subOrDefault(id);
+                cx.notify();
+              },
+            }))
+            .child(div().flex_1())
+            .when(sub === "conversation", (el) => el.child(segmented(c, {
+              id: "bh-view-mode",
+              choice: true,
+              items: VIEW_MODES.map((m) => ({ id: m.id, label: m.label, on: m.id === mode })),
+              onPick: (id, cx) => this.setViewMode(id, cx),
+            }))))
+          .when(Boolean(map?.hasTree), (el) => el.child(renderThreadMap(c, {
+            model: map,
+            onPeek: (item, cx) => this.peekMapItem(item, cx),
+            onOpen: (item, cx) => this.openMapItem(item, cx),
+          })))
+          .when(Boolean(this.problem), (el) => el.child(div().text_size(TYPE_SCALE.metadata).text_color(c.danger).child(this.problem))))
+        .child(div().flex_1().min_h(0).w_full().relative().child(this.subBody(c, sub, content, cx))))
+      .when(peeking, (el) => el.child(this.peek.render(c)));
   }
 
   subBody(c, sub, content, cx) {
@@ -510,26 +691,72 @@ export class Threads {
     return this.conversationBody(c, cx);
   }
 
-  // Conversation: the board and the replies, the goal row and the composer at the foot.
+  /** Answers a pending approval card in this thread and folds it over MOTION.fold. */
+  answerApproval(record, choice, cx) {
+    const args = approvalAnswerArgs(record?.id, choice);
+    if (!args || this.approvalAnswered.has(record.id)) return;
+    this.approvalAnswered.set(record.id, choice);
+    if (reducedMotion()) {
+      this.approvalFolded.add(record.id);
+    } else {
+      cx.timer.after(MOTION.fold.duration + 16, (cx) => {
+        if (this.approvalAnswered.get(record.id) !== choice) return;
+        this.approvalFolded.add(record.id);
+        cx.notify();
+      });
+    }
+    cx.notify();
+    cx.spawn(async (cx) => {
+      const r = await bhJson(args, { cwd: projectDir() });
+      if (r && r.implemented !== false && r.ok === false) {
+        this.approvalAnswered.delete(record.id);
+        this.approvalFolded.delete(record.id);
+        this.problem = String(r.error || "Couldn't record that approval answer.");
+      } else if (this.opened && this.opened !== ORCHESTRATOR) {
+        this.loadDetail(this.opened, cx);
+      }
+      cx.notify();
+    });
+  }
+
+  // Conversation: pending approvals, then the board and replies (in Summary/Normal/Verbose), the goal row and composer.
   conversationBody(c, cx) {
     const composer = this.chat.composer;
-    const pageW = Math.max(320, Math.min(SIZE.maxWidth, this.width - SIZE.gutter * 2));
+    const availW = this.width - (this.peek.isOpen() ? PEEK_WIDTH : 0);
+    const pageW = Math.max(320, Math.min(SIZE.maxWidth, availW - SIZE.gutter * 2));
     const goal = goalRowModel(this.progress);
     const foot = SIZE.foot + composer.height(pageW) + SPACE[4] + (goal ? GOAL_H + SPACE[3] : 0);
-    const entries = conversation(this.detail);
+    const mode = this.viewMode();
+    const allEntries = conversation(this.detail);
+    const entries = filterConversation(allEntries, mode);
+    const summaryLine = mode === "summary" ? threadSummary(this.detail) : "";
+    const pendingApprovals = this.approvals.filter((r) => !this.approvalFolded.has(r.id));
     return div().absolute().inset_0()
       .child(v_flex().id("bh-thread-feed").absolute().top(0).left(0).right(0).bottom(foot).overflow_y_scroll().items_center()
         .child(v_flex().flex_none().w(pageW).py(SPACE[4]).gap(SPACE[3])
-          .when(!entries.length, (el) => el.child(stateView(c, { id: "bh-thread-quiet", title: "Nothing said here yet.", line: "Replies, comments and the board's entries for this thread appear here. Write below to start." })))
-          .children(entries.map((e) => this.entry(c, e)))))
+          .children(pendingApprovals.map((rec, i) => renderApprovalCard(c, {
+            record: rec,
+            answered: this.approvalAnswered.get(rec.id) ?? null,
+            folded: this.approvalFolded.has(rec.id),
+            expanded: this.machineOpen.has(`ap-${rec.id}`),
+            onToggleCommand: (_e, cx) => {
+              toggleMachine(this.machineOpen, `ap-${rec.id}`);
+              cx.notify();
+            },
+            onAnswer: (r, ch, cx) => this.answerApproval(r, ch, cx),
+            allowPrimary: i === 0,
+          })).filter(Boolean))
+          .when(Boolean(summaryLine), (el) => el.child(div().id("bh-thread-summary").px(SPACE[3]).py(SPACE[2]).rounded(RADIUS.control).bg(c.fill).border_1().border_color(c.edge).text_size(TYPE_SCALE.body).text_color(c.textSecondary).child(summaryLine)))
+          .when(!entries.length && !pendingApprovals.length && !summaryLine, (el) => el.child(stateView(c, { id: "bh-thread-quiet", title: "Nothing said here yet.", line: "Replies, comments and the board's entries for this thread appear here. Write below to start." })))
+          .children(entries.map((e) => this.entry(c, e, mode)))))
       .child(v_flex().absolute().left(0).right(0).bottom(SIZE.foot).items_center().gap(SPACE[3])
         .when(Boolean(goal), (el) => el.child(this.goalRow(c, goal, pageW)))
-        .child(composer.render(cx, this.width, this.height, c)));
+        .child(composer.render(cx, availW, this.height, c)));
   }
 
-  /** One board entry: type word (muted), author, time, first line; the rest opens in place. */
-  entry(c, e) {
-    const open = this.expanded.has(e.key);
+  /** One board entry: type word (muted), author, time, first line; Summary stays 1 line, Verbose unfolds all. */
+  entry(c, e, mode = "normal") {
+    const open = mode === "verbose" ? true : mode === "summary" ? false : this.expanded.has(e.key);
     const head = h_flex().gap(SPACE[2]).items_center()
       .child(div().flex_none().text_size(TYPE_SCALE.metadata).text_color(c.textMuted).child(e.word))
       .child(div().flex_none().text_size(TYPE_SCALE.metadata).font_semibold().text_color(c.textPrimary).child(e.from))
@@ -539,9 +766,9 @@ export class Threads {
     const body = open
       ? div().text_size(TYPE_SCALE.body).line_height(`${LINE.md}px`).text_color(c.textPrimary).child(e.text)
       : div().truncate().text_size(TYPE_SCALE.body).text_color(c.textPrimary).child(e.first);
-    const fold = e.more ? (open ? " (open; press to fold)" : " (press to read all)") : "";
+    const fold = e.more && mode === "normal" ? (open ? " (open; press to fold)" : " (press to read all)") : "";
     const card = v_flex().role("article").accessibility_label(`${e.word} from ${e.from}: ${e.first}${fold}`).gap(SPACE[1]).px(SPACE[3]).py(SPACE[2]).rounded(RADIUS.control).child(head).child(body);
-    if (!e.more) return card.id(`bh-thread-entry-${e.key}`);
+    if (!e.more || mode !== "normal") return card.id(`bh-thread-entry-${e.key}`);
     return clickable(card.on_click((_e, cx) => {
       if (this.expanded.has(e.key)) this.expanded.delete(e.key);
       else this.expanded.add(e.key);
@@ -622,13 +849,95 @@ export class Threads {
     return this.work.taskStepsTab(c, t);
   }
 
-  /** Changes: the diff stat of the thread's branch against where it started. */
+  /** Expands or collapses one file's in-place diff (`bh review diff`). */
+  toggleDiff(path, cx) {
+    if (this.expandedDiffs.has(path)) {
+      this.expandedDiffs.delete(path);
+      if (this.reviewCommenting?.path === path) this.reviewCommenting = null;
+      return cx.notify();
+    }
+    this.expandedDiffs.add(path);
+    if (!this.diffs.has(path) && !this.diffLoading.has(path)) {
+      const taskId = this.opened;
+      this.diffLoading.add(path);
+      cx.spawn(async (cx) => {
+        const got = await bhJson(["review", "diff", taskId, path], { cwd: projectDir() });
+        this.diffLoading.delete(path);
+        if (this.opened !== taskId) return;
+        this.diffs.set(path, diffModel(got));
+        cx.notify();
+      });
+    }
+    cx.notify();
+  }
+
+  /** Opens the one inline review comment box under `(path, line)`. */
+  startReviewComment(path, line, cx) {
+    const same = this.reviewCommenting?.path === path && this.reviewCommenting?.line === line;
+    this.reviewCommenting = same ? null : { path, line };
+    if (!same) {
+      this.reviewInput.set_value("");
+      this.reviewInput.focus();
+    }
+    cx.notify();
+  }
+
+  /** Saves the open inline comment via `bh review add`. */
+  saveReviewComment(cx) {
+    const where = this.reviewCommenting;
+    const args = where ? reviewAddArgs(this.opened, where.path, where.line, this.reviewInput.value()) : null;
+    if (!args || this.reviewSaving) return;
+    this.reviewSaving = true;
+    cx.notify();
+    cx.spawn(async (cx) => {
+      const got = await bhJson(args, { cwd: projectDir() });
+      this.reviewSaving = false;
+      this.reviewCommenting = null;
+      this.reviewInput.set_value("");
+      if (got && got.implemented !== false && got.id) {
+        const rv = await bhJson(["review", "list", this.opened], { cwd: projectDir() });
+        this.reviewComments = reviewCommentsList(rv);
+      }
+      cx.notify();
+    });
+  }
+
+  /** Removes one review comment via `bh review remove`. */
+  removeReviewComment(cm, cx) {
+    const args = reviewRemoveArgs(this.opened, cm?.id);
+    if (!args) return;
+    cx.spawn(async (cx) => {
+      const got = await bhJson(args, { cwd: projectDir() });
+      if (got && got.implemented !== false) {
+        this.reviewComments = this.reviewComments.filter((x) => x.id !== cm.id);
+      }
+      cx.notify();
+    });
+  }
+
+  /** Sends all open review comments to Dev via `bh review send`. */
+  sendReviewComments(cx) {
+    const args = reviewSendArgs(this.opened);
+    if (!args || this.reviewSending) return;
+    this.reviewSending = true;
+    cx.notify();
+    cx.spawn(async (cx) => {
+      const got = await bhJson(args, { cwd: projectDir() });
+      this.reviewSending = false;
+      if (got && got.implemented !== false && this.opened) this.loadDetail(this.opened, cx);
+      cx.notify();
+    });
+  }
+
+  /** Changes: file rows expand in place into diffs with inline comments; Send to Dev hidden when 0. */
   changesBody(c) {
     const ch = changesModel(this.detail);
     if (!ch.available) return stateView(c, { id: "bh-thread-changes-none", title: "No changes yet.", line: "Files this thread's agents change appear here, with lines added and removed." });
+    const openCount = openReviewCount(this.reviewComments);
     return v_flex().gap(SPACE[2])
       .child(h_flex().gap(SPACE[3]).items_center()
         .child(div().flex_1().min_w(0).text_size(TYPE_SCALE.body).text_color(c.textSecondary).child(ch.summary))
+        .when(openCount > 0, (el) => el.child(actionButton(c, "bh-review-send", `Send to Dev · ${openCount}`, (_e, cx) => this.sendReviewComments(cx), { tone: "primary", disabled: this.reviewSending, tooltip: "Send open review comments to Dev" })))
         .child(actionButton(c, "bh-thread-changes-open", "Open diff", () => run("mod.open", { name: "changes" }), { tone: "quiet", tooltip: "Open the Changes window" })))
       // The branch is machine text: one muted mono line, middle-truncated, that expands.
       .when(Boolean(ch.branch), (el) => el.child(machineLine(c, {
@@ -640,10 +949,41 @@ export class Threads {
           cx.notify();
         },
       })))
-      .child(v_flex().id("bh-thread-changes").role("list").gap(SPACE[1]).children(ch.files.map((f) => h_flex().id(`bh-thread-change-${f.path}`).role("list_item").accessibility_label(`${f.path}: ${f.added} added, ${f.removed} removed`).h(CONTROL).px(SPACE[3]).gap(SPACE[3]).items_center()
-        .child(div().flex_1().min_w(0).truncate().text_size(TYPE_SCALE.body).text_color(c.textPrimary).child(f.path))
-        .child(div().flex_none().text_size(TYPE_SCALE.metadata).text_color(c.stateDone ?? c.textSecondary).child(`+${f.added}`))
-        .child(div().flex_none().text_size(TYPE_SCALE.metadata).text_color(c.stateFailed ?? c.textSecondary).child(`−${f.removed}`)))))
+      .child(v_flex().id("bh-thread-changes").role("list").gap(SPACE[1]).children(ch.files.map((f) => {
+        const open = this.expandedDiffs.has(f.path);
+        const toggle = (cx) => this.toggleDiff(f.path, cx);
+        const row = clickable(
+          activates(
+            h_flex().role("list_item").accessibility_label(`${f.path}: ${f.added} added, ${f.removed} removed${open ? " (expanded)" : ""}`).h(CONTROL).px(SPACE[3]).gap(SPACE[3]).items_center().rounded(RADIUS.control)
+              .on_click((_e, cx) => toggle(cx))
+              .child(div().flex_1().min_w(0).truncate().text_size(TYPE_SCALE.body).text_color(c.textPrimary).child(f.path))
+              .child(div().flex_none().text_size(TYPE_SCALE.metadata).text_color(c.stateDone ?? c.textSecondary).child(`+${f.added}`))
+              .child(div().flex_none().text_size(TYPE_SCALE.metadata).text_color(c.stateFailed ?? c.textSecondary).child(`−${f.removed}`)),
+            toggle,
+          ),
+          c,
+          `bh-thread-change-${f.path}`,
+          { fill: c.hover },
+        );
+        if (!open) return row;
+        const diffEl = renderDiffView(c, {
+          path: f.path,
+          diff: this.diffs.get(f.path) ?? null,
+          loading: this.diffLoading.has(f.path),
+          comments: this.reviewComments,
+          commentingLine: this.reviewCommenting?.path === f.path ? this.reviewCommenting.line : null,
+          commentInput: this.reviewInput,
+          saving: this.reviewSaving,
+          onPickLine: (p, l, cx) => this.startReviewComment(p, l, cx),
+          onSaveComment: (cx) => this.saveReviewComment(cx),
+          onCancelComment: (cx) => {
+            this.reviewCommenting = null;
+            cx.notify();
+          },
+          onRemoveComment: (cm, cx) => this.removeReviewComment(cm, cx),
+        });
+        return diffEl ? v_flex().w_full().gap(SPACE[1]).child(row).child(diffEl) : row;
+      })))
       .when(ch.truncated, (el) => el.child(div().text_size(TYPE_SCALE.metadata).text_color(c.textMuted).child("More files changed than are listed; open the diff for all of them.")));
   }
 }

@@ -493,7 +493,8 @@ const SEEDS = {
   page.detailId = DATA.threadShow.id;
   page.progress = DATA.goalProgress;
   page.work.taskDetail = DATA.detail;
-  page.work.taskDetailId = DATA.threadShow.id;`,
+  page.work.taskDetailId = DATA.threadShow.id;
+  page.approvals = DATA.approvals.approvals.filter((a) => a.task === DATA.threadShow.id);`,
   "thread-plan": `page.data = DATA.threads;
   page.failed = false;
   page.opened = DATA.threadShow.id;
@@ -520,7 +521,10 @@ const SEEDS = {
   page.detailId = DATA.threadShow.id;
   page.progress = DATA.goalProgress;
   page.work.taskDetail = DATA.detail;
-  page.work.taskDetailId = DATA.threadShow.id;`,
+  page.work.taskDetailId = DATA.threadShow.id;
+  page.reviewComments = DATA.reviewComments.comments;
+  page.expandedDiffs = new Set([Object.keys(DATA.reviewDiffs)[0]]);
+  page.diffs = new Map([[Object.keys(DATA.reviewDiffs)[0], diffModel(DATA.reviewDiffs[Object.keys(DATA.reviewDiffs)[0]])]]);`,
   peek: `page.data = DATA.threads;
   page.failed = false;
   page.pick = 1;
@@ -625,6 +629,7 @@ import { setShared } from "herdr";
 import { projectDir } from "./mods/bot-herdr/bh.js";
 import { ROSTER_KEY } from "./mods/bot-herdr/roster.js";
 import { SUB } from "./mods/bot-herdr/pages.js";
+import { diffModel } from "./mods/bot-herdr/threadview.js";
 
 export const PAGE = ${JSON.stringify(page.id)};
 export const PROPS = ${JSON.stringify(page.props)};
@@ -655,6 +660,7 @@ import { setShared } from "herdr";
 import { projectDir } from "./bh-real.js";
 import { ROSTER_KEY } from "./roster.js";
 import { SUB } from "./pages.js";
+import { diffModel } from "./threadview.js";
 
 const DATA = ${JSON.stringify(DATA)};
 const ROSTER = ${JSON.stringify(ROSTER)};

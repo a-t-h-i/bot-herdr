@@ -6,9 +6,10 @@
 
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { settings, shared, setShared } from "herdr";
+import { agents as reported, terminals, layout, run, settings, shared, setShared } from "herdr";
 import { SIZE, TYPE_SCALE, LINE, SPACE, CONTROL, RADIUS, STATE, stateTone, clickable } from "./look.js";
 import { segmented, stateView, avatar } from "./switch.js";
+import { actionButton } from "./button.js";
 import { colors } from "./theme.js";
 import { viewShown, openTerminal, showAgentsTab, showPage } from "./pages.js";
 import { bhJson, projectDir } from "./bh.js";
@@ -16,7 +17,7 @@ import { mentionTone, agentStateMark } from "./indicators.js";
 import { count, ago } from "./numbers.js";
 import { appKeyAction, isChord, keyName, nextPick, opensRow } from "./rowkeys.js";
 import { KEYMAP_OPEN } from "./keymap.js";
-import { OPEN_COUNTS, HOME_NEEDS, needsYouCount, needsYouIds, withHomeCount } from "./signals.js";
+import { OPEN_COUNTS, HOME_NEEDS, needsYouCount, needsYouIds, withHomeCount, isTiledLayout, withTiledPanes, tileAddresses } from "./signals.js";
 import { PeekDrawer, PEEK_WIDTH } from "./peek.js";
 
 const REFRESH_MS = 10000;
@@ -114,17 +115,22 @@ export class Agents {
     const content = Math.max(320, Math.min(MAX, this.width - (peeking ? PEEK_WIDTH : 0) - SIZE.gutter * 2));
     // The terminals stage: the strip only; herdr draws the panes below it.
     if (this.sub === "terminals") {
-      return div()
+      const tiled = isTiledLayout(layout());
+      const addrs = tileAddresses(reported(), terminals());
+      return h_flex()
         .id("bh-agents-tabs")
-        .flex()
         .size_full()
-        .items_start()
-        .pt(SPACE[2])
-        .pl(SPACE[3])
+        .items_center()
+        .gap(SPACE[3])
+        .px(SPACE[3])
         .bg(c.ground)
         .track_focus(this.handle)
         .on_key_down((e, cx) => this.keys(e, cx))
-        .child(this.tabs(c));
+        .child(this.tabs(c))
+        .child(actionButton(c, "bh-agents-tile", tiled ? "Single pane" : "Tile", (_e, cx) => this.toggleTile(cx), {
+          tone: tiled ? "secondary" : "quiet",
+          tooltip: tiled ? "Return to one active pane" : addrs.length >= 2 ? "Show running agents side by side" : "Start two or more agents to tile side by side",
+        }));
     }
     const open = viewShown("agents");
     if (open && !this.shown) cx.timer.after(1, (cx) => this.load(cx));
@@ -156,6 +162,21 @@ export class Agents {
           .child(this.header(c))
           .child(this.body(c, content))))
       .when(peeking, (el) => el.child(this.peek.render(c)));
+  }
+
+  /** Toggles between one active pane and side-by-side `{ terminal }` blocks for live agents. */
+  toggleTile(cx) {
+    const current = layout();
+    if (isTiledLayout(current)) {
+      const single = withTiledPanes(current, []);
+      if (single) run("layout.set", { layout: single });
+      return cx.notify();
+    }
+    const addrs = tileAddresses(reported(), terminals());
+    if (addrs.length < 2) return;
+    const next = withTiledPanes(current, addrs);
+    if (next) run("layout.set", { layout: next });
+    cx.notify();
   }
 
   /** Fleet | Terminals: Terminals switches the stage to herdr's own panes. */
