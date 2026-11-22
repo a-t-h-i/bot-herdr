@@ -299,8 +299,72 @@ const THREAD_SHOW = {
   },
   cost: { tokens: 1830000, costUsd: 1.32, minutes: 52, turns: 5 },
   comments: [],
-  children: [],
+  children: [{ name: "dev-m1", agent: "Dev", step: 1, state: "open", branch: "redesign-bot-herdr-ui-to-design-language-dev-m1", mergedAt: null, stat: null }],
+  forkOf: null,
+  forks: [{ id: "t-20261121-9010", title: "Try a lighter audit fixture pass", state: "working" }],
   questions: [],
+};
+
+const APPROVAL_ONE = {
+  id: "ap-a1b2c3d4",
+  task: TASK_ONE.id,
+  agent: "dev",
+  from: "dev-m1",
+  title: "Run a command",
+  command: "npm test",
+  kind: "execute",
+  at: 1795357337611,
+  pid: process.pid,
+  status: "pending",
+  answer: null,
+  answeredAt: null,
+};
+
+/** `bh approvals list --json`: one pending approval on the fixture thread with a live pid. */
+const APPROVALS = { approvals: [APPROVAL_ONE] };
+
+/** `bh review diff <task> <path> --json`: a 2-file diff on the fixture thread's changes. */
+const REVIEW_DIFFS = {
+  "mods/bot-herdr/engine/lib/ui-audit.mjs": {
+    path: "mods/bot-herdr/engine/lib/ui-audit.mjs",
+    truncated: false,
+    hunks: [
+      {
+        header: "@@ -1,3 +1,5 @@",
+        lines: [
+          { kind: "ctx", old: 1, new: 1, text: "// bh ui-audit: the redesign's design-language audit." },
+          { kind: "add", old: null, new: 2, text: "export const AUDIT_VERSION = 6;" },
+          { kind: "add", old: null, new: 3, text: "export const MAX_DIFF_LINES = 2000;" },
+          { kind: "ctx", old: 2, new: 4, text: "import { execFileSync } from \"node:child_process\";" },
+          { kind: "ctx", old: 3, new: 5, text: "import { join } from \"node:path\";" },
+        ],
+      },
+    ],
+  },
+  "mods/bot-herdr/look.js": {
+    path: "mods/bot-herdr/look.js",
+    truncated: false,
+    hunks: [
+      {
+        header: "@@ -10,3 +10,4 @@",
+        lines: [
+          { kind: "ctx", old: 10, new: 10, text: "export const RADIUS = { control8: 8, card12: 12 };" },
+          { kind: "del", old: 11, new: null, text: "export const DIFF_GUTTER = 18;" },
+          { kind: "add", old: null, new: 11, text: "export const DIFF_GUTTER = 24;" },
+          { kind: "add", old: null, new: 12, text: "export const APPROVAL_GAP = 8;" },
+          { kind: "ctx", old: 12, new: 13, text: "export const SPACE_SCALE = [4, 8, 12, 16, 24, 32];" },
+        ],
+      },
+    ],
+  },
+};
+
+/** `bh review list <task> --json`: two open review comments on the fixture thread's diff. */
+const REVIEW_COMMENTS = {
+  comments: [
+    { id: "rc-11223344", at: 1795357337611, path: "mods/bot-herdr/engine/lib/ui-audit.mjs", line: 2, text: "Keep AUDIT_VERSION in sync with the baseline file.", state: "open" },
+    { id: "rc-55667788", at: 1795357338611, path: "mods/bot-herdr/look.js", line: 11, text: "Check gutter width on narrow panes.", state: "open" },
+  ],
 };
 
 /** `bh goal progress <task> --json`: the goal row's gate, elapsed, retries and the judge's reason. */
@@ -346,7 +410,7 @@ const HOME = {
   needsYou: [
     { kind: "question", thread: TASK_ONE.id, ref: "comment c3", title: "Which selection style should the filter chips use?", text: "The board and the chips disagree; pick one.", from: "You", at: "2026-11-21T19:40:00.000Z" },
     { kind: "blocker", thread: TASK_TWO.id, ref: "step 4", title: "Antigravity is offline", text: "QA cannot start until the harness answers.", from: "qa-1", at: "2026-11-21T19:20:00.000Z" },
-    { kind: "approval", thread: TASK_ONE.id, ref: "round 2", title: "Allow once: run the test suite", text: "Dev asked to run npm test.", from: "dev-m1", at: NOW },
+    { kind: "approval", thread: TASK_ONE.id, ref: APPROVAL_ONE.id, title: "Allow once: run the test suite", text: "Dev asked to run npm test.", from: "dev-m1", at: NOW },
     { kind: "issue", thread: null, ref: "#1", title: "Error message shows up in chat tab", text: "An untriaged GitHub issue.", from: null, at: "2026-11-19T10:00:00.000Z" },
     { kind: "review", thread: TASK_ONE.id, ref: "step 3", title: "Quiet pass ready for review", text: "QA is reading the M3 diff.", from: "dev-m3", at: "2026-11-21T19:50:00.000Z" },
   ],
@@ -409,7 +473,7 @@ export const AUDIT_PAGES = [
   { id: "switch", props: { view: "switch" } },
 ];
 
-const DATA = { tasks: [TASK_ONE, TASK_TWO], detail: TASK_DETAIL, plans: PLANS, plan: PLAN, issues: ISSUES, kinds: KINDS, knowAll: KNOW_ALL, lessons: LESSONS, metrics: METRICS, home: HOME, threads: THREADS, threadShow: THREAD_SHOW, goalProgress: GOAL_PROGRESS, peek: PEEK, scripts: SCRIPTS, known: KNOWN, access: ACCESS, classifier: CLASSIFIER, resilience: RESILIENCE };
+const DATA = { tasks: [TASK_ONE, TASK_TWO], detail: TASK_DETAIL, plans: PLANS, plan: PLAN, issues: ISSUES, kinds: KINDS, knowAll: KNOW_ALL, lessons: LESSONS, metrics: METRICS, home: HOME, threads: THREADS, threadShow: THREAD_SHOW, approvals: APPROVALS, reviewDiffs: REVIEW_DIFFS, reviewComments: REVIEW_COMMENTS, goalProgress: GOAL_PROGRESS, peek: PEEK, scripts: SCRIPTS, known: KNOWN, access: ACCESS, classifier: CLASSIFIER, resilience: RESILIENCE };
 
 /** The seed lines one page needs after its view initialises, before the first render. */
 const SEEDS = {

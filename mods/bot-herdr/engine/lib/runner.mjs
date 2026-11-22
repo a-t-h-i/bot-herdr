@@ -24,8 +24,8 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { HEADLESS, argvOf, effortsOf, headless, limitArgs } from "../../roster.js";
-import { BH, DATA, ensureDir } from "./core.mjs";
-import { maybeHoldPermission } from "./approvals.mjs";
+import { BH, DATA, ensureDir, projectRoot } from "./core.mjs";
+import { maybeHoldPermission, projectAllow } from "./approvals.mjs";
 
 export { HEADLESS, headless };
 export const ACCESS = ["standard", "full"];
@@ -645,16 +645,16 @@ export class Acp {
       const command = call.rawInput?.command ?? call.rawInput?.cmd;
       const textCmd = Array.isArray(command) ? command.join(" ") : command;
       const asks = asksPerson(call.title ?? call.kind ?? "tool", { ...(call.rawInput ?? {}), command: textCmd });
+      const root = projectRoot(this.cwd);
       // A bh ask call is allowed at every access level: its card is the prompt, and the turn
       // ends only once the command has run and written the card (the tool_call_update above).
-      const allow = acpAllowed(call.kind, this.access, { command: textCmd, allow: this.allow }) || asks;
+      const allow = acpAllowed(call.kind, this.access, { command: textCmd, allow: [...this.allow, ...projectAllow(root)] }) || asks;
       if (asks && call.toolCallId !== undefined) this.askCall = call.toolCallId;
-      // The redesign's approval cards can hold a refused call for the user; until they land the
-      // hook says it handled nothing and the reject below is unchanged.
+      // Under ask or guarded autonomy, a refused call can be held for the user's approval card.
       if (!allow && this.access !== "full") {
         let held = null;
         try {
-          held = maybeHoldPermission({ req: m, call, options, command: textCmd, access: this.access, send: (msg) => this.send(msg), on: this.on });
+          held = maybeHoldPermission({ req: m, call, options, command: textCmd, access: this.access, root, agent: this.agent, send: (msg) => this.send(msg), on: this.on });
         } catch {
           held = null; // a broken hook must never leave the request unanswered: fall through to reject
         }

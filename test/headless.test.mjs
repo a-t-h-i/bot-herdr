@@ -255,7 +255,15 @@ test("bh agent: pi keeps its session folder and continues it", () => {
 
 test("bh agent: an ACP agent is refused a command outside standard access", () => {
   setTeam("gemini");
-  assert.equal(agent("g1", "", "--", "hi").code, 0);
+  // Under ask/guarded autonomy (M6), a refused ACP call is held for an approval card; autonomous
+  // mode falls through to the immediate reject tested here.
+  const cfg = join(APP, "data", "bot-herdr", "config.json");
+  writeFileSync(cfg, JSON.stringify({ resilience: { autonomy: "autonomous" } }));
+  try {
+    assert.equal(agent("g1", "", "--", "hi").code, 0);
+  } finally {
+    rmSync(cfg, { force: true });
+  }
   const [prompted, permission] = calls("gemini");
   assert.deepEqual(prompted.argv, ["--acp"]);
   assert.match(prompted.prompt, /bot-herdr brief/);

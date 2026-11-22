@@ -1,8 +1,7 @@
 // pre-M1 foundation: the additive bh dispatchers (ui-audit, home, thread, approvals, review,
-// goal progress) and the approvals permission hook. ui-audit is real from M1 on (test/ui-audit
-// .test.mjs covers it), Home and Threads from M4 (test/home.test.mjs and test/thread-model.test.mjs
-// cover them); approvals and review keep their placeholders: they must be listed in help, answer
-// without crashing, and leave a refused call to the existing reject path.
+// goal progress) and the approvals permission hook. Every command is real as of M6 (ui-audit from
+// M1, home/thread/goal progress from M4, approvals/review from M6); all must stay listed in help
+// and answer with their stable JSON shapes.
 
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
@@ -31,15 +30,7 @@ test("bh help lists the redesign foundation commands", () => {
   }
 });
 
-test("the remaining placeholder commands answer without crashing", () => {
-  for (const cmd of [["approvals"], ["review"]]) {
-    const r = runBh(...cmd);
-    assert.equal(r.status, 0, `${cmd.join(" ")}: ${r.stderr}`);
-    assert.match(r.stdout, /not implemented yet/, cmd.join(" "));
-  }
-});
-
-test("the redesigned read models answer --json with a stable shape", () => {
+test("the redesigned commands answer --json with stable shapes", () => {
   const home = runBh("home", "--json");
   assert.equal(home.status, 0, home.stderr);
   const page = JSON.parse(home.stdout);
@@ -55,19 +46,23 @@ test("the redesigned read models answer --json with a stable shape", () => {
   const goal = runBh("goal", "progress", "--json");
   assert.equal(goal.status, 0, goal.stderr);
   assert.equal(JSON.parse(goal.stdout).command, "goal progress");
-  for (const r of [home, threads, goal]) assert.doesNotMatch(r.stdout, /not implemented yet/);
+  const approvals = runBh("approvals", "list", "--json");
+  assert.equal(approvals.status, 0, approvals.stderr);
+  assert.deepEqual(JSON.parse(approvals.stdout), { approvals: [] });
+  for (const r of [home, threads, goal, approvals]) assert.doesNotMatch(r.stdout, /not implemented yet/);
 });
 
-test("maybeHoldPermission holds nothing by default", async () => {
+test("maybeHoldPermission does not hold under autonomous mode or full access", async () => {
   const { maybeHoldPermission } = await import(new URL("../mods/bot-herdr/engine/lib/approvals.mjs", import.meta.url));
-  const held = maybeHoldPermission({
+  const base = {
     req: { id: 7, method: "session/request_permission" },
     call: { toolCallId: "call-1", kind: "execute", rawInput: { command: "rm -rf build" } },
     options: [{ kind: "reject_once", optionId: "no" }],
     command: "rm -rf build",
-    access: "standard",
+    root: tmp,
     send: () => {},
     on: () => {},
-  });
-  assert.deepEqual(held, { handled: false });
+  };
+  assert.deepEqual(maybeHoldPermission({ ...base, access: "standard", autonomy: "autonomous" }), { handled: false });
+  assert.deepEqual(maybeHoldPermission({ ...base, access: "full", autonomy: "guarded" }), { handled: false });
 });
