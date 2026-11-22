@@ -15,7 +15,7 @@ export function row(context, keys, action) {
 export const KEYMAP = [
   row("global", ["Ctrl+Shift+P"], "Command palette (herdr's own binding)"),
   row("global", ["Ctrl+."], "Pause or resume the current goal"),
-  row("views", ["Ctrl+1", "Ctrl+2", "Ctrl+3", "Ctrl+4", "Ctrl+5"], "Home, Threads, Agents, Library, Settings (in bot-herdr views)"),
+  row("views", ["Ctrl+1", "Ctrl+2", "Ctrl+3", "Ctrl+4", "Ctrl+5", "Ctrl+6"], "Chat, Home, Agents, Terminals, Library, Settings: the sidebar's order (in bot-herdr views)"),
   row("views", ["?"], "Show this map (in bot-herdr views)"),
   row("home", ["J", "K", "Home", "End"], "Move the pick through the rows"),
   row("home", ["Space"], "Peek the picked row"),

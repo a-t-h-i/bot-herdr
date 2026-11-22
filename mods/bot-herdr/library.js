@@ -63,7 +63,7 @@ export class Library {
     }
   }
 
-  /** View-local app keys: Ctrl+1..5 switch destinations, `?` opens the keymap when not typing. */
+  /** View-local app keys: Ctrl+1..6 switch destinations, `?` opens the keymap when not typing. */
   keys(e, cx) {
     const typing = this.typingCount > 0 || Boolean(this.body && "editing" in this.body && this.body.editing);
     const app = appKeyAction(e, { typing });

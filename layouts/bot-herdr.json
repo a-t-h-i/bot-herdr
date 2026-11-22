@@ -44,43 +44,12 @@
           }
         },
         {
-          "id": "sidebar-lists",
-          "type": "column",
-          "children": [
-            {
-              "id": "spaces",
-              "type": "block",
-              "size": {
-                "weight": 1
-              },
-              "min": 90,
-              "content": {
-                "mod": "spaces"
-              }
-            },
-            {
-              "id": "agents",
-              "type": "block",
-              "size": {
-                "weight": 1
-              },
-              "min": 90,
-              "content": {
-                "mod": "agents"
-              }
-            }
-          ]
-        },
-        {
-          "id": "sidebar-footer",
+          "id": "nav",
           "type": "block",
-          "size": {
-            "px": 69
-          },
           "content": {
-            "mod": "workspace-chrome",
+            "mod": "bot-herdr",
             "props": {
-              "footer": true
+              "view": "sidebar"
             }
           }
         }
@@ -124,7 +93,7 @@
                 {
                   "id": "pages",
                   "type": "stack",
-                  "active": "home",
+                  "active": "threads",
                   "children": [
                     {
                       "id": "home",
@@ -184,20 +153,6 @@
                   "padding": 8,
                   "gap": 8,
                   "children": [
-                    {
-                      "id": "agents-tabs",
-                      "type": "block",
-                      "size": {
-                        "px": 40
-                      },
-                      "content": {
-                        "mod": "bot-herdr",
-                        "props": {
-                          "view": "agents",
-                          "sub": "terminals"
-                        }
-                      }
-                    },
                     {
                       "id": "panes",
                       "type": "row",

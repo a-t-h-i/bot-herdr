@@ -8,7 +8,7 @@ import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { settings, shared, setShared } from "herdr";
 import { SIZE, TYPE_SCALE, LINE, SPACE, CONTROL, RADIUS, STATE, MOTION, HIGHLIGHT_MS, stateTone, clickable, reducedMotion } from "./look.js";
-import { stateView, avatar } from "./switch.js";
+import { stateView } from "./switch.js";
 import { sectionLabel } from "./plandoc.js";
 import { colors } from "./theme.js";
 import { activeStage, openThread, openTerminal, showPage, viewShown } from "./pages.js";
@@ -23,7 +23,6 @@ import { PeekDrawer, PEEK_WIDTH } from "./peek.js";
 const REFRESH_MS = 10000;
 const MAX = 1140; // the work pages' widest column
 const GAP = SPACE[4];
-const AVATARS = 3; // how many agents a thread row names before it stops
 
 /** How each kind of "needs you" reads in one word, in the row's own muted metadata. */
 const KIND_WORDS = { question: "Question", blocker: "Blocker", review: "Review", approval: "Approval", issue: "Issue" };
@@ -178,7 +177,7 @@ export class Home {
     return Array.isArray(list) ? list : [];
   }
 
-  /** View-local app keys (Ctrl+1..5, ?), peek keys (Esc, 1–9), then J / K / Home / End / Space / Enter. */
+  /** View-local app keys (Ctrl+1..6, ?), peek keys (Esc, 1–9), then J / K / Home / End / Space / Enter. */
   keys(e, cx) {
     const app = appKeyAction(e, { typing: this.peek.typing });
     if (app?.kind === "page") {
@@ -247,11 +246,11 @@ export class Home {
       .when(peeking, (el) => el.child(this.peek.render(c)));
   }
 
-  /** "Home" and the one count that says how the fleet is doing: "3 running · 1 needs you". */
+  /** The one count that says how the fleet is doing: "3 running · 1 needs you". */
   header(c) {
     const text = String(this.data?.header?.text ?? "");
+    // The top bar names the page; this line says how things stand.
     return h_flex().items_center().gap(SPACE[3])
-      .child(div().text_size(TYPE_SCALE.title).font_semibold().text_color(c.textPrimary).child("Home"))
       .when(Boolean(text), (el) => el.child(div().text_size(TYPE_SCALE.metadata).text_color(c.textSecondary).child(text)));
   }
 
@@ -275,8 +274,8 @@ export class Home {
       return stateView(c, {
         id: "bh-home-empty",
         title: "Nothing is running.",
-        line: "Start a task or a plan and its thread appears here, with whatever needs you on top.",
-        action: { label: "Open Threads", on: () => showPage("threads") },
+        line: "Ask for a task or a plan in Chat. Whatever needs you then shows here first.",
+        action: { label: "Open Chat", on: () => showPage("chat") },
       });
     }
     // Every row knows where it sits in the page, so the keyboard's pick lands on the one drawn.
@@ -368,7 +367,7 @@ export class Home {
           .child(div().truncate().text_size(TYPE_SCALE.body).font_semibold().text_color(c.textPrimary).child(String(item?.title ?? "Needs you")))
           .when(Boolean(item?.text), (el) => el.child(div().id(`bh-row-summary-need-${item?.thread ?? item?.ref ?? at}`).truncate().text_size(TYPE_SCALE.metadata).text_color(c.textSecondary).child(String(item.text)))))
         .child(div().flex_none().text_size(TYPE_SCALE.metadata).text_color(c.textMuted).child(kindWord(item?.kind)))
-        .when(Boolean(who), (el) => el.child(avatar(c, who, mentionTone(c, who), 20))),
+        .when(Boolean(who), (el) => el.child(div().flex_none().text_size(TYPE_SCALE.metadata).font_medium().text_color(mentionTone(c, who)).child(String(who)))),
       c,
       `bh-home-need-${item?.thread ?? item?.ref ?? at}`,
       { fill: c.hover },
@@ -378,7 +377,6 @@ export class Home {
   /** A thread at a glance: state glyph, title, its agents, its steps and its age. */
   threadRow(c, t, at) {
     const state = STATE[t?.state] ? t.state : "idle";
-    const agents = (t?.agents ?? []).slice(0, AVATARS);
     const meta = threadMeta(t);
     const picked = at === this.pick;
     const hl = t?.id ? this.finishing.get(String(t.id)) : null;
@@ -400,7 +398,6 @@ export class Home {
         .when(Boolean(hl), (el) => el.child(doneOverlay(c, `bh-home-thread-hl-${t.id}`, hl)))
         .child(div().flex_none().text_size(TYPE_SCALE.title).text_color(stateTone(c, state)).child(STATE[state].glyph))
         .child(div().flex_1().min_w(0).truncate().text_size(TYPE_SCALE.body).text_color(c.textPrimary).child(String(t?.title ?? "Thread")))
-        .child(h_flex().flex_none().gap(SPACE[1]).children(agents.map((name) => avatar(c, name, mentionTone(c, name), 20))))
         .when(Boolean(meta), (el) => el.child(div().flex_none().text_size(TYPE_SCALE.metadata).text_color(c.textMuted).child(meta))),
       c,
       `bh-home-thread-${t?.id ?? at}`,
@@ -408,7 +405,7 @@ export class Home {
     );
   }
 
-  /** An agent running now: its avatar, name, the line it is on, its state and how fresh it is. */
+  /** An agent running now: its name, the line it is on, its state and how fresh it is. */
   agentRow(c, a, at) {
     const state = STATE[a?.state] ? a.state : "idle";
     const name = String(a?.name ?? "Agent");
@@ -428,9 +425,8 @@ export class Home {
         .rounded(RADIUS.control)
         .when(picked, (el) => el.bg(c.hover))
         .on_click(() => openTerminal(a?.address))
-        .child(avatar(c, name, mentionTone(c, name), CONTROL, { working: state === "working" }))
         .child(v_flex().flex_1().min_w(0).gap(SPACE[1])
-          .child(div().truncate().text_size(TYPE_SCALE.body).font_semibold().text_color(c.textPrimary).child(name))
+          .child(div().truncate().text_size(TYPE_SCALE.body).font_semibold().text_color(mentionTone(c, name)).child(name))
           .when(Boolean(a?.summary), (el) => el.child(div().id(`bh-row-summary-agent-${a?.address ?? at}`).truncate().text_size(TYPE_SCALE.metadata).text_color(c.textSecondary).child(String(a.summary)))))
         // The state is glyph, colour and word, in the one place it is read (never colour alone);
         // at work, the glyph is its activity's cycle and the word what it is doing.

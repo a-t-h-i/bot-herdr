@@ -1,5 +1,6 @@
 // bot-herdr: one mod, several views, picked by the layout block's props.
-//   { "view": "switch" }    the top bar: Home, Threads, Agents, Library and the Settings gear (switch.js)
+//   { "view": "sidebar" }   the sidebar: Chat, Home, Agents, Terminals, Library, your threads, Settings (sidebar.js)
+//   { "view": "switch" }    the top bar: the page's name, Tile on Terminals, window buttons (switch.js)
 //   { "view": "home" }      what needs you, then the fleet and today's spend (home.js)
 //   { "view": "threads" }   the thread list, and a thread's Conversation | Plan | Steps | Changes (threads.js)
 //   { "view": "status" }    the status bar: machine, branch, agent count, palette key (statusbar.js)
@@ -29,6 +30,7 @@ import { keyName, opensKeymap } from "./rowkeys.js";
 import { safeInit, safeRender, formatRenderError, errorSignature } from "./render-safe.js";
 import { Chat } from "./chat.js";
 import { Switch } from "./switch.js";
+import { Sidebar } from "./sidebar.js";
 import { Settings, MoreSheet } from "./settings.js";
 import { Work } from "./work.js";
 import { Pick } from "./pick.js";
@@ -50,7 +52,7 @@ import { StatusBar } from "./statusbar.js";
 // Reduce motion: Settings › General's toggle, or herdr's own setting once it has one.
 setMotionSource(() => motionReduced(shared(REDUCE_MOTION_KEY), settings()));
 
-export const VIEWS = { home: Home, threads: Threads, status: StatusBar, agents: Agents, library: Library, scripts: Scripts, chat: Chat, switch: Switch, work: Work, issues: Issues, learning: Learning, "learning-doc": LearningDoc, settings: Settings, pick: Pick, lightbox: Lightbox, toast: Toast, file: FileView, plan: PlanDoc, note: NoteForm, metrics: Metrics, "settings-more": MoreSheet };
+export const VIEWS = { home: Home, threads: Threads, status: StatusBar, agents: Agents, library: Library, scripts: Scripts, chat: Chat, switch: Switch, sidebar: Sidebar, work: Work, issues: Issues, learning: Learning, "learning-doc": LearningDoc, settings: Settings, pick: Pick, lightbox: Lightbox, toast: Toast, file: FileView, plan: PlanDoc, note: NoteForm, metrics: Metrics, "settings-more": MoreSheet };
 
 /** Resolves theme tokens safely so even a broken theme lookup keeps the fallback readable. */
 function safeColors() {

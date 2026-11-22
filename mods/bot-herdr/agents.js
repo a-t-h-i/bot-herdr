@@ -1,5 +1,5 @@
-// Agents: Fleet | Terminals, with herdr's own terminals in the second sub-tab. Fleet is a calm
-// list of the agents running now — avatar, name, state glyph and word, and the one line it is on;
+// Agents: the fleet (herdr's own terminals are the sidebar's Terminals). It is a calm
+// list of the agents running now — name in its colour, state glyph and word, and the one line it is on;
 // its harness and model belong to the peek, not the row. Enter opens the picked agent's terminal
 // (clicking a row does the same). Terminals is herdr's pane stage: this view draws only the
 // sub-tab strip above it, so the same tabs stay in reach while the panes have the screen.
@@ -8,10 +8,10 @@ import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { agents as reported, terminals, layout, run, settings, shared, setShared } from "herdr";
 import { SIZE, TYPE_SCALE, LINE, SPACE, CONTROL, RADIUS, STATE, stateTone, clickable } from "./look.js";
-import { segmented, stateView, avatar } from "./switch.js";
+import { segmented, stateView } from "./switch.js";
 import { actionButton } from "./button.js";
 import { colors } from "./theme.js";
-import { viewShown, openTerminal, showAgentsTab, showPage } from "./pages.js";
+import { viewShown, openTerminal, showAgentsTab, showPage, showSettings } from "./pages.js";
 import { bhJson, projectDir } from "./bh.js";
 import { mentionTone, agentStateMark } from "./indicators.js";
 import { count, ago } from "./numbers.js";
@@ -75,7 +75,7 @@ export class Agents {
     return Array.isArray(list) ? list : [];
   }
 
-  /** View-local app keys (Ctrl+1..5, ?), peek keys (Esc, 1–9), then J / K / Home / End / Space / Enter. */
+  /** View-local app keys (Ctrl+1..6, ?), peek keys (Esc, 1–9), then J / K / Home / End / Space / Enter. */
   keys(e, cx) {
     const app = appKeyAction(e, { typing: Boolean(this.peek?.typing) });
     if (app?.kind === "page") {
@@ -158,7 +158,6 @@ export class Agents {
         .overflow_y_scroll()
         .items_center()
         .child(v_flex().flex_none().w(content).py(SPACE[5]).gap(GAP)
-          .child(h_flex().items_center().child(this.tabs(c)))
           .child(this.header(c))
           .child(this.body(c, content))))
       .when(peeking, (el) => el.child(this.peek.render(c)));
@@ -192,8 +191,8 @@ export class Agents {
   header(c) {
     const n = this.agents().length;
     return h_flex().items_center().gap(SPACE[3])
-      .child(div().text_size(TYPE_SCALE.title).font_semibold().text_color(c.textPrimary).child("Agents"))
-      .when(n > 0, (el) => el.child(div().text_size(TYPE_SCALE.metadata).text_color(c.textSecondary).child(count(n, "agent"))));
+      .child(div().flex_1().text_size(TYPE_SCALE.metadata).text_color(c.textSecondary).child(n > 0 ? `${count(n, "agent")} running. Click one to open its terminal.` : ""))
+      .child(actionButton(c, "bh-agents-team", "Edit team", () => showSettings("agents"), { tone: "quiet", tooltip: "Harness, model and effort per agent" }));
   }
 
   /** The list, its skeletons while reading, its error, or the list's teaching empty state. */
@@ -211,14 +210,14 @@ export class Agents {
       return stateView(c, {
         id: "bh-agents-empty",
         title: "No agent is running.",
-        line: "Start one from a thread's composer and it appears here, with the line it is on.",
-        action: { label: "Open Threads", on: () => showPage("threads") },
+        line: "Ask something in Chat and the agents working on it appear here, with what each is doing.",
+        action: { label: "Open Chat", on: () => showPage("chat") },
       });
     }
     return v_flex().role("list").w_full().gap(SPACE[1]).children(list.map((a, i) => this.row(c, a, i)));
   }
 
-  /** One agent: its avatar, name, the line it is on, its state in the state language, its age. */
+  /** One agent: its name, the line it is on, its state in the state language, its age. */
   row(c, a, i) {
     const state = STATE[a?.state] ? a.state : "idle";
     const name = String(a?.name ?? "Agent");
@@ -238,9 +237,8 @@ export class Agents {
         .rounded(RADIUS.control)
         .when(picked, (el) => el.bg(c.hover))
         .on_click(() => a?.address && openTerminal(a.address))
-        .child(avatar(c, name, mentionTone(c, name), CONTROL, { working: state === "working" }))
         .child(v_flex().flex_1().min_w(0).gap(SPACE[1])
-          .child(div().truncate().text_size(TYPE_SCALE.body).font_semibold().text_color(c.textPrimary).child(name))
+          .child(div().truncate().text_size(TYPE_SCALE.body).font_semibold().text_color(mentionTone(c, name)).child(name))
           .when(Boolean(a?.summary), (el) => el.child(div().truncate().text_size(TYPE_SCALE.metadata).text_color(c.textSecondary).child(String(a.summary)))))
         .child(agentStateMark(c, a, state, `bh-agent-activity-${String(a?.address ?? i)}`))
         .when(Boolean(when), (el) => el.child(div().flex_none().text_size(TYPE_SCALE.metadata).text_color(c.textMuted).child(when))),

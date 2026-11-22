@@ -210,7 +210,8 @@ test("installLayout: an installed layout (with metrics) becomes the shipped one,
   const written = JSON.parse(readFileSync(file, "utf8"));
   const shipped = JSON.parse(readFileSync(shippedLayout, "utf8"));
   assert.deepEqual(pageIds(written), ["home", "threads", "agents", "library", "settings", "my-own-tool"], "the five destinations, plus a page of the user's own");
-  assert.equal(findNode(written, "pages").active, "home", "the old page (metrics) is gone, so Home opens");
+  assert.equal(findNode(written, "pages").active, "threads", "the old page (metrics) is gone, so the shipped page (the chat) opens");
+  assert.ok(findNode(written, "nav"), "the sidebar is bot-herdr's own");
   assert.equal(findNode(written, "tabs"), null, "the top-bar tabs strip does not come back");
   assert.deepEqual(findNode(written, "stage").children.map((c) => c.id), ["pages", "terminals"]);
   assert.equal(findNode(written, "switch").window_drag, shipped.children[1].children[0].children[0].window_drag);

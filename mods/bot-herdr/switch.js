@@ -1,23 +1,26 @@
-// The switch in the top bar: Chat (every agent in one place), Terminals (herdr's own panes, to
-// work in an agent's CLI directly) and Settings. Picking a tab or an agent anywhere in herdr
-// shows the Terminals page, so the terminal you asked for is never hidden behind the chat.
+// The top bar: the name of the page you are on (the sidebar, sidebar.js, is how you move), the
+// Tile switch while Terminals is up, and the window's buttons where the system draws none. It also
+// listens for the app's commands (ctrl+shift+m and friends) and opens the app on Chat. Picking a
+// tab or an agent anywhere in herdr shows Terminals, so the terminal you asked for is never hidden.
 //
 // This file also carries the shell pieces every page shares: the segmented control and the one
 // empty/loading state.
 
 import { div, svg } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
-import { focused, shared, theme, nextCommand, window as herdrWindow, run, setShared } from "herdr";
+import { focused, shared, theme, nextCommand, window as herdrWindow, run, setShared, layout, terminals, agents as reported } from "herdr";
 import { SIZE, TYPE, TYPE_SCALE, LINE, SPACE, CONTROL, TARGET, DOT, GLYPH, ICON, MOTION, clickable, looping, reducedMotion } from "./look.js";
 import { actionButton } from "./button.js";
 import { colors } from "./theme.js";
-import { PAGES, HOLD, activePage, showPage, wakeGoal } from "./pages.js";
-import { OPEN_COUNTS, HOME_NEEDS, arrivedIds } from "./signals.js";
+import { PAGES, HOLD, activePage, showPage, shownPlace, wakeGoal } from "./pages.js";
+import { isTiledLayout, withTiledPanes, tileAddresses } from "./signals.js";
 import { alpha, breatheFor } from "./working.js";
 import { KEYMAP_OPEN } from "./keymap.js";
 import { bh, bhJson, projectDir } from "./bh.js";
 
 const HOLD_MS = 3000;
+/** Whether the app has opened on Chat this run (shared values persist, so this is the module's own). */
+let landed = false;
 /** herdr's own tabs (mods/tabs) are 29px tall; the page switch's tabs match them. */
 const HERDR_TAB = 29;
 
@@ -236,8 +239,11 @@ export function stateView(c, { id, title, line = null, action = null, loading = 
 export class Switch {
   init(_props, cx) {
     this.where = null;
-    this.seenHomeNeeds = null;
-    this.homePulsing = false;
+    // The app opens on Chat, once per run (a layout change can start this view again).
+    if (!landed) {
+      landed = true;
+      cx.timer.after(1, () => showPage("chat"));
+    }
     // ctrl+shift+m (keys.json: "bot-herdr.focus") opens Threads and puts the keyboard in it;
     // ctrl+. (keys.json: "bot-herdr.goal") pauses or resumes the current goal.
     cx.spawn(async (cx) => {
@@ -281,58 +287,48 @@ export class Switch {
     this.follow(cx);
     const c = colors();
     const t = /** @type {Record<string, import("gpui-kit").Color>} */ (theme());
-    const active = activePage();
-    // A destination's open-question count, so a question is never missed from another page. A
-    // question is about a plan or a chat, and both are the same thread now. Home reads its total
-    // needs-you count from OPEN_COUNTS.home (with HOME_NEEDS as fallback so question polls never clobber it).
-    const counts = /** @type {Record<string, number> | null} */ (shared(OPEN_COUNTS)) ?? {};
-    const homeNeeds = /** @type {{ count?: number, ids?: string[] } | null} */ (shared(HOME_NEEDS));
-    if (Array.isArray(homeNeeds?.ids)) {
-      const { arrived, seen } = arrivedIds(homeNeeds.ids, this.seenHomeNeeds);
-      this.seenHomeNeeds = seen;
-      if (arrived.length > 0 && !reducedMotion()) {
-        this.homePulsing = true;
-        cx.timer.after(16, (cx) => {
-          this.homePulsing = false;
-          cx.notify();
-        });
-      }
-    }
-    const countOf = (id) => {
-      const n = id === "threads"
-        ? (Number(counts.chat) || 0) + (Number(counts.plans) || 0)
-        : id === "home"
-          ? Number(counts.home ?? homeNeeds?.count)
-          : Number(counts[id]);
-      return Number.isFinite(n) && n > 0 ? n : null;
-    };
-    const tabs = PAGES.filter((p) => !p.gear);
-    const gear = PAGES.find((p) => p.gear) ?? PAGES[PAGES.length - 1];
+    const place = shownPlace();
+    const terminalsUp = place === "terminals";
+    const tiled = terminalsUp && isTiledLayout(layout());
+    const tileable = tileAddresses(reported(), terminals()).length >= 2;
+    // Where you are, in one word: the sidebar is how you move, so the bar only names the page.
     return h_flex()
       .id("bh-pages")
       .size_full()
       .items_center()
-      .p(SPACE[1])
-      .gap(SPACE[1])
+      .gap(SPACE[2])
       .overflow_hidden()
-      .pl(SPACE[4])
+      .pl(SPACE[5] + SPACE[2])
+      .pr(SPACE[2])
       .bg(t.chrome)
       .border_b(1)
       .border_color(t.border)
-      // One bar, not a bar holding a second bar: the tabs sit straight on herdr's top bar, and the
-      // picked one is filled grey (the app's one selection style). The gear ends the row.
-      .child(h_flex()
-        .role("tab_list")
-        .flex_1()
-        .min_w(0)
-        .items_center()
-        .gap(SPACE[1])
-        .children(tabs.map((p, i) => pageTab(c, { ...p, i, n: PAGES.length, height: HERDR_TAB, on: p.id === active, count: countOf(p.id), needsBadge: p.id === "home", pulsing: p.id === "home" && this.homePulsing, onClick: () => showPage(p.id) })))
-        .child(div().flex_1())
-        .child(pageTab(c, { ...gear, label: null, i: PAGES.length - 1, n: PAGES.length, height: HERDR_TAB, on: gear.id === active, a11y: gear.label, padX: SPACE[3], onClick: () => showPage(gear.id) })))
-      // The window's own buttons are controls, not destinations: outside the tab list, at the end.
+      .child(div().id("bh-page-title").flex_1().min_w(0).truncate().text_size(TYPE_SCALE.body).font_semibold().text_color(c.textPrimary).child(PLACE_TITLES[place] ?? ""))
+      .when(terminalsUp, (el) => el.child(actionButton(c, "bh-agents-tile", tiled ? "Single pane" : "Tile", () => toggleTile(), {
+        tone: tiled ? "secondary" : "quiet",
+        disabled: !tiled && !tileable,
+        tooltip: tiled ? "Back to one pane" : tileable ? "Show running agents side by side" : "Start two or more agents to tile them",
+      }).on_mouse_down("left", (_e, cx) => cx.stop_propagation())))
+      // The window's own buttons are controls, not destinations: at the end.
       .when(Boolean(herdrWindow()?.buttons), (el) => el.child(windowButtons(c)));
   }
+}
+
+/** The bar's one word per place. */
+const PLACE_TITLES = { chat: "Chat", home: "Home", threads: "Threads", agents: "Agents", terminals: "Terminals", library: "Library", settings: "Settings" };
+
+/** Terminals: one pane, or the running agents side by side. */
+function toggleTile() {
+  const current = layout();
+  if (isTiledLayout(current)) {
+    const single = withTiledPanes(current, []);
+    if (single) run("layout.set", { layout: single });
+    return;
+  }
+  const addrs = tileAddresses(reported(), terminals());
+  if (addrs.length < 2) return;
+  const next = withTiledPanes(current, addrs);
+  if (next) run("layout.set", { layout: next });
 }
 
 /**
@@ -352,47 +348,4 @@ function windowButtons(c) {
     .child(button("bh-window-minimize", "window-minimize", "Minimize", "window.minimize"))
     .child(button("bh-window-maximize", "window-maximize", "Maximize", "window.maximize"))
     .child(button("bh-window-close", "x", "Close window", "window.close"));
-}
-
-/**
- * One top-bar destination, filled grey when it is the one showing (Tabs and selection). An icon-only tab — the Settings gear — carries its name as its label.
- */
-function pageTab(c, { id, label = null, icon = null, on, count = null, i = 0, n = 1, height = HERDR_TAB, padX = SPACE[4], a11y = null, needsBadge = false, pulsing = false, onClick }) {
-  return clickable(
-    div()
-      .role("tab")
-      .set_position(i + 1, n)
-      .aria_selected(Boolean(on))
-      .h(height)
-      .px(padX)
-      .flex_none()
-      .flex()
-      .items_center()
-      .gap(SPACE[2])
-      .rounded(SIZE.nested)
-      .text_size(TYPE_SCALE.metadata)
-      .font_medium()
-      .when(on, (el) => el.bg(c.fill).text_color(c.textPrimary))
-      .when(!on, (el) => el.text_color(c.textSecondary).hover((s) => s.text_color(c.textPrimary)))
-      .when(Boolean(a11y), (el) => el.accessibility_label(a11y).tooltip(a11y))
-      // A press on a tab picks it; it never starts dragging the window the bar sits on.
-      .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
-      .on_click(onClick)
-      .when(Boolean(icon), (el) => el.child(svg(ICON(icon)).flex_none().size(GLYPH.sm)))
-      .when(Boolean(label), (el) => el.child(label))
-      // The Home tab's needs-you badge draws in amber and pulses once on arrival (still under Reduce motion).
-      .when(needsBadge && count != null, (el) => el.child(
-        div()
-          .id("bh-pages-home-badge")
-          .text_size(TYPE_SCALE.metadata)
-          .font_semibold()
-          .text_color(c.stateNeedsYou)
-          .opacity(pulsing && !reducedMotion() ? 0.35 : 1)
-          .transition("opacity", MOTION.arrive)
-          .child(String(count)),
-      ))
-      .when(!needsBadge && count != null, (el) => el.child(div().text_size(TYPE_SCALE.metadata).font_semibold().text_color(on ? c.accent : c.textMuted).child(String(count)))),
-    c,
-    `bh-pages-${id}`, { edge: true },
-  );
 }

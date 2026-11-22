@@ -31,19 +31,20 @@ test("Enter opens the picked row, and a chord belongs to the app", () => {
 });
 
 test("view-local Ctrl+1..5 and ? map to destinations and keymap without clobbering text input", () => {
-  assert.equal(destinationForKey({ key: "1", modifiers: { control: true } }), "home");
-  assert.equal(destinationForKey({ key: "2", modifiers: { control: true } }), "threads");
+  assert.equal(destinationForKey({ key: "1", modifiers: { control: true } }), "chat");
+  assert.equal(destinationForKey({ key: "2", modifiers: { control: true } }), "home");
   assert.equal(destinationForKey({ key: "3", modifiers: { control: true } }), "agents");
-  assert.equal(destinationForKey({ key: "4", modifiers: { control: true } }), "library");
-  assert.equal(destinationForKey({ key: "5", modifiers: { platform: true } }), "settings");
-  assert.equal(destinationForKey({ key: "6", modifiers: { control: true } }), null);
+  assert.equal(destinationForKey({ key: "4", modifiers: { control: true } }), "terminals");
+  assert.equal(destinationForKey({ key: "5", modifiers: { control: true } }), "library");
+  assert.equal(destinationForKey({ key: "6", modifiers: { platform: true } }), "settings");
+  assert.equal(destinationForKey({ key: "7", modifiers: { control: true } }), null);
   assert.equal(destinationForKey({ key: "1", modifiers: {} }), null);
   assert.equal(opensKeymap({ key: "?", key_char: "?", modifiers: {} }), true);
   assert.equal(opensKeymap({ key: "/", modifiers: { shift: true } }), true);
   assert.equal(opensKeymap({ key: "?", modifiers: { control: true } }), false);
   assert.deepEqual(appKeyAction({ key: "?", key_char: "?", modifiers: {} }, { typing: false }), { kind: "keymap" });
   assert.equal(appKeyAction({ key: "?", key_char: "?", modifiers: {} }, { typing: true }), null);
-  assert.deepEqual(appKeyAction({ key: "2", modifiers: { control: true } }, { typing: false }), { kind: "page", page: "threads" });
+  assert.deepEqual(appKeyAction({ key: "2", modifiers: { control: true } }, { typing: false }), { kind: "page", page: "home" });
   assert.equal(appKeyAction({ key: "2", modifiers: { control: true } }, { typing: true }), null);
 });
 

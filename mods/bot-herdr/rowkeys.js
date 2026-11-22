@@ -26,10 +26,10 @@ export const opensRow = (key) => ["enter", "return"].includes(String(key ?? "").
 /** Whether the key is a chord (Ctrl, Cmd or Alt held): chords belong to the app, not the row list. */
 export const isChord = (e) => Boolean(e?.modifiers?.control || e?.modifiers?.platform || e?.modifiers?.alt);
 
-/** The five top-bar destinations, in Ctrl+1..5 order. */
-export const DESTINATIONS = ["home", "threads", "agents", "library", "settings"];
+/** The sidebar's places, in Ctrl+1..6 order. */
+export const DESTINATIONS = ["chat", "home", "agents", "terminals", "library", "settings"];
 
-/** Which top-bar destination Ctrl+1..5 picks inside a bot-herdr view, or null for any other key. */
+/** Which top-bar destination Ctrl+1..6 picks inside a bot-herdr view, or null for any other key. */
 export function destinationForKey(e) {
   const m = e?.modifiers;
   if (!(m?.control || m?.platform) || m?.alt || m?.shift) return null;
@@ -46,7 +46,7 @@ export function opensKeymap(e) {
 }
 
 /**
- * View-local app keys shared by every destination root: Ctrl+1..5 switch destinations, and `?`
+ * View-local app keys shared by every destination root: Ctrl+1..6 switch destinations, and `?`
  * opens the keyboard map; both stand down while a text input has focus. Returns `{ kind, page? }` or null.
  */
 export function appKeyAction(e, { typing = false } = {}) {

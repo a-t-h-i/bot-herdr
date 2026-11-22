@@ -1,26 +1,29 @@
 # bot-herdr
 
-A calm control room for a team of coding agents. The person opens it on **Home**: what needs them
-on top (questions, blockers, approvals, untriaged issues), reviews next, then every running agent
-and Goal with a one-line summary of what it is doing and today's spend. **Threads** holds every
-task and plan as one thread (conversation, plan, steps, changes) plus the Orchestrator's chat,
-pinned. **Agents** is the fleet and herdr's own terminals; **Library** the team's knowledge,
-lessons, scripts and GitHub issues; **Settings** (the gear) the agents, run mode, resilience,
-harnesses and usage. Space peeks any row in a right-hand drawer without leaving the list.
+A calm control room for a team of coding agents. The person opens it on **Chat**: the
+Orchestrator's conversation and the composer. One sidebar is how they move: **Chat**, **Home**
+(what needs them on top, reviews, running agents and Goals, today's spend), **Agents** (the
+fleet), **Terminals** (herdr's own panes), **Library** (knowledge, lessons, scripts, GitHub
+issues), then their **threads** (every task and plan, what needs them first) and **Settings** at
+the foot (the agents, run mode, resilience, harnesses, usage, and a link to herdr's own settings).
+Space peeks any row in a right-hand drawer without leaving the list.
 
 ![bot-herdr](preview.png)
 
 ## What you see
 
-The layout `layouts/bot-herdr.json` is a row: a 268 px sidebar (herdr's `workspace-chrome`,
-`spaces`, `agents` mods; min 44, max 480) and the work column.
+The layout `layouts/bot-herdr.json` is a row: a 268 px sidebar (herdr's `workspace-chrome` brand
+row, then bot-herdr's `sidebar` view; min 44, max 480) and the work column.
 
-- **Top bar** (42 px, `window_drag`): four labelled destinations, **Home, Threads, Agents,
-  Library**, and an icon-only **gear** for Settings at the right. The picked one is primary text
-  on a grey fill — the app's one selection style. Minimize / maximize / close are
-  drawn only where `window().buttons` says the system draws none.
-- **Body**: a `stage` stack holding `pages` (the five destinations; Home active) or `terminals`
-  (a 40 px Fleet | Terminals strip over herdr's own pane stage).
+- **Sidebar** (`sidebar.js`): thin 28 px one-line rows, 8 px radius, the open place on the
+  selected fill. Chat, Home (needs-you count in amber), Agents (working count), Terminals,
+  Library; a muted "Threads" label over up to 12 threads (state glyph, title, age) and "All
+  threads"; Settings at the foot over a hairline. Narrowed under 160 px it is an icon rail with
+  tooltips and a dot for a count.
+- **Top bar** (42 px, `window_drag`): the page's name only, the Tile switch while Terminals is up,
+  and minimize / maximize / close only where `window().buttons` says the system draws none.
+- **Body**: a `stage` stack holding `pages` (the five destinations; Threads active, on the chat)
+  or `terminals` (herdr's own pane stage).
 - **Status bar** (28 px): machine (or "This computer"), branch, "N agents", and the palette key
   ("Ctrl+Shift+P  commands") at the right, in 12 px secondary/muted text on the ground colour with
   a 1 px top edge. Nothing else, no buttons.
@@ -28,14 +31,13 @@ The layout `layouts/bot-herdr.json` is a row: a 268 px sidebar (herdr's `workspa
   16 px page padding, 12 px between sections. Section labels are 12 px semibold muted text with a
   hairline running to the right.
 - **Rows** (thread, agent, need): 44 px minimum, 8 px radius, `hover` fill when picked; state
-  glyph at 15 px in its state colour, title 13 px, a one-line summary 12 px secondary, agent
-  avatars (20 px initials ringed in the agent's hue), then "2/6 · 3h" muted. Cost, tokens,
+  glyph at 15 px in its state colour, title 13 px, a one-line summary 12 px secondary, then "2/6 · 3h" muted. Cost, tokens,
   harness and model never sit in a row; they are in the peek.
 - **Peek drawer**: 400 px on the right edge of Home, Threads or Agents, surface-1 fill, 1 px left
   edge. Head (glyph, title, close ✕), state word, summary, "harness · model · $0.21 · 412k
   tokens · 10m", "Recent output" (last 5 lines, who · when), the open question as a card with
   numbered option rows, and a reply box with a Send button at the foot.
-- **A thread**: a breadcrumb `Threads › <title> › <sub-tab>` (Threads is a link back) and a quiet
+- **A thread**: a breadcrumb `Threads › <title>` (Threads is a link back) and a quiet
   Files button; the second row `Conversation | Plan | Steps | Changes` (segmented, same grey fill).
   Conversation is a feed of entries — type word muted (reply, comment, contract, done…), author
   semibold, age, first line — with the **goal row** (60 px card, 12 px radius) and the
@@ -101,17 +103,18 @@ bot-herdr, dune, fern, harbor, plum × light/dark; the audit checks all 16 prese
 
 ## Built from
 
-- **Layout** `layouts/bot-herdr.json`: `root` row → `sidebar` column (`brand`, `sidebar-lists`
-  with `spaces` + `agents`, `sidebar-footer`) and `work` column → `topbar` row (`switch` block:
-  `{mod:"bot-herdr", props:{view:"switch"}}`), `work-body` → `stage` stack → `pages` stack (`home`,
-  `threads`, `agents`, `library`, `settings`, each `{mod:"bot-herdr", props:{view:<id>}}`) and
-  `terminals` column (`agents-tabs` block `{view:"agents", sub:"terminals"}` over `panes` →
+- **Layout** `layouts/bot-herdr.json`: `root` row → `sidebar` column (herdr's `brand` block, then
+  `nav` `{mod:"bot-herdr", props:{view:"sidebar"}}`: Chat, Home, Agents, Terminals, Library, the
+  threads, Settings) and `work` column → `topbar` row (`switch` block `{view:"switch"}`: the page's
+  name, Tile on Terminals, window buttons), `work-body` → `stage` stack → `pages` stack (`home`,
+  `threads`, `agents`, `library`, `settings`, each `{mod:"bot-herdr", props:{view:<id>}}`; it
+  opens on `threads`, whose default is the Orchestrator's chat) and `terminals` column (`panes` →
   `main` `{tab:"active"}` with a `pane` header), then `status` block `{view:"status"}`.
 - **One mod, many views** (`main.js` `VIEWS`, picked by `props.view`): `switch`, `home`, `threads`,
   `agents`, `library`, `scripts`, `status`, `chat`, `work`, `issues`, `learning`, `settings`,
   `metrics`, plus dialogs (`pick`, `settings-more`, `lightbox`, `file`, `plan`, `note`) and the
-  layout's `toast`. Key files: `pages.js` (destinations, `showPage`, `openThread`, shared keys
-  `bot-herdr.open-thread`/`open-task`/`focus`/`sub`), `threads.js`, `peek.js`, `threadview.js`
+  layout's `toast`. Key files: `sidebar.js`, `pages.js` (destinations, `showPage`, `openThread`, `shownPlace`, shared keys
+  `bot-herdr.thread-shown`/`open-thread`/`open-task`/`focus`/`sub`), `threads.js`, `peek.js`, `threadview.js`
   (pure models), `statusbar.js`, `home.js`, `agents.js`, `library.js`, `composer.js`, `chat.js`,
   `work.js` (step cards reused by Threads › Steps), `look.js`, `theme.js`, `rowkeys.js`.
 - **Engine** (`engine/bh.mjs`, run with `exec`): `bh home --json`, `bh thread list|show|peek
