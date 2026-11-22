@@ -37,7 +37,7 @@ function draw(key, file, write, cx) {
       if (got?.image) Object.assign(entry, { state: "ready", image: got.image });
       else Object.assign(entry, { state: "failed", error: got?.error ?? "The mockup couldn't be drawn." });
     } catch (e) {
-      Object.assign(entry, { state: "failed", error: String(e?.message ?? e) });
+      Object.assign(entry, { state: "failed", error: e instanceof Error ? e.message : String(e) });
     }
     cx.notify();
   });

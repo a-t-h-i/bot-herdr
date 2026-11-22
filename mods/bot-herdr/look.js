@@ -152,6 +152,7 @@ const DARK_BASE = {
  * What an open composer pane puts between it and the page: black at 32% on the light ground and
  * 55% on the dark one, since dark needs more to read as a step back. gpui has no blur, so this
  * scrim stands in for one. Pick it with `isLight(c)`.
+ * @type {{ light: import("gpui-kit").Color, dark: import("gpui-kit").Color }}
  */
 export const SCRIM = { light: "#00000052", dark: "#0000008c" };
 
@@ -196,20 +197,38 @@ export const MARK = 14;
 export const HAIR = 1;
 export const GLYPH = { xs: 10, sm: 12, md: 14, lg: 16 };
 
+/**
+ * Each motion is a gpui transition policy, typed so its `easing` stays one of the keywords the
+ * shell takes rather than widening to any string; `stagger` is a gap in milliseconds, not a
+ * motion at all.
+ * @typedef {import("gpui-shell").TransitionPolicy} Motion
+ */
 export const MOTION = {
+  /** @type {Motion} */
   hover: { duration: 120, easing: "ease-out" },
+  /** @type {Motion} */
   press: { duration: 90, easing: "ease-out" },
+  /** @type {Motion} */
   pane: { duration: 190, easing: "ease-out" },
+  /** @type {Motion} */
   arrive: { duration: 240, easing: "ease-out" },
   stagger: 22,
+  /** @type {Motion} */
   menuWidth: { duration: 170, easing: "ease-out" },
+  /** @type {Motion} */
   menuClose: { duration: 110, easing: "ease-in" },
+  /** @type {Motion} */
   row: { duration: 240, easing: "ease-out" },
+  /** @type {Motion} */
   tool: { duration: 160, easing: "ease-out" },
   // A toast leaving: as long as its arrival, eased at both ends so it melts away, not snaps.
+  /** @type {Motion} */
   toastOut: { duration: 300, easing: "ease-in-out" },
+  /** @type {Motion} */
   toastTextOut: { duration: 200, easing: "ease-in-out" },
+  /** @type {Motion} */
   turn: { duration: 260, easing: "ease-out" },
+  /** @type {Motion} */
   verb: { duration: 420, easing: "ease-out" },
 };
 

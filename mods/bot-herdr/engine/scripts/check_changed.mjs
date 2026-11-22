@@ -21,6 +21,15 @@ const say = (line = "") => report.push(line);
 
 const ts = pick(/\.[cm]?tsx?$/);
 if (ts.length > 0 && has("tsconfig.json")) checks.push({ name: "typecheck (whole project: tsc cannot check one file with the project's settings)", kind: "typecheck", ...local("tsc", ["--noEmit", "-p", "."]) });
+// A mod's UI is untyped JavaScript checked by its own jsconfig, not by a file tsc could take on
+// its own; it needs the project's typescript, and says so rather than reaching for npx.
+const uiProject = "mods/bot-herdr/jsconfig.json";
+const ui = files.filter((file) => file === uiProject || /^mods\/bot-herdr\/[^/]+\.js$/.test(file));
+if (ui.length > 0 && has(uiProject)) {
+  const name = `typecheck (${uiProject}: the mod's UI)`;
+  if (has("node_modules/typescript/package.json")) checks.push({ name, kind: "typecheck", ...local("tsc", ["--noEmit", "-p", uiProject]) });
+  else checks.push({ name, kind: "typecheck", missing: `typescript is not installed: run npm install (needed for ${uiProject})` });
+}
 const js = pick(/\.[cm]?[jt]sx?$/);
 const eslint = ["eslint.config.js", "eslint.config.mjs", "eslint.config.ts", ".eslintrc", ".eslintrc.js", ".eslintrc.cjs", ".eslintrc.json"].some(has) || tool.pkg?.eslintConfig;
 if (js.length > 0 && eslint) checks.push({ name: "eslint", kind: "lint", ...local("eslint", js) });
@@ -56,6 +65,12 @@ if (checks.length === 0) {
 const ran = [];
 let failed = 0;
 for (const check of checks) {
+  if (check.missing) {
+    failed += 1;
+    say(`## ${check.name}: cannot run (${check.missing})`);
+    ran.push({ name: check.name, kind: check.kind, ok: false, exit: null, missing: check.missing });
+    continue;
+  }
   const result = sh(check.cmd, check.args, { cwd: root, timeout, env: { ...process.env, FORCE_COLOR: "0" } });
   const ok = result.code === 0;
   if (!ok) failed += 1;

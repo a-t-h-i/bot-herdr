@@ -103,7 +103,7 @@ export class FileView {
       language: LANG[ext] ?? ext,
       readonly: true,
       value: text.length > MAX ? `${text.slice(0, MAX)}\n… (cut here: open it in its app for the rest)` : text,
-      font_family: settings().font_family,
+      font_family: /** @type {string | undefined} */ (settings().font_family),
       font_size: TYPE.sm,
       syntax: { keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1, constant: t.ansi6 },
     });

@@ -203,7 +203,7 @@ export class Chat {
     this.feedCache = null; // the last items(space) built: reused while the feed and who runs where hold
     this.handle = cx.focus_handle(); // holds the keyboard while the composer is folded
     this.focusAt = shared(FOCUS) ?? 0;
-    this.outAt = shared(OUTGOING)?.at ?? 0; // the last message another page asked us to send
+    this.outAt = /** @type {{ at?: number } | null} */ (shared(OUTGOING))?.at ?? 0; // the last message another page asked us to send
     this.lastPage = null;
     this.reading = false;
     this.open = new OpenQuestions();
@@ -321,7 +321,7 @@ export class Chat {
       try {
         await this.composer.runStep({ do: "send", address, text, files: [] }, liveAgents());
       } catch (err) {
-        this.composer.say(String(err?.message ?? err), cx, "error");
+        this.composer.say(err instanceof Error ? err.message : String(err), cx, "error");
       }
       cx.notify();
     });
@@ -639,7 +639,7 @@ export class Chat {
     if (stamp !== this.focusAt || returned) this.composer.focus();
     this.focusAt = stamp;
     this.lastPage = page;
-    const out = shared(OUTGOING);
+    const out = /** @type {{ at?: number, text?: string } | null} */ (shared(OUTGOING));
     if (out?.at > this.outAt) {
       this.outAt = out.at;
       cx.timer.after(1, (cx) => this.composer.sendText(String(out.text ?? ""), cx));

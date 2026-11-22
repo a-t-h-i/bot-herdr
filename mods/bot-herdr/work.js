@@ -415,7 +415,7 @@ export class Work {
     this.knowSearch = InputState.new({ placeholder: "Search notes" });
     this.knowSearch.on("change", (_e, cx) => cx.notify());
     this.knowFilter = new Set();
-    this.noteAddedAt = shared(NOTE_ADDED)?.at ?? 0;
+    this.noteAddedAt = /** @type {{ at?: number } | null} */ (shared(NOTE_ADDED))?.at ?? 0;
     this.handle = cx.focus_handle(); // holds the keyboard while the Plans box is folded
     this.open = new OpenQuestions(); // the agents' open questions, read here as the chat reads them
     this.wasActive = false;
@@ -921,7 +921,7 @@ export class Work {
   render(cx) {
     this.cx = cx;
     // A note added from its dialog: show it.
-    const added = shared(NOTE_ADDED);
+    const added = /** @type {{ at?: number } | null} */ (shared(NOTE_ADDED));
     if ((added?.at ?? 0) > this.noteAddedAt) {
       this.noteAddedAt = added.at;
       cx.timer.after(1, (cx) => this.reload(cx));
@@ -933,7 +933,7 @@ export class Work {
       });
     }
     this.wasActive = active;
-    const want = shared(OPEN_TASK);
+    const want = /** @type {{ id?: string, at?: number } | null} */ (shared(OPEN_TASK));
     if (want?.at > (this.openAt ?? 0)) {
       this.openAt = want.at;
       this.opened = want.id;

@@ -174,6 +174,26 @@ test("check_changed and run_changed_tests run the project's own JS tools on this
   assert.match(readFileSync(join(tests, "vitest-ran.txt"), "utf8"), /^run test\/a\.test\.js$/);
 });
 
+test("check_changed typechecks a mod's own UI project on a change to its JavaScript", () => {
+  const root = repo({ "mods/bot-herdr/chat.js": "export const a = 1;\n", "mods/bot-herdr/engine/lib/core.mjs": "export const b = 1;\n" });
+  write(root, "mods/bot-herdr/jsconfig.json", "{}\n");
+  write(root, "node_modules/typescript/package.json", JSON.stringify({ name: "typescript", bin: { tsc: "./bin/tsc" } }));
+  write(root, "node_modules/typescript/bin/tsc", `#!/usr/bin/env node\nrequire("node:fs").writeFileSync(${JSON.stringify(join(root, "tsc-ran.txt"))}, process.argv.slice(2).join(" "));\n`);
+  const checked = run("check_changed", ["mods/bot-herdr/chat.js", "--json"], root);
+  assert.equal(checked.code, 0, checked.err);
+  assert.match(readFileSync(join(root, "tsc-ran.txt"), "utf8"), /^--noEmit -p mods\/bot-herdr\/jsconfig\.json$/);
+  // The engine is plain, tested JavaScript, not part of the UI project tsc would check.
+  const engine = run("check_changed", ["mods/bot-herdr/engine/lib/core.mjs", "--json"], root);
+  assert.equal(engine.code, 0, engine.err);
+  assert.equal(JSON.parse(engine.out).typecheck, 0);
+
+  // Without the project's typescript the typecheck says so instead of passing quietly.
+  const bare = repo({ "mods/bot-herdr/chat.js": "export const a = 1;\n", "mods/bot-herdr/jsconfig.json": "{}\n" });
+  const missed = run("check_changed", ["mods/bot-herdr/chat.js", "--json"], bare);
+  assert.equal(missed.code, 1);
+  assert.match(JSON.parse(missed.out).report, /cannot run \(typescript is not installed: run npm install/);
+});
+
 test("check_changed reads pyproject.toml itself and resolves python without cat/npx failures", () => {
   const root = mkdtempSync(join(tmpdir(), "bh-check-"));
   write(root, "pyproject.toml", "[tool.mypy]\nstrict = true\n");

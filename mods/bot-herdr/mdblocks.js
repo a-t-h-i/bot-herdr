@@ -55,10 +55,12 @@ function endOf(lines, i, type) {
  * The text as blocks, each holding its own lines and the blank lines that follow it. A block is
  * `{ type, text, body, gap }`: `body` is what reads and is edited, `gap` the blank lines after it
  * and `text` the two joined. The first block carries the blank lines before it as `lead`.
+ * @typedef {{ type: any, text: any, body: any, gap: string, lead?: string }} Block
  */
 export function splitBlocks(text) {
   const src = String(text ?? "");
   const lines = linesOf(src);
+  /** @type {Block[]} */
   const out = [];
   let lead = "";
   let i = 0;

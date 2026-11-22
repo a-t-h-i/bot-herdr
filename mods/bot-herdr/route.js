@@ -69,7 +69,7 @@ const slugOf = (name) => String(name).trim().toLowerCase().replace(/[^a-z0-9_.-]
  * are not running yet, which start in a new tab with the message. `startOnly` (after `/new`)
  * leaves out the running ones.
  */
-export function mentionRows(query, { agents = [], children = [], known = [], space = null, mode = null, leadName, names = {} } = {}) {
+export function mentionRows(query, { agents = [], children = [], known = [], space = null, mode = null, leadName = ORCHESTRATOR_TAB, names = {} } = {}) {
   const startOnly = mode === "start";
   const lead = orchestratorOf(agents, space, leadName);
   const here = [...agents.filter((a) => a.space === space && a === lead), ...agents.filter((a) => a.space === space && a !== lead)];
