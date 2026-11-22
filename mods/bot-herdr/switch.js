@@ -23,7 +23,7 @@ const HERDR_TAB = 29;
 
 /**
  * The two selection idioms, one per control type (the spec's Tabs and selection rule): tabs pick
- * a view, so the picked label is in the accent over a 2px accent underline, with no track or fill;
+ * a view, so the picked label is filled grey, with no track or underline;
  * a segmented choice (`choice: true`) picks a value, so it keeps its grey track and the picked item
  * is filled grey, with no underline. Nothing is outlined all round or pill-shaped to mean "chosen".
  *
@@ -71,11 +71,8 @@ export function segmented(c, { id, items, onPick, grow = false, height = null, p
           .text_size(TYPE_SCALE.metadata)
           .font_medium()
           .when(item.grow, (el) => el.flex_1().justify_center())
-          // A tab's underline keeps its 2px on every item, transparent until it is the picked one,
-          // so nothing moves when the pick changes. A choice fills its picked item grey instead.
-          .when(!choice && item.on, (el) => el.border_b(2).border_color(c.accent).text_color(c.accent))
-          .when(!choice && !item.on, (el) => el.border_b(2).border_color(alpha(c.accent, 0)))
-          .when(choice && item.on, (el) => el.bg(c.fill).text_color(c.textPrimary))
+          // The picked item, tab or choice, is filled grey: no underline.
+          .when(item.on, (el) => el.bg(c.fill).text_color(c.textPrimary))
           .when(!item.on, (el) => el.text_color(c.textSecondary).hover((s) => s.text_color(c.textPrimary)))
           .on_click((_e, cx) => onPick(item.id, cx))
           // An item that opens something under itself learns where it is on the press.
@@ -83,7 +80,7 @@ export function segmented(c, { id, items, onPick, grow = false, height = null, p
           // An icon before the label, in the label's colour; the label is always there.
           .when(Boolean(item.icon), (el) => el.child(svg(ICON(item.icon)).flex_none().size(GLYPH.sm)))
           .child(item.label)
-          .when(item.count != null, (el) => el.child(div().text_size(TYPE_SCALE.metadata).font_semibold().text_color(item.on && !choice ? c.accent : c.textMuted).child(String(item.count)))),
+          .when(item.count != null, (el) => el.child(div().text_size(TYPE_SCALE.metadata).font_semibold().text_color(item.on ? c.textPrimary : c.textMuted).child(String(item.count)))),
         c,
         `${id}-${item.id}`,
         { edge: true },
@@ -127,7 +124,7 @@ export const chipHasResults = (count, on = false) => Boolean(on) || Number(count
 /**
  * A filter chip: its label and, when there are any, how many match. Nothing empty is drawn
  * (Principle 3), so a chip with a zero count never appears and a count only reads above zero.
- * Chosen, it takes the app's one selection style: accent text over a 2px accent underline.
+ * Chosen, it takes the app's one selection style: a grey fill.
  */
 export function filterChip(c, { id, label, count = null, on = false, onClick }) {
   const n = Number(count);
@@ -144,8 +141,8 @@ export function filterChip(c, { id, label, count = null, on = false, onClick }) 
       .rounded(SIZE.nested)
       .text_size(TYPE_SCALE.metadata)
       .font_medium()
-      .when(on, (el) => el.border_b(2).border_color(c.accent).text_color(c.accent))
-      .when(!on, (el) => el.border_b(2).border_color(alpha(c.accent, 0)).text_color(c.textSecondary).hover((s) => s.text_color(c.textPrimary)))
+      .when(on, (el) => el.bg(c.fill).text_color(c.textPrimary))
+      .when(!on, (el) => el.text_color(c.textSecondary).hover((s) => s.text_color(c.textPrimary)))
       .on_click(onClick)
       .child(text),
     c,
@@ -323,7 +320,7 @@ export class Switch {
       .border_b(1)
       .border_color(t.border)
       // One bar, not a bar holding a second bar: the tabs sit straight on herdr's top bar, and the
-      // picked one is underlined (the app's one selection style). The gear ends the row.
+      // picked one is filled grey (the app's one selection style). The gear ends the row.
       .child(h_flex()
         .role("tab_list")
         .flex_1()
@@ -358,9 +355,7 @@ function windowButtons(c) {
 }
 
 /**
- * One top-bar destination: accent text over a 2px accent underline when it is the one showing,
- * with the same underline kept transparent otherwise so nothing moves when the pick changes
- * (Tabs and selection). An icon-only tab — the Settings gear — carries its name as its label.
+ * One top-bar destination, filled grey when it is the one showing (Tabs and selection). An icon-only tab — the Settings gear — carries its name as its label.
  */
 function pageTab(c, { id, label = null, icon = null, on, count = null, i = 0, n = 1, height = HERDR_TAB, padX = SPACE[4], a11y = null, needsBadge = false, pulsing = false, onClick }) {
   return clickable(
@@ -377,8 +372,8 @@ function pageTab(c, { id, label = null, icon = null, on, count = null, i = 0, n 
       .rounded(SIZE.nested)
       .text_size(TYPE_SCALE.metadata)
       .font_medium()
-      .when(on, (el) => el.border_b(2).border_color(c.accent).text_color(c.accent))
-      .when(!on, (el) => el.border_b(2).border_color(alpha(c.accent, 0)).text_color(c.textSecondary).hover((s) => s.text_color(c.textPrimary)))
+      .when(on, (el) => el.bg(c.fill).text_color(c.textPrimary))
+      .when(!on, (el) => el.text_color(c.textSecondary).hover((s) => s.text_color(c.textPrimary)))
       .when(Boolean(a11y), (el) => el.accessibility_label(a11y).tooltip(a11y))
       // A press on a tab picks it; it never starts dragging the window the bar sits on.
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())

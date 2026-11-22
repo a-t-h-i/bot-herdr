@@ -806,7 +806,7 @@ export class Settings {
       .child(body);
   }
 
-  /** The page's section tabs: one control, the current section underlined. */
+  /** The page's section tabs: one control, the current section filled grey. */
   tabs(c, section) {
     return segmented(c, {
       id: "bh-settings-tabs",

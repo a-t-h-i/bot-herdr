@@ -2738,11 +2738,10 @@ export class Work {
           return focusable(
             pressable(
               h_flex().h(CONTROL).px(SPACE[2]).gap(SPACE[2]).items_center().rounded(SIZE.nested)
-                .border_b(2)
-                .border_color(on ? c.accent : alpha(c.accent, 0))
+                .when(on, (el) => el.bg(c.fill))
                 .text_size(TYPE.sm)
                 .font_medium()
-                .text_color(on ? c.accent : c.muted)
+                .text_color(on ? c.ink : c.muted)
                 .hover((s) => s.bg(c.hover))
                 .on_click((_e, cx) => {
                   if (!this.knowFilter) this.knowFilter = new Set();

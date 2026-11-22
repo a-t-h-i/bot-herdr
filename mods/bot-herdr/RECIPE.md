@@ -16,8 +16,8 @@ The layout `layouts/bot-herdr.json` is a row: a 268 px sidebar (herdr's `workspa
 `spaces`, `agents` mods; min 44, max 480) and the work column.
 
 - **Top bar** (42 px, `window_drag`): four labelled destinations, **Home, Threads, Agents,
-  Library**, and an icon-only **gear** for Settings at the right. The picked one is accent text
-  over a 2 px accent underline — the app's one selection style. Minimize / maximize / close are
+  Library**, and an icon-only **gear** for Settings at the right. The picked one is primary text
+  on a grey fill — the app's one selection style. Minimize / maximize / close are
   drawn only where `window().buttons` says the system draws none.
 - **Body**: a `stage` stack holding `pages` (the five destinations; Home active) or `terminals`
   (a 40 px Fleet | Terminals strip over herdr's own pane stage).
@@ -36,7 +36,7 @@ The layout `layouts/bot-herdr.json` is a row: a 268 px sidebar (herdr's `workspa
   tokens · 10m", "Recent output" (last 5 lines, who · when), the open question as a card with
   numbered option rows, and a reply box with a Send button at the foot.
 - **A thread**: a breadcrumb `Threads › <title> › <sub-tab>` (Threads is a link back) and a quiet
-  Files button; the second row `Conversation | Plan | Steps | Changes` (segmented, same underline).
+  Files button; the second row `Conversation | Plan | Steps | Changes` (segmented, same grey fill).
   Conversation is a feed of entries — type word muted (reply, comment, contract, done…), author
   semibold, age, first line — with the **goal row** (60 px card, 12 px radius) and the
   **composer** pinned at the foot. Plan shows the plan document and an "Open plan" button; Steps
