@@ -237,7 +237,17 @@ export class Threads {
 
   /** View-local app keys (Ctrl+1..5, ?), peek keys, Esc back, then list J / K / Space / Enter. */
   keys(e, cx) {
-    const typing = Boolean(this.searching || this.peek.typing || this.chat.composer.focused || this.work.typingCount > 0 || this.work.editing);
+    const typing = Boolean(
+      this.searching
+      || this.peek.typing
+      || this.chat.composer.focused
+      || this.chat.composer.typingCount > 0
+      || this.chat.typingCount > 0
+      || this.work.typingCount > 0
+      || this.work.editing
+      || this.work.taskComposer?.focused
+      || (this.work.taskComposer?.typingCount ?? 0) > 0,
+    );
     const app = appKeyAction(e, { typing });
     if (app?.kind === "page") {
       showPage(app.page);

@@ -4,7 +4,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { appKeyAction, destinationForKey, isChord, keyName, nextPick, opensKeymap, opensRow } from "../mods/bot-herdr/rowkeys.js";
+import { appKeyAction, cardKeysActive, destinationForKey, isChord, keyName, nextPick, opensKeymap, opensRow } from "../mods/bot-herdr/rowkeys.js";
 
 test("nextPick moves J / K and the arrows by one and wraps, Home and End jump to the ends", () => {
   assert.equal(nextPick("j", 0, 3), 1);
@@ -43,5 +43,14 @@ test("view-local Ctrl+1..5 and ? map to destinations and keymap without clobberi
   assert.equal(opensKeymap({ key: "?", modifiers: { control: true } }), false);
   assert.deepEqual(appKeyAction({ key: "?", key_char: "?", modifiers: {} }, { typing: false }), { kind: "keymap" });
   assert.equal(appKeyAction({ key: "?", key_char: "?", modifiers: {} }, { typing: true }), null);
-  assert.deepEqual(appKeyAction({ key: "2", modifiers: { control: true } }, { typing: true }), { kind: "page", page: "threads" });
+  assert.deepEqual(appKeyAction({ key: "2", modifiers: { control: true } }, { typing: false }), { kind: "page", page: "threads" });
+  assert.equal(appKeyAction({ key: "2", modifiers: { control: true } }, { typing: true }), null);
+});
+
+test("cardKeysActive stands down while typing, editing, or commenting on a Knowledge card", () => {
+  assert.equal(cardKeysActive(), true);
+  assert.equal(cardKeysActive({ typingCount: 0, editing: false, commenting: null }), true);
+  assert.equal(cardKeysActive({ typingCount: 1, editing: false, commenting: null }), false);
+  assert.equal(cardKeysActive({ typingCount: 0, editing: true, commenting: null }), false);
+  assert.equal(cardKeysActive({ typingCount: 0, editing: false, commenting: { kind: "knowledge", id: "dev", at: 3 } }), false);
 });

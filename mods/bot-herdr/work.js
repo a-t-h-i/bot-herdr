@@ -34,7 +34,7 @@ import { openLightbox } from "./lightbox.js";
 import { openFile, openLink } from "./viewer.js";
 import { OpenQuestions, publishCounts } from "./questions.js";
 import { seatStates, seatsOf, boardAge, newlyDone } from "./signals.js";
-import { isChord, keyName } from "./rowkeys.js";
+import { cardKeysActive, isChord, keyName } from "./rowkeys.js";
 import { stepAgents, usageText } from "./steps.js";
 import { skillsLine } from "./skillsview.js";
 import {
@@ -345,7 +345,7 @@ export class Work {
     this.editing = false; // the knowledge file open as text, to rewrite it
     this.confirmDelete = null; // "agent:line" of the record whose Delete asks first
     this.actionsOn = new Set(); // Knowledge cards whose Edit/Delete show on hover, focus or a key on the card
-    this.knowHandles = new Map(); // Knowledge card focus handles (key -> FocusHandle), created outside render
+    this.knowHandles = new Map(); // Knowledge card focus handles (key -> { card, edit, del }), created outside render
     this.knowHandleSync = false;
     this.knowUndos = []; // inline 5 s Undo records for Knowledge entry/note deletes
     this.seenStepsDone = new Map(); // task id -> Map(stepKey -> boolean) for 2 s finish highlight
@@ -620,7 +620,9 @@ export class Work {
         for (const e of s.entries) {
           const key = `${agent}:${e.line}`;
           live.add(key);
-          if (!this.knowHandles.has(key)) this.knowHandles.set(key, cx.focus_handle());
+          if (!this.knowHandles.has(key)) {
+            this.knowHandles.set(key, { card: cx.focus_handle(), edit: cx.focus_handle(), del: cx.focus_handle() });
+          }
         }
       }
     }
@@ -933,7 +935,7 @@ export class Work {
       id: `note-${agent}-${hash(`${n.at}${n.note}`)}-${Date.now()}`,
       kind: "note",
       agent,
-      entryKey: e.key,
+      entryKey: n.entry ?? e.key,
       noteText: n.note,
     }, cx);
     cx.notify();
@@ -962,7 +964,7 @@ export class Work {
       }
       this.act(["knowledge", "write", u.agent, "--data", enc(u.prevText)], cx, (r, cx) => {
         if (r.code !== 0) return;
-        for (const n of u.notes ?? []) this.act(["knowledge", "note", u.agent, u.entryKey, "--data", enc(n.note)], cx);
+        for (const n of u.notes ?? []) this.act(["knowledge", "note", u.agent, n.entry ?? u.entryKey, "--data", enc(n.note)], cx);
       });
     } else if (u.kind === "note") {
       this.act(["knowledge", "note", u.agent, u.entryKey, "--data", enc(u.noteText)], cx);
@@ -970,8 +972,8 @@ export class Work {
     cx.notify();
   }
 
-  /** Returns the pre-created FocusHandle for a Knowledge card (never calls cx.focus_handle during render). */
-  cardHandle(key) {
+  /** Returns pre-created FocusHandles for a Knowledge card and its Edit/Delete buttons (never calls cx.focus_handle during render). */
+  cardHandles(key) {
     const h = this.knowHandles.get(key) ?? null;
     if (!h && !this.knowHandleSync && this.cx?.timer) {
       this.knowHandleSync = true;
@@ -2806,8 +2808,12 @@ export class Work {
     const key = `${agent}:${e.line}`;
     const on = this.addingAt("knowledge", agent, e.line);
     const body = /^\s{0,3}[-*+]\s+/.test(e.text) ? e.text.replace(/^\s{0,3}[-*+]\s+/, "") : e.text;
-    const handle = this.cardHandle(key);
-    const showActions = this.actionsOn.has(key) || Boolean(handle?.is_focused?.());
+    const handles = this.cardHandles(key);
+    const handle = handles?.card ?? null;
+    const editHandle = handles?.edit ?? null;
+    const delHandle = handles?.del ?? null;
+    const showActions = this.actionsOn.has(key)
+      || Boolean(handle?.is_focused?.() || editHandle?.is_focused?.() || delHandle?.is_focused?.());
     const openEditor = (cx) => {
       this.agent = agent;
       this.knownText = (this.knowAll?.find((x) => x.agent === agent)?.text ?? "");
@@ -2837,6 +2843,7 @@ export class Work {
           cx.notify();
         })
         .on_key_down((ev, cx) => {
+          if (!cardKeysActive({ typingCount: this.typingCount, editing: this.editing, commenting: this.commenting })) return;
           if (!this.actionsOn.has(key)) {
             this.actionsOn.add(key);
             cx.notify();
@@ -2863,6 +2870,7 @@ export class Work {
             .child(focusable(
               pressable(
                 div().size(TARGET).flex().items_center().justify_center().rounded(SIZE.nested).text_color(c.faint).hover((s) => s.bg(c.hover).text_color(c.ink))
+                  .when(Boolean(editHandle), (el) => el.track_focus(editHandle))
                   .on_click((_ev, cx) => { cx.stop_propagation?.(); openEditor(cx); })
                   .child(svg(ICON("external-link")).size(GLYPH.sm))
                   .role("button")
@@ -2874,6 +2882,7 @@ export class Work {
             .child(focusable(
               pressable(
                 div().size(TARGET).flex().items_center().justify_center().rounded(SIZE.nested).text_color(c.faint).hover((s) => s.bg(c.well).text_color(c.danger))
+                  .when(Boolean(delHandle), (el) => el.track_focus(delHandle))
                   .on_click((_ev, cx) => { cx.stop_propagation(); this.deleteEntry(agent, e, cx); })
                   .child(svg(ICON("trash")).size(GLYPH.sm))
                   .role("button")

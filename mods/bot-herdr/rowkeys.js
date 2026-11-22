@@ -47,11 +47,20 @@ export function opensKeymap(e) {
 
 /**
  * View-local app keys shared by every destination root: Ctrl+1..5 switch destinations, and `?`
- * opens the keyboard map when no text input has focus. Returns `{ kind, page? }` or null.
+ * opens the keyboard map; both stand down while a text input has focus. Returns `{ kind, page? }` or null.
  */
 export function appKeyAction(e, { typing = false } = {}) {
+  if (typing) return null;
   const page = destinationForKey(e);
   if (page) return { kind: "page", page };
-  if (!typing && opensKeymap(e)) return { kind: "keymap" };
+  if (opensKeymap(e)) return { kind: "keymap" };
   return null;
+}
+
+/**
+ * Whether a Knowledge card's single-key shortcuts (`e`, `Backspace`, `Delete`) may fire:
+ * never while any text input has focus, the Markdown editor is open, or an inline note box is open.
+ */
+export function cardKeysActive({ typingCount = 0, editing = false, commenting = null } = {}) {
+  return !(typingCount > 0 || editing || Boolean(commenting));
 }

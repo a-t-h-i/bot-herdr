@@ -219,6 +219,7 @@ export class Chat {
     this.pendingIds = new Set(); // optimistically sent message ids muted until the engine acks them
     this.commenting = null; // the reply with its comment box open: { entry, edit: cid | null }
     this.commentBoxes = new Map(); // agent name → its comment box (a placeholder is fixed when made)
+    this.typingCount = 0; // focused reply comment boxes (so view-local keys stand down)
     this.composer = new Composer({
       sent: (message, cx) => this.sent(message, cx),
       acked: (id, info, cx) => this.acked(id, info, cx),
@@ -282,6 +283,8 @@ export class Chat {
     let box = this.commentBoxes.get(name);
     if (!box) {
       box = InputState.new({ placeholder: `Your comment. Enter sends it to ${name}` });
+      box.on("focus", () => { this.typingCount++; });
+      box.on("blur", () => { this.typingCount = Math.max(0, this.typingCount - 1); });
       box.on("submit", (_e, cx) => this.sendComment(cx));
       this.commentBoxes.set(name, box);
     }

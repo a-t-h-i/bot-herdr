@@ -82,6 +82,7 @@ export class Agents {
       return cx.stop_propagation();
     }
     if (app?.kind === "keymap") {
+      if (this.sub === "terminals") return;
       setShared(KEYMAP_OPEN, true);
       cx.stop_propagation();
       return cx.notify();

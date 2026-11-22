@@ -188,16 +188,23 @@ export class Composer {
     this.browse = null; // { path, parent, entries, truncated, error, loading, selected:Set, hidden, foreign }
     this.browseAt = 0; // the row the keyboard is on
     this.browseLast = null; // { path, at }: a second click on the same folder opens it
+    // Secondary text inputs (model search, attach folder search/path) suppress view-local keys while focused.
+    this.typingCount = 0;
+    const track = (state) => {
+      state.on("focus", () => { this.typingCount++; });
+      state.on("blur", () => { this.typingCount = Math.max(0, this.typingCount - 1); });
+      return state;
+    };
     // The Orchestrator's model pane: a search over every harness's models, and its effort.
-    this.modelSearch = InputState.new({ placeholder: "Search models" });
+    this.modelSearch = track(InputState.new({ placeholder: "Search models" }));
     this.modelSearch.on("change", (_e, cx) => cx.notify());
     this.modelSearch.on("submit", (_e, cx) => {
       const first = this.modelRows().find((o) => !o.heading);
       if (first) this.pickLeadModel(first.value, cx);
     });
-    this.browseSearch = InputState.new({ placeholder: "Search this folder" });
+    this.browseSearch = track(InputState.new({ placeholder: "Search this folder" }));
     this.browseSearch.on("change", (_e, cx) => cx.notify());
-    this.browseTyped = InputState.new({ placeholder: "A path on this machine" });
+    this.browseTyped = track(InputState.new({ placeholder: "A path on this machine" }));
     this.browseTyped.on("submit", (_e, cx) => this.attachTyped(cx));
     this.browseHandle = cx.focus_handle();
     this.walk = null; // the questions being answered: drawer.js state
