@@ -10,7 +10,7 @@ import { hc } from "herdr";
 import { SIZE, TYPE_SCALE, LINE, SPACE, CONTROL, RADIUS, STATE, MOTION, stateTone, clickable, reducedMotion } from "./look.js";
 import { actionButton } from "./button.js";
 import { sectionLabel } from "./plandoc.js";
-import { bhJson, projectDir } from "./bh.js";
+import { bh, bhJson, projectDir } from "./bh.js";
 import { price, compact, duration, ago } from "./numbers.js";
 import { keyName } from "./rowkeys.js";
 import { peekModel, costLine, optionForKey, approvalsList, approvalChoiceForKey, approvalAnswerArgs } from "./threadview.js";
@@ -18,6 +18,21 @@ import { renderApprovalCard } from "./approvalcard.js";
 
 /** The drawer's width (px at zoom 1): the design's 380–420 px. */
 export const PEEK_WIDTH = 400;
+
+/** Parses `bh approvals answer --json` output (even on non-zero exit); returns an error sentence or null. */
+export function approvalAnswerError(r) {
+  let parsed = null;
+  try {
+    parsed = JSON.parse(String(r?.stdout ?? ""));
+  } catch {
+    parsed = null;
+  }
+  if (parsed?.implemented === false) return null;
+  if (r?.code !== 0 || parsed?.ok === false) {
+    return typeof parsed?.error === "string" && parsed.error.trim() ? parsed.error : "That approval could not be answered.";
+  }
+  return null;
+}
 
 const FORMAT = { price, compact, duration };
 const OPTION_H = CONTROL + SPACE[2]; // fixed height so unchosen options fold cleanly to 0 over MOTION.fold
@@ -170,12 +185,14 @@ export class PeekDrawer {
     }
     cx.notify();
     cx.spawn(async (cx) => {
-      const r = await bhJson(args, { cwd: projectDir() });
-      if (r && r.implemented !== false && r.ok === false) {
+      const r = await bh([...args, "--json"], { cwd: projectDir() });
+      const error = approvalAnswerError(r);
+      if (error) {
         this.approvalAnswered = null;
         this.approvalFolded = false;
-        this.problem = String(r.error || "Couldn't record that approval answer.");
+        this.problem = error;
       } else {
+        this.problem = null;
         this.onChanged?.(cx);
       }
       cx.notify();

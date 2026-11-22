@@ -4,7 +4,7 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -137,7 +137,7 @@ test("hold -> answer delivers allow_once, allow_always (with fallback), and reje
     send: (msg) => sentOnce.push(msg),
     on: () => {},
   });
-  watchers.push(h1.stop);
+  watchers.push(h1.cancel);
   assert.equal(h1.handled, true);
   assert.match(h1.id, /^ap-[0-9a-f]{8}$/);
   assert.equal(sentOnce.length, 0);
@@ -161,7 +161,7 @@ test("hold -> answer delivers allow_once, allow_always (with fallback), and reje
     send: (msg) => sentAlways.push(msg),
     on: () => {},
   });
-  watchers.push(h2a.stop);
+  watchers.push(h2a.cancel);
   AP.answerApproval(PROJECT, h2a.id, "project");
   await waitFor(() => sentAlways.length === 1);
   assert.deepEqual(sentAlways[0], { id: 110, result: { outcome: { outcome: "selected", optionId: "opt-always" } } });
@@ -181,7 +181,7 @@ test("hold -> answer delivers allow_once, allow_always (with fallback), and reje
     send: (msg) => sentProj.push(msg),
     on: () => {},
   });
-  watchers.push(h2.stop);
+  watchers.push(h2.cancel);
   AP.answerApproval(PROJECT, h2.id, "project");
   await waitFor(() => sentProj.length === 1);
   assert.deepEqual(sentProj[0], { id: 11, result: { outcome: { outcome: "selected", optionId: "only-once" } } });
@@ -202,11 +202,178 @@ test("hold -> answer delivers allow_once, allow_always (with fallback), and reje
     send: (msg) => sentDeny.push(msg),
     on: (e) => eventsDeny.push(e),
   });
-  watchers.push(h3.stop);
+  watchers.push(h3.cancel);
   AP.answerApproval(PROJECT, h3.id, "deny");
   await waitFor(() => sentDeny.length === 1);
   assert.deepEqual(sentDeny[0], { id: 12, result: { outcome: { outcome: "selected", optionId: "opt-deny" } } });
   assert.deepEqual(eventsDeny, [{ kind: "tool", line: "Refused (Agent access is standard): Danger cmd" }]);
+});
+
+test("deleted approval file rejects the request and stops the watcher without recreating the file", async () => {
+  const sent = [];
+  let doneCount = 0;
+  const h = AP.maybeHoldPermission({
+    req: { id: 30 },
+    call: { title: "Vanished cmd", kind: "execute" },
+    options: OPTIONS,
+    command: "curl https://example.com",
+    access: "standard",
+    autonomy: "guarded",
+    root: PROJECT,
+    interval: 50,
+    send: (msg) => sent.push(msg),
+    on: () => {},
+    onDone: () => { doneCount += 1; },
+  });
+  watchers.push(h.cancel);
+  assert.ok(existsSync(h.file));
+  rmSync(h.file);
+  await waitFor(() => sent.length === 1);
+  assert.deepEqual(sent[0], { id: 30, result: { outcome: { outcome: "selected", optionId: "opt-deny" } } });
+  assert.equal(doneCount, 1);
+  assert.equal(existsSync(h.file), false);
+  // Subsequent cancel after deletion is a no-op.
+  h.cancel();
+  assert.equal(sent.length, 1);
+});
+
+test("cancel() sends reject once, marks record answered deny, removes from listHeld, and is idempotent", () => {
+  // 1. reject_once preferred, idempotent on second cancel(), removes from listHeld.
+  const sent = [];
+  const h = AP.maybeHoldPermission({
+    req: { id: 31 },
+    call: { title: "Deploy", kind: "execute" },
+    options: OPTIONS,
+    command: "npm run deploy-prod",
+    access: "standard",
+    autonomy: "ask",
+    root: PROJECT,
+    interval: 50,
+    send: (msg) => sent.push(msg),
+    on: () => {},
+  });
+  watchers.push(h.cancel);
+  assert.ok(AP.listHeld(PROJECT).some((r) => r.id === h.id));
+
+  h.cancel();
+  h.cancel();
+  assert.equal(sent.length, 1);
+  assert.deepEqual(sent[0], { id: 31, result: { outcome: { outcome: "selected", optionId: "opt-deny" } } });
+  const rec = JSON.parse(readFileSync(h.file, "utf8"));
+  assert.equal(rec.status, "answered");
+  assert.equal(rec.answer, "deny");
+  assert.equal(AP.listHeld(PROJECT).some((r) => r.id === h.id), false);
+
+  // 2. Fallback order: reject_always, then { outcome: "cancelled" }.
+  const sentAlways = [];
+  const hAlways = AP.maybeHoldPermission({
+    req: { id: 32 },
+    call: { title: "Fallback always", kind: "execute" },
+    options: [{ kind: "reject_always", optionId: "opt-rej-always" }],
+    command: "rm -rf /tmp/a",
+    access: "standard",
+    autonomy: "ask",
+    root: PROJECT,
+    interval: 50,
+    send: (msg) => sentAlways.push(msg),
+    on: () => {},
+  });
+  hAlways.cancel();
+  assert.deepEqual(sentAlways, [{ id: 32, result: { outcome: { outcome: "selected", optionId: "opt-rej-always" } } }]);
+
+  const sentCancelled = [];
+  const hNone = AP.maybeHoldPermission({
+    req: { id: 33 },
+    call: { title: "Fallback cancelled", kind: "execute" },
+    options: [{ kind: "allow_once", optionId: "opt-once" }],
+    command: "rm -rf /tmp/b",
+    access: "standard",
+    autonomy: "ask",
+    root: PROJECT,
+    interval: 50,
+    send: (msg) => sentCancelled.push(msg),
+    on: () => {},
+  });
+  hNone.cancel();
+  assert.deepEqual(sentCancelled, [{ id: 33, result: { outcome: { outcome: "cancelled" } } }]);
+});
+
+test("a throwing send inside the watcher is swallowed after unwatching", async () => {
+  let calls = 0;
+  let doneCount = 0;
+  const h = AP.maybeHoldPermission({
+    req: { id: 34 },
+    call: { title: "Broken pipe", kind: "execute" },
+    options: OPTIONS,
+    command: "echo broken",
+    access: "standard",
+    autonomy: "guarded",
+    root: PROJECT,
+    interval: 50,
+    send: () => {
+      calls += 1;
+      throw new Error("EPIPE");
+    },
+    on: () => {},
+    onDone: () => { doneCount += 1; },
+  });
+  watchers.push(h.cancel);
+  AP.answerApproval(PROJECT, h.id, "once");
+  await waitFor(() => calls === 1);
+  assert.equal(doneCount, 1);
+  // Direct cancel with throwing send also swallows.
+  const h2 = AP.maybeHoldPermission({
+    req: { id: 35 },
+    call: { title: "Broken pipe cancel", kind: "execute" },
+    options: OPTIONS,
+    command: "echo broken2",
+    access: "standard",
+    autonomy: "guarded",
+    root: PROJECT,
+    interval: 50,
+    send: () => { throw new Error("EPIPE"); },
+    on: () => {},
+  });
+  assert.doesNotThrow(() => h2.cancel());
+  assert.equal(AP.listHeld(PROJECT).some((r) => r.id === h2.id), false);
+});
+
+test("Acp tracks held permissions and cancels them on turn cancel without wedging", async () => {
+  saveResilienceConfig({ autonomy: "guarded" });
+  const acp = new Acp({
+    agent: { id: "dev", role: "dev", name: "Dev", harness: "gemini", model: "" },
+    known: [{ key: "gemini", run: ["gemini"] }],
+    cwd: PROJECT,
+    access: "standard",
+    allow: [],
+  });
+  const sent = [];
+  acp.child = {};
+  acp.session = "s-held";
+  acp.send = (m) => sent.push(m);
+  // Simulate a prompt that never answers while waiting on a permission response.
+  acp.request = () => new Promise(() => {});
+
+  const handle = acp.turn({ brief: "b", prompt: "go", on: () => {}, idleMs: 60_000 });
+  // Wait one tick so turn() enters session/prompt and assigns idleStop.
+  await new Promise((r) => setTimeout(r, 20));
+
+  acp.message({
+    id: 41,
+    method: "session/request_permission",
+    params: { options: OPTIONS, toolCall: { title: "Dangerous", kind: "execute", rawInput: { command: "curl https://example.com/x" } } },
+  });
+  assert.equal(acp.held.size, 1);
+  const [entry] = [...acp.held];
+  assert.ok(AP.listHeld(PROJECT).some((r) => r.id === entry.id));
+
+  handle.cancel();
+  const result = await handle.done;
+  assert.equal(result.cancelled, true);
+  assert.equal(acp.held.size, 0);
+  assert.equal(AP.listHeld(PROJECT).some((r) => r.id === entry.id), false);
+  assert.ok(sent.some((m) => m.id === 41 && m.result?.outcome?.optionId === "opt-deny"));
+  assert.ok(sent.some((m) => m.method === "session/cancel"));
 });
 
 test("autonomous autonomy does not hold, and Acp merges projectAllow into allow", () => {

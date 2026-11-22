@@ -3,7 +3,7 @@
 // The project allowlist lives in .bot-herdr/config.json under agents.allow.
 
 import { randomBytes } from "node:crypto";
-import { unwatchFile, watchFile } from "node:fs";
+import { existsSync, unwatchFile, watchFile } from "node:fs";
 import { join } from "node:path";
 import { UsageError, listDir, need, projectRoot, readJson, store, withLock, writeJson } from "./core.mjs";
 import { resilienceConfig } from "./resilience.mjs";
@@ -107,9 +107,31 @@ function pickOption(answer, options) {
 function deliverAnswer(answer, { req, call, options, send, on }) {
   const pick = pickOption(answer, options);
   const outcome = pick ? { outcome: "selected", optionId: pick.optionId } : { outcome: "cancelled" };
-  send({ id: req.id, result: { outcome } });
+  try {
+    send({ id: req.id, result: { outcome } });
+  } catch {
+    // Transport already closed; watcher has already been stopped.
+  }
   if (answer === "deny") {
-    on?.({ kind: "tool", line: `Refused (Agent access is standard): ${call?.title ?? call?.kind ?? "a tool"}` });
+    try {
+      on?.({ kind: "tool", line: `Refused (Agent access is standard): ${call?.title ?? call?.kind ?? "a tool"}` });
+    } catch {
+      // Never throw out of the file watcher.
+    }
+  }
+}
+
+/** Marks a still-pending approval record as answered deny; ignores missing or unreadable files. */
+function markDenied(file) {
+  if (!existsSync(file)) return;
+  try {
+    withLock(file, () => {
+      const rec = readJson(file, null);
+      if (!rec || typeof rec !== "object" || Array.isArray(rec) || rec.status !== "pending") return;
+      writeJson(file, { ...rec, status: "answered", answer: "deny", answeredAt: Date.now() });
+    });
+  } catch {
+    // Missing, unreadable, or locked: leave the store alone and still deliver the rejection.
   }
 }
 
@@ -137,6 +159,7 @@ export function maybeHoldPermission({
   interval = WATCH_INTERVAL_MS,
   send = () => {},
   on = () => {},
+  onDone = null,
 }) {
   if (access === "full") return { handled: false };
   const mode = autonomy ?? resilienceConfig().autonomy;
@@ -159,29 +182,49 @@ export function maybeHoldPermission({
   };
   const file = approvalFile(dirRoot, id);
   writeJson(file, record);
-  const stop = watchForAnswer(file, interval, (answer) => deliverAnswer(answer, { req, call, options, send, on }));
-  return { handled: true, id, file, stop };
+  const cancel = watchForAnswer(file, interval, (answer) => deliverAnswer(answer, { req, call, options, send, on }), onDone);
+  return { handled: true, id, file, cancel };
 }
 
-/** Watches one approval file until answered or process exit; returns a manual stop function. */
-function watchForAnswer(file, interval, onAnswer) {
+/** Watches one approval file until answered, missing, or cancelled; returns an idempotent cancel(). */
+function watchForAnswer(file, interval, onAnswer, onDone) {
   let done = false;
-  const stop = () => {
+  const unwatch = () => {
+    unwatchFile(file, check);
+    process.off("exit", unwatch);
+  };
+  const settle = (answer) => {
     if (done) return;
     done = true;
-    unwatchFile(file, check);
-    process.off("exit", stop);
+    unwatch();
+    try {
+      onAnswer(answer);
+    } finally {
+      onDone?.();
+    }
+  };
+  const cancel = () => {
+    if (done) return;
+    done = true;
+    unwatch();
+    markDenied(file);
+    try {
+      onAnswer("deny");
+    } finally {
+      onDone?.();
+    }
   };
   const check = () => {
     if (done) return;
+    if (!existsSync(file)) return cancel();
     const rec = readJson(file, null);
-    if (!rec || rec.status !== "answered" || !ANSWERS.includes(rec.answer)) return;
-    stop();
-    onAnswer(rec.answer);
+    if (!rec || typeof rec !== "object" || Array.isArray(rec)) return cancel();
+    if (rec.status !== "answered" || !ANSWERS.includes(rec.answer)) return;
+    settle(rec.answer);
   };
   watchFile(file, { interval }, check);
-  process.once("exit", stop);
-  return stop;
+  process.once("exit", unwatch);
+  return cancel;
 }
 
 const approvalLine = (a) => `${a.id}  ${a.from ?? a.agent ?? "agent"}  ${a.title}: ${a.command}`;

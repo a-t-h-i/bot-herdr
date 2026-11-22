@@ -154,6 +154,11 @@ function askedName(stdout) {
   }
 }
 
+/** Whether the composer should fold to a slim bar given its state flags. */
+export function composerIsFolded({ expanded = false, pane = null, paneNow = null, filesCount = 0, queuedCount = 0 } = {}) {
+  return Boolean(!expanded && !pane && paneNow !== "ask" && !(filesCount > 0) && !(queuedCount > 0));
+}
+
 /** A model pane row: `{ heading }` for a harness's name, `{ value, label, harness, note }` for a model.
  * @typedef {{ heading?: string, value?: string, label?: string, harness?: any, note?: string }} ModelRow
  */
@@ -1592,7 +1597,13 @@ export class Composer {
 
   /** Whether the composer should be folded to a slim bar now. */
   isFolded() {
-    return Boolean(!this.expanded && !this.pane && this.paneNow() !== "ask" && !this.files.length);
+    return composerIsFolded({
+      expanded: this.expanded,
+      pane: this.pane,
+      paneNow: this.paneNow(),
+      filesCount: this.files.length,
+      queuedCount: this.queuedMessages?.length ?? 0,
+    });
   }
 
   /** A key typed while folded: grow back and type it at the end of the draft. */

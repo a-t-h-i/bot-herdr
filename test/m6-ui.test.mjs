@@ -4,6 +4,40 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { register } from "node:module";
+import { fileURLToPath } from "node:url";
+
+const MODS = fileURLToPath(new URL("../mods/bot-herdr", import.meta.url));
+const HOOK = `
+import { readdirSync, readFileSync } from "node:fs";
+const MODS = ${JSON.stringify(MODS)};
+const BARE = ["gpui-kit", "gpui-base", "herdr", "fs/promises"];
+const names = new Map(BARE.map((s) => [s, new Set()]));
+for (const f of readdirSync(MODS)) {
+  if (!f.endsWith(".js")) continue;
+  const src = readFileSync(MODS + "/" + f, "utf8");
+  for (const m of src.matchAll(/import\\s+\\{([\\s\\S]*?)\\}\\s*from\\s*["']([^"']+)["']/g)) {
+    if (!names.has(m[2])) continue;
+    for (const part of m[1].split(",")) {
+      const name = part.trim().split(/\\s+as\\s+/)[0].trim();
+      if (name) names.get(m[2]).add(name);
+    }
+  }
+}
+const FS = 'export * from "node:fs/promises"; export const exists = async () => false;';
+const STUB = 'const fn = () => proxy; const proxy = new Proxy(fn, { get(_t, k) { return (k === "then" || typeof k === "symbol") ? undefined : (..._a) => proxy; }, apply() { return proxy; } });';
+export async function resolve(spec, ctx, next) {
+  return names.has(spec) ? { url: "stub:" + spec, shortCircuit: true } : next(spec, ctx);
+}
+export async function load(url, ctx, next) {
+  if (!url.startsWith("stub:")) return next(url, ctx);
+  const spec = url.slice(5);
+  if (spec === "fs/promises") return { format: "module", source: FS, shortCircuit: true };
+  const list = [...names.get(spec)].map((n) => "proxy as " + n).join(", ");
+  return { format: "module", source: STUB + "\\nexport { " + list + " };", shortCircuit: true };
+}
+`;
+register(`data:text/javascript,${encodeURIComponent(HOOK)}`);
 
 import {
   APPROVAL_CHOICES, approvalRecord, approvalsList, approvalsForTask, approvalChoiceForKey, approvalAnswerArgs,
@@ -16,6 +50,10 @@ import {
   tileAddresses, isTiledLayout, withTiledPanes,
 } from "../mods/bot-herdr/signals.js";
 import { KEYMAP, collisions } from "../mods/bot-herdr/keymap.js";
+
+const { approvalAnswerError } = await import("../mods/bot-herdr/peek.js");
+const { composerIsFolded } = await import("../mods/bot-herdr/composer.js");
+const { entryIsOpen, toggleEntryOpen } = await import("../mods/bot-herdr/threads.js");
 
 test("approval card choices, key mapping, filtering by task, and command args", () => {
   assert.deepEqual(APPROVAL_CHOICES.map((c) => c.id), ["once", "project", "deny"]);
@@ -208,4 +246,54 @@ test("tiled agent panes transform layout panes between single active tab and sid
   assert.equal(restoredPanes.children.length, 1);
   assert.equal(restoredPanes.children[0].id, "main");
   assert.equal(restoredPanes.children[0].hidden, undefined);
+});
+
+test("approvalAnswerError parses non-zero exit JSON, uses fallback sentence, and ignores implemented:false", () => {
+  assert.equal(approvalAnswerError({ code: 0, stdout: JSON.stringify({ id: "ap-1", answer: "once", ok: true }) }), null);
+  assert.equal(
+    approvalAnswerError({ code: 1, stdout: JSON.stringify({ ok: false, error: "Approval ap-1 was already answered." }) }),
+    "Approval ap-1 was already answered.",
+  );
+  assert.equal(
+    approvalAnswerError({ code: 1, stdout: "" }),
+    "That approval could not be answered.",
+  );
+  assert.equal(
+    approvalAnswerError({ code: 0, stdout: JSON.stringify({ ok: false, error: "Locked." }) }),
+    "Locked.",
+  );
+  assert.equal(approvalAnswerError({ code: 1, stdout: JSON.stringify({ implemented: false }) }), null);
+  assert.equal(approvalAnswerError({ code: 0, stdout: JSON.stringify({ implemented: false }) }), null);
+});
+
+test("composerIsFolded stays unfolded while queued messages are present", () => {
+  assert.equal(composerIsFolded({ expanded: false, pane: null, paneNow: null, filesCount: 0, queuedCount: 0 }), true);
+  assert.equal(composerIsFolded({ expanded: false, pane: null, paneNow: null, filesCount: 0, queuedCount: 1 }), false);
+  assert.equal(composerIsFolded({ expanded: true, pane: null, paneNow: null, filesCount: 0, queuedCount: 0 }), false);
+  assert.equal(composerIsFolded({ expanded: false, pane: null, paneNow: "ask", filesCount: 0, queuedCount: 0 }), false);
+  assert.equal(composerIsFolded({ expanded: false, pane: null, paneNow: null, filesCount: 2, queuedCount: 0 }), false);
+});
+
+test("entryIsOpen and toggleEntryOpen let Fold close and reopen machine entries in Verbose mode", () => {
+  const expanded = new Set();
+  const verboseFolded = new Set();
+
+  // Verbose opens by default; toggling folds via verboseFolded, toggling again reopens.
+  assert.equal(entryIsOpen("verbose", "e1", expanded, verboseFolded), true);
+  toggleEntryOpen("verbose", "e1", expanded, verboseFolded);
+  assert.equal(verboseFolded.has("e1"), true);
+  assert.equal(entryIsOpen("verbose", "e1", expanded, verboseFolded), false);
+  toggleEntryOpen("verbose", "e1", expanded, verboseFolded);
+  assert.equal(verboseFolded.has("e1"), false);
+  assert.equal(entryIsOpen("verbose", "e1", expanded, verboseFolded), true);
+
+  // Normal starts folded and toggles via expanded without touching verboseFolded.
+  assert.equal(entryIsOpen("normal", "e1", expanded, verboseFolded), false);
+  toggleEntryOpen("normal", "e1", expanded, verboseFolded);
+  assert.equal(expanded.has("e1"), true);
+  assert.equal(entryIsOpen("normal", "e1", expanded, verboseFolded), true);
+  assert.equal(verboseFolded.size, 0);
+
+  // Summary stays closed.
+  assert.equal(entryIsOpen("summary", "e1", expanded, verboseFolded), false);
 });

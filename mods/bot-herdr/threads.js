@@ -26,7 +26,7 @@ import { activeStage, showPage, openTerminal, viewShown, wakeGoal, FOCUS, OPEN_T
 import { appKeyAction, isChord, keyName, nextPick, opensRow } from "./rowkeys.js";
 import { KEYMAP_OPEN } from "./keymap.js";
 import { arrivedIds, newlyDone } from "./signals.js";
-import { PeekDrawer, PEEK_WIDTH } from "./peek.js";
+import { PeekDrawer, PEEK_WIDTH, approvalAnswerError } from "./peek.js";
 import { renderApprovalCard } from "./approvalcard.js";
 import { renderDiffView } from "./diffreview.js";
 import { renderThreadMap, renderForkOrigin } from "./threadmap.js";
@@ -51,6 +51,20 @@ function report(view, message) {
   }
 }
 
+/** Whether a conversation entry is open in the given view mode. */
+export function entryIsOpen(mode, key, expanded, verboseFolded) {
+  if (mode === "verbose") return !verboseFolded.has(key);
+  if (mode === "summary") return false;
+  return expanded.has(key);
+}
+
+/** Toggles a machine entry's folded state in the active view mode. */
+export function toggleEntryOpen(mode, key, expanded, verboseFolded) {
+  if (mode === "verbose") return toggleMachine(verboseFolded, key);
+  if (mode === "normal") return toggleMachine(expanded, key);
+  return expanded;
+}
+
 export class Threads {
   init(given, cx) {
     this.chat = new Chat();
@@ -72,6 +86,7 @@ export class Threads {
     this.pick = 0;
     this.listPick = 0; // the pick to come back to from a thread
     this.expanded = new Set(); // conversation entries opened in place
+    this.verboseFolded = new Set(); // conversation entries manually folded in Verbose mode
     this.machineOpen = new Set(); // folded machine text opened in the plan or approval cards
     this.viewModes = new Map(); // thread id -> "summary" | "normal" | "verbose"
     this.approvals = []; // pending approvals belonging to the open thread
@@ -239,6 +254,7 @@ export class Threads {
     this.sub = subOrDefault(sub);
     this.problem = null;
     this.expanded = new Set();
+    this.verboseFolded = new Set();
     this.forkOpen = false;
     this.reviewCommenting = null;
     if (this.detailId !== id) {
@@ -557,6 +573,7 @@ export class Threads {
   setViewMode(mode, cx) {
     if (!this.opened || this.opened === ORCHESTRATOR) return;
     this.viewModes.set(this.opened, viewModeOrDefault(mode));
+    this.verboseFolded = new Set();
     cx.notify();
   }
 
@@ -707,13 +724,15 @@ export class Threads {
     }
     cx.notify();
     cx.spawn(async (cx) => {
-      const r = await bhJson(args, { cwd: projectDir() });
-      if (r && r.implemented !== false && r.ok === false) {
+      const r = await bh([...args, "--json"], { cwd: projectDir() });
+      const error = approvalAnswerError(r);
+      if (error) {
         this.approvalAnswered.delete(record.id);
         this.approvalFolded.delete(record.id);
-        this.problem = String(r.error || "Couldn't record that approval answer.");
-      } else if (this.opened && this.opened !== ORCHESTRATOR) {
-        this.loadDetail(this.opened, cx);
+        this.problem = error;
+      } else {
+        this.problem = null;
+        if (this.opened && this.opened !== ORCHESTRATOR) this.loadDetail(this.opened, cx);
       }
       cx.notify();
     });
@@ -756,13 +775,13 @@ export class Threads {
 
   /** One board entry: type word (muted), author, time, first line; Summary stays 1 line, Verbose unfolds all. */
   entry(c, e, mode = "normal") {
-    const open = mode === "verbose" ? true : mode === "summary" ? false : this.expanded.has(e.key);
+    const open = entryIsOpen(mode, e.key, this.expanded, this.verboseFolded);
     const head = h_flex().gap(SPACE[2]).items_center()
       .child(div().flex_none().text_size(TYPE_SCALE.metadata).text_color(c.textMuted).child(e.word))
       .child(div().flex_none().text_size(TYPE_SCALE.metadata).font_semibold().text_color(c.textPrimary).child(e.from))
       .when(Boolean(e.to), (el) => el.child(div().flex_none().text_size(TYPE_SCALE.metadata).text_color(c.textMuted).child(`→ ${e.to}`)))
       .child(div().flex_none().text_size(TYPE_SCALE.metadata).text_color(c.textMuted).child(ago(e.at)));
-    if (e.machine) return this.machineEntry(c, e, head, open);
+    if (e.machine) return this.machineEntry(c, e, head, open, mode);
     const body = open
       ? div().text_size(TYPE_SCALE.body).line_height(`${LINE.md}px`).text_color(c.textPrimary).child(e.text)
       : div().truncate().text_size(TYPE_SCALE.body).text_color(c.textPrimary).child(e.first);
@@ -777,10 +796,10 @@ export class Threads {
   }
 
   /** A board entry whose body is JSON, a stack trace or a path: one muted mono line that unfolds. */
-  machineEntry(c, e, head, open) {
+  machineEntry(c, e, head, open, mode = "normal") {
     const id = `bh-thread-entry-${e.key}`;
     const line = machineLine(c, { id: `${id}-text`, text: e.text, expanded: open, onToggle: (_e, cx) => {
-      toggleMachine(this.expanded, e.key);
+      toggleEntryOpen(mode, e.key, this.expanded, this.verboseFolded);
       cx.notify();
     } });
     return v_flex().id(id).role("article").accessibility_label(`${e.word} from ${e.from}: machine text`).gap(SPACE[1]).px(SPACE[3]).py(SPACE[2]).rounded(RADIUS.control).child(head).child(line);
