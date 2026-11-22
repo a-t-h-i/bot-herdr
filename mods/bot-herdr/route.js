@@ -2,18 +2,20 @@
 // the suggestion bubble shows for it, and what a message does when it is sent. Pure functions
 // only, so `node --test herdr/test` can check them without herdr.
 
+import { COMMAND_HUES } from "./look.js";
+
 /** Our own commands. Any other `/word` at the start of a message goes to the agent as typed
  *  (Claude Code's /compact, Codex's /model, ...). */
 export const COMMANDS = [
-  { name: "task", hint: "Hand this to the team as a task", color: "#5b8def" },
-  { name: "plan", hint: "Plan this with the team before building", color: "#a47bd6" },
-  { name: "new", hint: "Start an agent with this message", color: "#3fa877" },
-  { name: "settings", hint: "Set up agents: harness, model and effort", color: "#8b9099" },
-  { name: "all", hint: "Send to every agent in this space", color: "#d29a3c" },
-  { name: "stop", hint: "Stop the agent where it is", color: "#cc6460" },
-  { name: "peek", hint: "Peek at the agent's terminal", color: "#3ea3b5" },
-  { name: "team", hint: "Brief the agent again: its role, the team, the tools", color: "#d6825a" },
-  { name: "bh-info", hint: "Ask about this project: its knowledge and code", color: "#3fa796" },
+  { name: "task", hint: "Hand this to the team as a task", color: COMMAND_HUES.task },
+  { name: "plan", hint: "Plan this with the team before building", color: COMMAND_HUES.plan },
+  { name: "new", hint: "Start an agent with this message", color: COMMAND_HUES.new },
+  { name: "settings", hint: "Set up agents: harness, model and effort", color: COMMAND_HUES.settings },
+  { name: "all", hint: "Send to every agent in this space", color: COMMAND_HUES.all },
+  { name: "stop", hint: "Stop the agent where it is", color: COMMAND_HUES.stop },
+  { name: "peek", hint: "Peek at the agent's terminal", color: COMMAND_HUES.peek },
+  { name: "team", hint: "Brief the agent again: its role, the team, the tools", color: COMMAND_HUES.team },
+  { name: "bh-info", hint: "Ask about this project: its knowledge and code", color: COMMAND_HUES["bh-info"] },
 ];
 
 /** A command's colour, for its row and its chip in the text. */
@@ -67,7 +69,7 @@ const slugOf = (name) => String(name).trim().toLowerCase().replace(/[^a-z0-9_.-]
  * are not running yet, which start in a new tab with the message. `startOnly` (after `/new`)
  * leaves out the running ones.
  */
-export function mentionRows(query, { agents = [], children = [], known = [], space = null, mode = null, leadName, names = {} } = {}) {
+export function mentionRows(query, { agents = [], children = [], known = [], space = null, mode = null, leadName = ORCHESTRATOR_TAB, names = {} } = {}) {
   const startOnly = mode === "start";
   const lead = orchestratorOf(agents, space, leadName);
   const here = [...agents.filter((a) => a.space === space && a === lead), ...agents.filter((a) => a.space === space && a !== lead)];

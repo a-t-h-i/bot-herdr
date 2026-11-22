@@ -57,7 +57,7 @@ function pageTabs(room, countOf, active) {
  * the picked one stands out: "fill" (a raised tab) or "line" (a thin accent edge, no fill — the
  * page switch's). `padX` narrows every item's padding together, so a strip can fit any window.
  */
-export function segmented(c, { id, items, onPick, grow, height, mark = "fill", padX = SPACE[4] }) {
+export function segmented(c, { id, items, onPick, grow = false, height = null, mark = "fill", padX = SPACE[4] }) {
   // The track insets its items by the same 2px on every side, so the picked one sits centred in
   // it. `height` is the items' own (the page switch matches herdr's 29px tabs); by default the
   // track is a control's height.
@@ -177,7 +177,7 @@ export function sectionHead(c, icon, title, about = null, tone = null) {
  * The one empty, loading and error panel: a title, one line and an optional action.
  * Loading adds the quiet pulse; an error passes the retry as its action.
  */
-export function stateView(c, { id, title, line, action, loading }) {
+export function stateView(c, { id, title, line = null, action = null, loading = false }) {
   // Centred in whatever holds it, its wrapped lines centred too.
   return v_flex()
     .id(id ?? "bh-state")
@@ -211,7 +211,7 @@ export function stateView(c, { id, title, line, action, loading }) {
 export class Switch {
   init(_props, cx) {
     this.where = null;
-    this.pickedAt = shared(PICKED)?.at ?? 0;
+    this.pickedAt = /** @type {{ at?: number } | null} */ (shared(PICKED))?.at ?? 0;
     this.moreBounds = null; // where the More tab was pressed, so its list opens under it
     // ctrl+shift+m (keys.json: "bot-herdr.focus") opens the chat and puts the keyboard in it.
     cx.spawn(async (cx) => {
@@ -238,7 +238,7 @@ export class Switch {
 
   /** A page picked from the More list: show it. */
   followPick(cx) {
-    const picked = shared(PICKED);
+    const picked = /** @type {{ key?: string, value?: string, at?: number } | null} */ (shared(PICKED));
     if (picked?.key !== MORE_KEY || !(picked.at > this.pickedAt)) return;
     this.pickedAt = picked.at;
     cx.timer.after(1, () => showPage(picked.value));
@@ -265,7 +265,7 @@ export class Switch {
     this.follow(cx);
     this.followPick(cx);
     const c = colors();
-    const t = theme();
+    const t = /** @type {Record<string, import("gpui-kit").Color>} */ (theme());
     const active = activePage();
     // Every tab shows its icon, label and count. Where the strip is too narrow for that, each
     // tab's padding narrows; narrower still, the tabs from the end go behind More.

@@ -19,6 +19,11 @@ test("any other herdr theme gives every token from its colours", () => {
   assert.equal(c.accent, "#a7b4c6");
   // ansi1 is the theme's red; the palette moves it only as far as AA needs.
   assert.ok(contrastOf(c.danger, c.fill) >= 4.5, `danger ${c.danger} on ${c.fill}: ${contrastOf(c.danger, c.fill).toFixed(2)}`);
-  for (const k of Object.keys(DARK)) assert.ok(typeof c[k] === "string" && c[k].startsWith("#"), k);
+  // Every legacy token stays a colour string; `agentHues` is the one structured token (7 hues).
+  for (const k of Object.keys(DARK)) {
+    if (k === "agentHues") continue;
+    assert.ok(typeof c[k] === "string" && c[k].startsWith("#"), k);
+  }
+  assert.equal(Object.keys(c.agentHues).length, 7);
   assert.equal(mix("#000000", "#ffffff", 0.5), "#808080");
 });

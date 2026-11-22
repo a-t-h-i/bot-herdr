@@ -90,7 +90,7 @@ export function effortsOf(key, model = "") {
   return harnessOf(key).efforts;
 }
 
-/** A name as it is typed after @: lower case, one word. */
+/** A name as it is typed after "@": lower case, one word. */
 export function slug(name) {
   return String(name ?? "").trim().toLowerCase().replace(/[^a-z0-9_.-]+/g, "-").replace(/^-+|-+$/g, "") || "agent";
 }

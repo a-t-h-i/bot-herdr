@@ -50,7 +50,7 @@ test("taskSummaryFallback, goalProgressModel, goalCriterionBadge, and detailTabC
 
   assert.equal(TV.goalCriterionBadge({ verdict: "PASS" }).icon, "✓");
   assert.equal(TV.goalCriterionBadge({ verdict: "PENDING" }).icon, "…");
-  assert.equal(TV.goalCriterionBadge({ verdict: "FAIL" }).icon, "✗");
+  assert.equal(TV.goalCriterionBadge({ verdict: "FAIL" }).icon, "✕");
 
   const tabs = TV.detailTabCounts(raw);
   assert.equal(tabs.isGoal, true);

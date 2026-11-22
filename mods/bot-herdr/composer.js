@@ -28,7 +28,7 @@ import {
   shared, setShared, appHome,
 } from "herdr";
 import { showPage, hold } from "./pages.js";
-import { SIZE, MOTION, ICON, TYPE, LINE, SPACE, ROW, CHIP, CONTROL, TARGET, MARK, DOT, PIP, HAIR, GLYPH, tint, readable, textWidth, rowsFor, baseName, upFrom, filterEntries, togglePick, sizeText, clickable, pressable, focusable } from "./look.js";
+import { SIZE, MOTION, ICON, TYPE, LINE, SPACE, ROW, CHIP, CONTROL, TARGET, MARK, DOT, PIP, HAIR, GLYPH, CLEAR, tint, readable, textWidth, rowsFor, baseName, upFrom, filterEntries, togglePick, sizeText, clickable, pressable, focusable } from "./look.js";
 import { actionButton } from "./button.js";
 import { stateView } from "./switch.js";
 import { colors } from "./theme.js";
@@ -61,7 +61,6 @@ const runsHeadlessAt = (address) => Boolean(terminals().find((t) => t.address ==
 const PANE_INSET = SIZE.radius + 6;
 
 const PLACEHOLDER = "Write a message, run a command, or ask an agent";
-const CLEAR = "#00000000";
 
 /** Where agents write their replies for the chat (see brief.js and chat.js). */
 export const outboxDir = () => `${appHome().replace(/\\/g, "/")}/data/bot-herdr/replies`;
@@ -73,10 +72,15 @@ const TOAST_SPRINGS = {
   width: { response: 440, damping: 0.7 },
 };
 
+/** A gpui transition policy, typed so each motion's `easing` stays one of the shell's keywords.
+ * @typedef {import("gpui-shell").TransitionPolicy} Motion
+ */
+
 /**
  * Going is coming in reverse. The words fade first (they came last), then the shape, still
  * solid, springs back down on the same springs it rose on: it narrows, drops and slips under
  * the composer's top edge, where the box covers it. It never fades in mid-air.
+ * @type {Motion}
  */
 const TOAST_EXIT_TEXT = { duration: 140, easing: "ease-out" };
 /** How long the shape holds while its words go, before it sinks. */
@@ -98,9 +102,13 @@ const SEND_GROW = { response: 320, damping: 0.62 };
 const SEND_SHRINK = { response: 220, damping: 1 };
 /** How far the arrow flies up when sent (a new one rises from a little below). */
 const SEND_TRAVEL = 18;
+/** @type {Motion} */
 const SEND_LAUNCH = { duration: 200, easing: "ease-in" };
+/** @type {Motion} */
 const SEND_LAUNCH_FADE = { duration: 160, easing: "ease-in" };
+/** @type {Motion} */
 const SEND_RISE = { duration: 220, easing: "ease-out" };
+/** @type {Motion} */
 const SEND_SPIN_IN = { duration: 160, delay: 160, easing: "ease-out" };
 
 /** One folder's listing, at most this many entries. */
@@ -119,7 +127,7 @@ async function listWithHerdr(path, hidden = false) {
   try {
     r = await exec("sh", ["-c", script, "files", dir], { timeout: 15000 });
   } catch (e) {
-    return String(e).includes("not found") ? { fallback: true } : { error: `Couldn't list ${dir}: ${String(e?.message ?? e)}` };
+    return String(e).includes("not found") ? { fallback: true } : { error: `Couldn't list ${dir}: ${e instanceof Error ? e.message : String(e)}` };
   }
   if (r.code !== 0) return { error: (r.stderr || "").trim() || `No such folder: ${dir}` };
   const fields = String(r.stdout ?? "").split("\0");
@@ -145,6 +153,9 @@ function askedName(stdout) {
   }
 }
 
+/** A model pane row: `{ heading }` for a harness's name, `{ value, label, harness, note }` for a model.
+ * @typedef {{ heading?: string, value?: string, label?: string, harness?: any, note?: string }} ModelRow
+ */
 export class Composer {
   /**
    * `hooks.sent({ text, to, files })` is called for each message that went out and returns its
@@ -158,6 +169,8 @@ export class Composer {
     this.text = "";
     this.trigger = null;
     this.dismissed = null; // the text Esc closed the suggestions on; they stay shut until it changes
+    this.minRows = null; // a page can ask for a taller box than the text needs
+    this.placeholder = null; // a page's own hint, instead of the chat's
     this.mode = null; // "start" after /new: the @ list offers only agents to start
     this.starts = []; // agents we started and are waiting to see, to mark them as briefed
     this.pane = null; // "suggest" | "attach" | "spaces"
@@ -169,7 +182,7 @@ export class Composer {
     this.toasts = queue(); // toasts waiting their turn (toasts.js)
     this.toast = null; // the one on screen: { item, phase: "start" | "up" | "out" | "sink", rose, at, n }
     this.toastN = 0;
-    this.noteAt = shared(TOAST_KEY)?.at ?? 0; // the last herdr notification taken in
+    this.noteAt = /** @type {{ at?: number } | null} */ (shared(TOAST_KEY))?.at ?? 0; // the last herdr notification taken in
     this.questions = []; // agents' open questions, oldest first (the chat reads them)
     // The attach pane's file browser: one listing at a time, on this machine only.
     this.browse = null; // { path, parent, entries, truncated, error, loading, selected:Set, hidden, foreign }
@@ -190,7 +203,7 @@ export class Composer {
     this.walk = null; // the questions being answered: drawer.js state
     this.putAway = new Set(); // question sets Esc put away: a bar brings them back
     this.dismissing = null; // the set whose Dismiss asks "Dismiss it?"
-    this.chosenAt = shared(CHOSEN)?.at ?? 0; // the last "Choose this" from a picture opened large
+    this.chosenAt = /** @type {{ at?: number } | null} */ (shared(CHOSEN))?.at ?? 0; // the last "Choose this" from a picture opened large
     this.shownPane = null; // the pane drawn last, so a new one opens with its animation
     this.pageHeight = 700;
     this.sending = false;
@@ -240,7 +253,7 @@ export class Composer {
         { keystroke: "escape", action: "bot_herdr_close", context: "BotHerdrPane > Input" },
       ]);
     } catch (e) {
-      console.log("bot-herdr: key bindings not installed:", String(e?.message ?? e));
+      console.log("bot-herdr: key bindings not installed:", e instanceof Error ? e.message : String(e));
     }
 
     this.loadKnown(cx);
@@ -367,8 +380,9 @@ export class Composer {
     if (!a) return [];
     const local = !this.space()?.machine;
     const installed = this.known.filter((k) => k.installed);
-    const order = [...installed].sort((x, y) => (y.key === a.harness) - (x.key === a.harness));
+    const order = [...installed].sort((x, y) => Number(y.key === a.harness) - Number(x.key === a.harness));
     const words = this.modelSearch.value().toLowerCase().split(/\s+/).filter(Boolean);
+    /** @type {ModelRow[]} */
     const rows = [];
     for (const full of order) {
       const k = { key: full.key, name: full.name, icon: full.icon ?? null, tint: full.tint, tile: full.tile ?? null, color: full.color ?? null };
@@ -843,7 +857,7 @@ export class Composer {
 
   /** herdr's notifications, handed over by toast.js while this page shows. */
   takeNotes(cx) {
-    const note = shared(TOAST_KEY);
+    const note = /** @type {{ at?: number, title?: string, body?: string, level?: "info" | "success" | "warning" | "error" } | null} */ (shared(TOAST_KEY));
     if (!note?.at || note.at <= this.noteAt) return;
     this.noteAt = note.at;
     cx.timer.after(1, (cx) => this.say(noteText(note), cx, note.level ?? "info"));
@@ -1287,7 +1301,7 @@ export class Composer {
           if (step.do === "send") to.push({ address: step.address, name: this.nameOf(step.address) });
           if (step.do === "start") to.push({ address: null, name: step.tab ?? step.name });
         } catch (e) {
-          failed.push(String(e?.message ?? e));
+          failed.push(e instanceof Error ? e.message : String(e));
         }
       }
       if (to.length) this.hooks.sent?.({ text: sentText ?? "", files: keptFiles.map((f) => f.name), paths: keptFiles.map((f) => f.path), to }, cx);
@@ -1467,7 +1481,7 @@ export class Composer {
 
   /** A "Choose this" from a question's mockups opened large. */
   takeChoice(cx) {
-    const got = shared(CHOSEN);
+    const got = /** @type {{ at?: number, key?: string, index?: number } | null} */ (shared(CHOSEN));
     if (!got?.at || got.at <= this.chosenAt) return;
     this.chosenAt = got.at;
     const map = this.choosing;
@@ -1878,7 +1892,7 @@ export class Composer {
               .bg(c.stop)
               .hover((s) => s.bg(c.stopHover))
               .on_click((_e, cx) => this.stop(cx))
-              .child(div().size(GLYPH.xs).rounded(PIP).bg("#ffffff")),
+              .child(div().size(GLYPH.xs).rounded(PIP).bg(c.stopInk)),
           ),
           "bc-stop",
           c,

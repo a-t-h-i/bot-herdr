@@ -29,7 +29,7 @@ export async function bh(args, { cwd = projectDir(), timeout = 30000 } = {}) {
   try {
     return await exec("node", [bhPath(), ...args], { cwd, timeout });
   } catch (e) {
-    return { code: 1, stdout: "", stderr: String(e?.message ?? e) };
+    return { code: 1, stdout: "", stderr: e instanceof Error ? e.message : String(e) };
   }
 }
 

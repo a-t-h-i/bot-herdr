@@ -2,6 +2,8 @@
 // Zero gpui-kit, gpui-base, herdr, or Intl imports so `node --test` imports and verifies
 // every state transition, filter, grouping, progress model, and terminal lookup directly.
 
+import { STATE } from "./look.js";
+
 export const DETAIL_TABS = ["steps", "iterations", "board", "comments", "plan"];
 export const STATUS_CHIPS = ["active", "blocked", "done", "archived"];
 export const BOARD_KINDS = ["all", "contract", "decision", "blocker", "question", "done", "note"];
@@ -239,13 +241,13 @@ export function goalProgressModel(task) {
   };
 }
 
-/** Display badge metadata for a single DONE criterion verdict. */
+/** Display badge metadata for a single DONE criterion verdict, in the shared state glyphs. */
 export function goalCriterionBadge(c) {
   const v = String(c?.verdict ?? "").toUpperCase();
-  if (v === "PASS") return { icon: "✓", tone: "success", label: "PASS" };
+  if (v === "PASS") return { icon: STATE.done.glyph, tone: "success", label: "PASS" };
   if (v === "PENDING") return { icon: "…", tone: "info", label: "PENDING" };
-  if (v === "FAIL") return { icon: "✗", tone: "danger", label: "FAIL" };
-  return { icon: "○", tone: "muted", label: "UNCHECKED" };
+  if (v === "FAIL") return { icon: STATE.failed.glyph, tone: "danger", label: "FAIL" };
+  return { icon: STATE.idle.glyph, tone: "muted", label: "UNCHECKED" };
 }
 
 /** The status chip a task belongs under: `archived`, `done` (done or abandoned), else `active`. */

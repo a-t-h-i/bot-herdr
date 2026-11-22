@@ -171,11 +171,11 @@ export class Settings {
     this.open = null; // "<id>:harness" or "<id>:model": the field whose list is open
     const was = remembered();
     this.section = was === "access" || was === "classifier" ? "general" : was; // the tab open
-    this.pickedAt = shared(PICKED)?.at ?? 0;
-    this.refreshedAt = shared(REFRESH)?.at ?? 0;
+    this.pickedAt = /** @type {{ at?: number } | null} */ (shared(PICKED))?.at ?? 0;
+    this.refreshedAt = /** @type {{ at?: number } | null} */ (shared(REFRESH))?.at ?? 0;
     this.harnessAddedAt = Number(shared(HARNESS_ADDED) ?? 0);
     this.configChangedAt = Number(shared(CONFIG_CHANGED) ?? 0);
-    this.openResilienceAt = Number(shared(OPEN_RESILIENCE)?.at ?? 0);
+    this.openResilienceAt = Number(/** @type {{ at?: number } | null} */ (shared(OPEN_RESILIENCE))?.at ?? 0);
     this.resilience = null;
     this.resilienceLoading = false;
     this.resilienceBusy = false;
@@ -215,7 +215,9 @@ export class Settings {
     // Clef's account id and Laya's base URL, saved as typed (on Enter or leaving the field).
     this.accountIdInput = InputState.new({ placeholder: "Your Cloudflare account id" });
     this.baseUrlInput = InputState.new({ placeholder: "The default base URL" });
-    for (const [state, field] of [[this.accountIdInput, "accountId"], [this.baseUrlInput, "baseUrl"]]) {
+    /** @type {Array<[import("gpui-base").InputState, string]>} */
+    const savedFields = [[this.accountIdInput, "accountId"], [this.baseUrlInput, "baseUrl"]];
+    for (const [state, field] of savedFields) {
       const save = (_e, cx) => {
         const v = state.value().trim();
         if (this.classifier && v !== (this.classifier[field] ?? "")) this.config({ [field]: v }, cx);
@@ -541,9 +543,9 @@ export class Settings {
   openClassifierModels(bounds) {
     const k = this.classifier;
     const keyed = Boolean(k?.openrouterKey);
-    const options = keyed
+    const options = /** @type {Array<{ heading?: string, value?: string, label?: string, note?: string }>} */ (keyed
       ? [{ heading: "OpenRouter" }, ...OPENROUTER_MODELS.map((m) => ({ value: `openrouter|${m.id}`, label: m.label, note: m.id }))]
-      : [{ heading: "Add an OpenRouter key to pick a model" }];
+      : [{ heading: "Add an OpenRouter key to pick a model" }]);
     const selected = k?.host === "openrouter" && !k?.harness && !k?.kind ? `openrouter|${k.model || OPENROUTER_MODELS[0].id}` : "";
     if (keyed && k?.model && !options.some((o) => o.value === `openrouter|${k.model}`)) options.push({ value: `openrouter|${k.model}`, label: k.model, note: "picked before" });
     this.open = "classifier:model";
@@ -552,7 +554,7 @@ export class Settings {
 
   /** A pick from a list (pick.js), applied once. */
   applyPick(cx) {
-    const picked = shared(PICKED);
+    const picked = /** @type {{ key?: string, value?: string, at?: number } | null} */ (shared(PICKED));
     if (!picked?.at || picked.at <= this.pickedAt) return;
     this.pickedAt = picked.at;
     if (picked.key === "classifier:model") {
@@ -597,7 +599,7 @@ export class Settings {
 
   /** The refresh button in the open list: ask again, then show the new list under the same field. */
   applyRefresh(cx) {
-    const asked = shared(REFRESH);
+    const asked = /** @type {{ key?: string, at?: number } | null} */ (shared(REFRESH));
     this.refreshedAt = asked?.at ?? 0;
     const [id, field] = String(asked?.key ?? "").split(":");
     const a = this.list().find((x) => x.id === id);
@@ -645,8 +647,8 @@ export class Settings {
   // ── Drawing ────────────────────────────────────────────────────────────────────────────────
 
   render(cx) {
-    if ((shared(PICKED)?.at ?? 0) > this.pickedAt) cx.timer.after(1, (cx) => this.applyPick(cx));
-    if ((shared(REFRESH)?.at ?? 0) > this.refreshedAt) cx.timer.after(1, (cx) => this.applyRefresh(cx));
+    if ((/** @type {{ at?: number } | null} */ (shared(PICKED))?.at ?? 0) > this.pickedAt) cx.timer.after(1, (cx) => this.applyPick(cx));
+    if ((/** @type {{ at?: number } | null} */ (shared(REFRESH))?.at ?? 0) > this.refreshedAt) cx.timer.after(1, (cx) => this.applyRefresh(cx));
     const harnessAdded = Number(shared(HARNESS_ADDED) ?? 0);
     if (harnessAdded > this.harnessAddedAt) {
       this.harnessAddedAt = harnessAdded;
@@ -657,7 +659,7 @@ export class Settings {
       this.configChangedAt = configChanged;
       cx.timer.after(1, (cx) => this.loadConfig(cx));
     }
-    const openResilience = Number(shared(OPEN_RESILIENCE)?.at ?? 0);
+    const openResilience = Number(/** @type {{ at?: number } | null} */ (shared(OPEN_RESILIENCE))?.at ?? 0);
     if (openResilience > this.openResilienceAt) {
       this.openResilienceAt = openResilience;
       this.section = "resilience";
@@ -914,8 +916,9 @@ export class Settings {
             .hover((s) => s.bg(c.hover))
             .on_mouse_down("left", (e, cx) => {
               cx.stop_propagation();
-              // Under the whole field, not just the arrow.
-              const b = e.bounds;
+              // Under the whole field, not just the arrow. (`gpui-shell`'s ElementBounds carries x
+              // and y from Point at run time; the generated declaration loses that base.)
+              const b = /** @type {{ x: number, y: number, width: number, height: number } | undefined} */ (e.bounds);
               const field = b ? { x: b.x - (inner - 28) * (Number(settings().zoom) || 1), y: b.y - 4, width: inner * (Number(settings().zoom) || 1), height: b.height + 8 } : null;
               this.openList(a, "model", field, cx);
               cx.notify();
