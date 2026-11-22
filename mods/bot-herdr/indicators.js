@@ -14,9 +14,9 @@
 import { div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { settings } from "herdr";
-import { textWidth, agentHue, readable, ROLE_HUES, TYPE, LINE } from "./look.js";
+import { textWidth, agentHue, readable, ROLE_HUES, TYPE, LINE, SPACE, TYPE_SCALE, STATE, TICK_MS, framed, reducedMotion, stateTone } from "./look.js";
 
-import { INDICATORS, roleOf, indicatorFor, alpha } from "./working.js";
+import { INDICATORS, roleOf, indicatorFor, alpha, verbFor, framesFor, longestVerb, activityOf, waitingOn, GLYPH_CHARS } from "./working.js";
 
 export { INDICATORS, roleOf, indicatorFor, alpha };
 
@@ -283,7 +283,9 @@ export function roleWord(c, { role, tone, text: given = null, id = "rw" }) {
   const word = given ?? verb;
   const t = tone ?? roleTone(c, role);
   const W = snap(widthOf(word));
-  const m = motion(name, t, W, c, word);
+  // Reduce motion: the word stands still, in its colour, with no motion beside or over it.
+  const still = reducedMotion();
+  const m = still ? { plain: true } : motion(name, t, W, c, word);
   // The muted word is in flow: the box is as wide as the text really draws, and it reports
   // that width for the motions.
   let box = div()
@@ -293,7 +295,7 @@ export function roleWord(c, { role, tone, text: given = null, id = "rw" }) {
     .flex()
     .h(snap(LH) + u(6))
     .children(m.under ?? [])
-    .child(text(word, c.muted).id(`${id}-word`).relative().flex_none().on_size_change((size, cx) => learn(word, size, cx)))
+    .child(text(word, still ? t : c.muted).id(`${id}-word`).relative().flex_none().on_size_change((size, cx) => learn(word, size, cx)))
     .when(!m.plain, (el) => el.child(shimmer(word, t, W)))
     .children(m.over ?? []);
   if (m.word) box = m.word(box);
@@ -323,6 +325,46 @@ export function shimmerWord(c, word, tone, id = "sw") {
     .flex_none()
     .flex()
     .h(snap(LH) + u(6))
-    .child(text(word, c.muted).relative().flex_none().on_size_change((size, cx) => learn(word, size, cx)))
-    .child(shimmer(word, tone, W));
+    .child(text(word, reducedMotion() ? tone : c.muted).relative().flex_none().on_size_change((size, cx) => learn(word, size, cx)))
+    .when(!reducedMotion(), (el) => el.child(shimmer(word, tone, W)));
+}
+
+/** The glyph slot: wide enough for the widest cycle (Testing's three bars), so frames never shift it. */
+export const GLYPH_SLOT = Math.ceil(GLYPH_CHARS * SIZE * 0.8) + SPACE[1];
+/** The verb slot: as wide as the longest verb, so a new verb never moves what follows. */
+export const VERB_SLOT = Math.ceil(textWidth(longestVerb(["Orchestrator"]), SIZE) * 1.07) + 2;
+
+/**
+ * What an agent is doing, at a glance: its activity's glyph cycle (native text frames on the one
+ * 120 ms tick, frozen on the first glyph under Reduce motion) and its verb, each in a fixed-width
+ * slot so nothing beside them moves. `on` names who a waiting agent waits on.
+ */
+export function activityMark(c, { activity, tone, id, on = null, now = Date.now() }) {
+  const verb = verbFor(activity, now, on);
+  const glyph = div().id(`${id}-glyph`).flex_none().w(GLYPH_SLOT).h(LH).line_height(`${LH}px`).whitespace_nowrap().overflow_hidden().text_size(SIZE).text_color(tone);
+  return h_flex()
+    .id(id)
+    .flex_none()
+    .w(GLYPH_SLOT + SPACE[1] + VERB_SLOT)
+    .gap(SPACE[1])
+    .items_center()
+    .child(framed(glyph, framesFor(activity), TICK_MS))
+    .child(div().id(`${id}-verb`).flex_none().w(VERB_SLOT).h(LH).line_height(`${LH}px`).whitespace_nowrap().overflow_hidden().text_size(SIZE).text_color(c.textSecondary ?? c.muted).child(verb));
+}
+
+/**
+ * An agent row's state, in glyph, colour and word (never colour alone): at work, its activity's
+ * cycle and verb from its latest activity line; otherwise the state's own glyph and word.
+ */
+export function agentStateMark(c, a, state, id) {
+  const tone = stateTone(c, state);
+  if (state === "working") {
+    const line = a?.summary && a.summary !== "Working" ? a.summary : null;
+    const role = String(a?.name ?? "").split(/[-_\s.]/)[0];
+    return activityMark(c, { activity: activityOf({ line, role }), tone, id, on: waitingOn(line) });
+  }
+  const s = STATE[state] ?? STATE.idle;
+  return h_flex().id(id).flex_none().gap(SPACE[2]).items_center()
+    .child(div().text_size(TYPE_SCALE.body).text_color(tone).child(s.glyph))
+    .child(div().text_size(TYPE_SCALE.metadata).text_color(c.textMuted).child(s.word));
 }

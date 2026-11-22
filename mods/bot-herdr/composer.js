@@ -28,7 +28,7 @@ import {
   shared, setShared, appHome,
 } from "herdr";
 import { showSettings, hold } from "./pages.js";
-import { SIZE, MOTION, ICON, TYPE, LINE, SPACE, ROW, CHIP, CONTROL, TARGET, MARK, DOT, PIP, HAIR, GLYPH, CLEAR, tint, readable, textWidth, rowsFor, baseName, upFrom, filterEntries, togglePick, sizeText, clickable, pressable, focusable } from "./look.js";
+import { SIZE, MOTION, ICON, TYPE, LINE, SPACE, ROW, CHIP, CONTROL, TARGET, MARK, DOT, PIP, HAIR, GLYPH, CLEAR, tint, readable, textWidth, rowsFor, baseName, upFrom, filterEntries, togglePick, sizeText, clickable, pressable, focusable, spinning, timed } from "./look.js";
 import { actionButton } from "./button.js";
 import { stateView } from "./switch.js";
 import { colors } from "./theme.js";
@@ -247,6 +247,7 @@ export class Composer {
     try {
       cx.bind_keys([
         { keystroke: "enter", action: "bot_herdr_send", context: "BotHerdr > Input" },
+        { keystroke: "ctrl-enter", action: "bot_herdr_send", context: "BotHerdr > Input" },
         { keystroke: "pageup", action: "bot_herdr_page_up", context: "BotHerdr > Input" },
         { keystroke: "pagedown", action: "bot_herdr_page_down", context: "BotHerdr > Input" },
         { keystroke: "ctrl-end", action: "bot_herdr_latest", context: "BotHerdr > Input" },
@@ -460,7 +461,7 @@ export class Composer {
               })
               .child(l ? l.charAt(0).toUpperCase() + l.slice(1) : "Default"),
             c,
-            `bc-effort-${l || "default"}`,
+            `bc-effort-${l || "default"}`, { edge: true },
           );
         }))))
       .when(Boolean(this.askingModels), (el) => el.child(div().flex_none().h(ROW).flex().items_center().text_size(TYPE.xs).text_color(c.faint).child("Asking the harnesses for their models…")))
@@ -1119,7 +1120,7 @@ export class Composer {
         .on_click(onClick)
         .child(label),
       c,
-      id,
+      id, { edge: true },
     );
     const primary = (id, label, onClick) => actionButton(c, id, label, onClick, { tone: "primary" });
     const list = v_flex()
@@ -1624,6 +1625,9 @@ export class Composer {
       .rounded(SIZE.radius)
       .shadow_md()
       .on_drop((e, cx) => this.addFiles(e.paths, cx))
+      // Enter and Ctrl+Enter from the text box inside send (bound in init): the box hears them
+      // first; the pane's own inputs, outside it, still reach the composer's handler above.
+      .on_action("bot_herdr_send", (_e, cx) => this.send(cx))
       .on_mouse_down("left", (_e, cx) => {
         cx.stop_propagation(); // the box keeps its own presses: the scrim behind must not see them
         this.expanded = true;
@@ -1687,7 +1691,7 @@ export class Composer {
         })
         .child(div().flex_1().min_w(0).truncate().text_size(TYPE.md).text_color(this.text.trim() ? c.ink : c.faint).child(draft)),
       c,
-      "bc-slim",
+      "bc-slim", { edge: true },
     );
   }
 
@@ -1753,7 +1757,7 @@ export class Composer {
             .child(image(f.image || f.path).w(SIZE.imagesRow + SPACE[5] - SPACE[1]).h(SIZE.imagesRow - SPACE[3] - SPACE[1]))
             .child(div().absolute().top(SPACE[2]).right(SPACE[2]).rounded(SIZE.nested).bg(c.fill).child(remove(i, `bc-file-x-${i}`))),
           c,
-          `bc-file-${i}`,
+          `bc-file-${i}`, { edge: true },
         )
         : h_flex()
           .id(`bc-file-${i}`)
@@ -1830,7 +1834,7 @@ export class Composer {
       .gap(SPACE[3])
       .items_center()
       .opacity(up ? 1 : 0)
-      .transition("opacity", leaving ? TOAST_EXIT_TEXT : up ? { ...MOTION.row, delay: 240 } : MOTION.row)
+      .transition("opacity", timed(leaving ? TOAST_EXIT_TEXT : up ? { ...MOTION.row, delay: 240 } : MOTION.row))
       .text_size(TYPE.md)
       .line_height(`${LINE.md}px`)
       .text_color(c.ink)
@@ -1959,8 +1963,8 @@ export class Composer {
         .left(mid)
         .top(arrowTop)
         .opacity(arrowOn ? 1 : 0)
-        .transition("top", launching ? SEND_LAUNCH : SEND_RISE)
-        .transition("opacity", launching ? SEND_LAUNCH_FADE : SEND_RISE)
+        .transition("top", timed(launching ? SEND_LAUNCH : SEND_RISE))
+        .transition("opacity", timed(launching ? SEND_LAUNCH_FADE : SEND_RISE))
         .child(glyph(`bc-send-dim-${fx.n}`, c.faint, !canSend))
         .child(glyph(`bc-send-ink-${fx.n}`, c.accentInk, canSend)))
       // Shown only if sending takes a moment, so a quick send doesn't flash it.
@@ -1968,8 +1972,8 @@ export class Composer {
         .left(mid)
         .top(mid)
         .opacity(launching ? 1 : 0)
-        .transition("opacity", launching ? SEND_SPIN_IN : MOTION.hover)
-        .when(fx.phase !== "rest", (el) => el.child(svg(ICON("spinner")).size(GLYPH.lg).text_color(c.faint).spin(900))));
+        .transition("opacity", timed(launching ? SEND_SPIN_IN : MOTION.hover))
+        .when(fx.phase !== "rest", (el) => el.child(spinning(svg(ICON("spinner")).size(GLYPH.lg).text_color(c.faint), 900))));
   }
 
   /** The message is out: a new arrow, drawn low and clear first, rises into the send key. */

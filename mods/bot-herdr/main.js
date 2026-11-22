@@ -19,10 +19,11 @@
 
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { props, settings } from "herdr";
-import { SIZE, TYPE, LINE, SPACE, palette } from "./look.js";
+import { props, settings, shared, setShared } from "herdr";
+import { SIZE, TYPE, LINE, SPACE, palette, setMotionSource, motionReduced, REDUCE_MOTION_KEY, clickable, RADIUS, TYPE_SCALE } from "./look.js";
 import { colors } from "./theme.js";
 import { actionButton } from "./button.js";
+import { KEYMAP_OPEN, overlayRows } from "./keymap.js";
 import { safeInit, safeRender, formatRenderError, errorSignature } from "./render-safe.js";
 import { Chat } from "./chat.js";
 import { Switch } from "./switch.js";
@@ -43,6 +44,9 @@ import { Library } from "./library.js";
 import { Scripts } from "./scripts.js";
 import Issues from "./issues.js";
 import { StatusBar } from "./statusbar.js";
+
+// Reduce motion: Settings › General's toggle, or herdr's own setting once it has one.
+setMotionSource(() => motionReduced(shared(REDUCE_MOTION_KEY), settings()));
 
 export const VIEWS = { home: Home, threads: Threads, status: StatusBar, agents: Agents, library: Library, scripts: Scripts, chat: Chat, switch: Switch, work: Work, issues: Issues, learning: Learning, "learning-doc": LearningDoc, settings: Settings, pick: Pick, lightbox: Lightbox, toast: Toast, file: FileView, plan: PlanDoc, note: NoteForm, metrics: Metrics, "settings-more": MoreSheet };
 
@@ -257,8 +261,44 @@ export class BotHerdr extends View {
       this.lastError = error;
       return this.renderFallback(error);
     }
+    if (shared(KEYMAP_OPEN)) return keymapOverlayCard(safeColors(), node);
     return node;
   }
+}
+
+/** The map overlay over the active page while KEYMAP_OPEN: the keymap table in a small card. */
+function keymapOverlayCard(c, node) {
+  const rows = overlayRows();
+  const card = clickable(
+    v_flex()
+      .id("bh-keymap")
+      .role("dialog")
+      .accessibility_label("Keyboard map")
+      .absolute()
+      .bottom(SPACE[5])
+      .left(SPACE[5])
+      .right(SPACE[5])
+      .max_w(480)
+      .gap(SPACE[2])
+      .py(SPACE[3])
+      .px(SPACE[4])
+      .rounded(RADIUS.card)
+      .bg(c.fill)
+      .border_1()
+      .border_color(c.edge)
+      .on_click(() => setShared(KEYMAP_OPEN, false))
+      .children(rows.map((r, i) =>
+        h_flex()
+          .id(`bh-keymap-row-${i}`)
+          .w_full()
+          .gap(SPACE[3])
+          .items_center()
+          .child(div().w(76).flex_none().text_size(TYPE_SCALE.metadata).font_semibold().text_color(c.textSecondary).child(r.keys.join(" / ")))
+          .child(div().flex_1().min_w(0).text_size(TYPE_SCALE.body).line_height(`${LINE.md}px`).text_color(c.textPrimary).child(r.action)))),
+    c,
+    "bh-keymap",
+  );
+  return div().relative().size_full().child(node).child(card);
 }
 
 export default BotHerdr;

@@ -156,6 +156,7 @@ export class PeekDrawer {
       .id("bh-peek")
       .role("dialog")
       .accessibility_label(`Peek: ${m.title}`)
+      .tab_index(0)
       .absolute()
       .top(0)
       .right(0)

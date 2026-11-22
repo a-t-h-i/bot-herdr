@@ -741,7 +741,7 @@ export class Issues {
               .child(svg(ICON("comment")).size(GLYPH.xs))
               .child(String(cCount)))))),
       c,
-      `bh-issue-row-${issue.number}`,
+      `bh-issue-row-${issue.number}`, { edge: true },
     );
   }
 

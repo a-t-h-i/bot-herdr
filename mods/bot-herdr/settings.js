@@ -15,7 +15,7 @@
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, TextareaState, Textarea } from "gpui-base";
 import { agents, panes, spaces, settings, shared, setShared, knownAgents, notify, props, closeOverlay, openOverlay } from "herdr";
-import { SIZE, ICON, TYPE, LINE, SPACE, CONTROL, CHIP, MARK, PIP, HAIR, GLYPH, clickable, pressable, focusable, textWidth } from "./look.js";
+import { SIZE, ICON, TYPE, LINE, SPACE, CONTROL, CHIP, MARK, PIP, HAIR, GLYPH, clickable, pressable, focusable, textWidth, activatesOn, reducedMotion, REDUCE_MOTION_KEY } from "./look.js";
 import { actionButton } from "./button.js";
 import { stateView, pill, avatar, segmented } from "./switch.js";
 import { mentionTone, alpha } from "./indicators.js";
@@ -152,7 +152,7 @@ const chipButton = (c, id, label, on, onClick) =>
       .on_click(onClick)
       .child(label),
     c,
-    id,
+    id, { edge: true },
   );
 
 /** Opens a card's extra content as a dialog over the page; MoreSheet draws it from plain props + shared state. */
@@ -935,12 +935,20 @@ export class Settings {
             this.openList(a, field, e.bounds, cx);
             cx.notify();
           })
+          .role("combo_box")
+          .accessibility_label(`${field === "harness" ? "Harness" : "Model"}: ${value}`)
+          .on_key_down((e, cx) => {
+            if (!activatesOn(e)) return;
+            cx.stop_propagation();
+            this.openList(a, field, null, cx);
+            cx.notify();
+          })
           .when(field === "harness", (el) => el.child(harnessMark(c, this.known.find((k) => k.key === a.harness) ?? { key: a.harness, name: a.harness }, GLYPH.lg)))
           .child(div().flex_1().min_w(0).truncate().text_size(TYPE.md).child(value))
           .child(svg(ICON("chevron-down")).size(MARK).text_color(c.muted)),
       ),
       `bh-sel-${a.id}-${field}`,
-      c,
+      c, { edge: true },
     );
   }
 
@@ -968,6 +976,14 @@ export class Settings {
             .justify_center()
             .rounded(SIZE.nested)
             .hover((s) => s.bg(c.hover))
+            .role("button")
+            .accessibility_label(`Choose a model for ${a.name ?? a.id}`)
+            .on_key_down((e, cx) => {
+              if (!activatesOn(e)) return;
+              cx.stop_propagation();
+              this.openList(a, "model", null, cx);
+              cx.notify();
+            })
             .on_mouse_down("left", (e, cx) => {
               cx.stop_propagation();
               // Under the whole field, not just the arrow. (`gpui-shell`'s ElementBounds carries x
@@ -1009,20 +1025,24 @@ export class Settings {
     const labelW = Math.ceil(label ? slot : Math.max(...stops.map((v) => textWidth(name(v), TYPE.xs) * 1.15)) + SPACE[3]);
     const place = (i) => Math.round(Math.max(0, Math.min(width - labelW, x(i) - labelW / 2)));
     const mid = Math.round((KNOB + SPACE[3]) / 2);
-    return focusable(
-      v_flex()
+    const keys = (e, cx) => {
+      if (["left", "arrow-left", "down", "arrow-down"].includes(e.key)) pick(at - 1, cx);
+      else if (["right", "arrow-right", "up", "arrow-up"].includes(e.key)) pick(at + 1, cx);
+      else return;
+      cx.stop_propagation();
+    };
+    // The track is the slider: it takes the press and drag, and the arrows while it holds the keyboard.
+    return v_flex()
+        .id(`bh-eff-${a.id}`)
         .w(width)
         .gap(SPACE[1])
-        .on_key_down((e, cx) => {
-          if (["left", "arrow-left", "down", "arrow-down"].includes(e.key)) pick(at - 1, cx);
-          else if (["right", "arrow-right", "up", "arrow-up"].includes(e.key)) pick(at + 1, cx);
-          else return;
-          cx.stop_propagation();
-        })
-        .child(div()
+        .child(focusable(div()
           .relative()
           .w(width)
           .h(KNOB + SPACE[3])
+          .role("slider")
+          .accessibility_label(`Effort: ${name(stops[at])}`)
+          .on_key_down(keys)
           .cursor_pointer()
           .on_mouse_down("left", (e, cx) => {
             cx.stop_propagation();
@@ -1050,7 +1070,7 @@ export class Settings {
           // The knob: ringed in the colour, a dot of it at the centre.
           .child(div().absolute().left(x(at) - KNOB / 2).top(mid - KNOB / 2).size(KNOB).rounded_full().bg(c.fill).border(2).border_color(tone).shadow_sm()
             .flex().items_center().justify_center()
-            .child(div().size(6).rounded_full().bg(tone))))
+            .child(div().size(6).rounded_full().bg(tone))), `bh-eff-${a.id}-track`, c))
         // Each level's name under its stop; a click on one picks it.
         // Each name sits in an absolutely placed slot; the clickable is inside it (clickable makes
         // its element relative, which would pull it out of place).
@@ -1063,10 +1083,7 @@ export class Settings {
               .child(label ? label(v) : name(v)),
             c,
             `bh-eff-${a.id}-${i}`,
-          ))))),
-      `bh-eff-${a.id}`,
-      c,
-    );
+          )))));
   }
 
   harnesses(c) {
@@ -1135,13 +1152,13 @@ export class Settings {
           .child(svg(ICON("chevron-down")).size(MARK).text_color(c.muted)),
       ),
       "bh-cls-model",
-      c,
+      c, { edge: true },
     );
     const field = (state, w = 240) => div().w(w).child(this.field(c, state));
     return this.group(c, {
       id: "bh-classifier",
       title: "Classifier",
-      right: this.toggle(c, "bh-cls-on", k.enabled, (_e, cx) => this.config({ enabled: !k.enabled }, cx)),
+      right: this.toggle(c, "bh-cls-on", k.enabled, (_e, cx) => this.config({ enabled: !k.enabled }, cx), "Classifier on"),
       rows: [
         this.settingRow(c, "Model", modelSelect, problem),
         this.settingRow(c, "OpenRouter key", field(this.keyInput), k.key ? "Saved" : k.openrouterKey ? "From OPENROUTER_API_KEY" : "Not set"),
@@ -1159,7 +1176,7 @@ export class Settings {
         .w(content)
         .gap(GAP)
         .items_start()
-        .child(v_flex().flex_1().min_w(0).gap(GAP).child(this.accessCard(c)))
+        .child(v_flex().flex_1().min_w(0).gap(GAP).child(this.accessCard(c)).child(this.motionCard(c)))
         .child(v_flex().flex_1().min_w(0).gap(GAP).child(this.classifierCard(c)));
     }
     return v_flex()
@@ -1167,7 +1184,21 @@ export class Settings {
       .w(content)
       .gap(GAP)
       .child(this.accessCard(c))
+      .child(this.motionCard(c))
       .child(this.classifierCard(c));
+  }
+
+  /** Motion: the Reduce motion toggle (herdr cannot tell a mod the system's setting), kept for every view. */
+  motionCard(c) {
+    const on = reducedMotion();
+    return this.group(c, {
+      id: "bh-motion",
+      title: "Motion",
+      rows: [
+        this.settingRow(c, "Reduce motion", this.toggle(c, "bh-reduce-motion", on, () => setShared(REDUCE_MOTION_KEY, !on), "Reduce motion"),
+          "Working animations hold their first glyph and fades are instant."),
+      ],
+    });
   }
 
   resilienceSection(c, content) {
@@ -1457,7 +1488,7 @@ export class Settings {
           .bg(on ? c.accentInk : c.fill)
           .shadow_sm()),
       id,
-      c,
+      c, { edge: true },
     );
   }
 

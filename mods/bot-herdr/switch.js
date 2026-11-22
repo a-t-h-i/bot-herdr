@@ -7,13 +7,15 @@
 
 import { div, svg } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
-import { focused, shared, theme, nextCommand, window as herdrWindow, run } from "herdr";
-import { SIZE, TYPE, TYPE_SCALE, LINE, SPACE, CONTROL, CHIP, DOT, GLYPH, ICON, clickable } from "./look.js";
+import { focused, shared, theme, nextCommand, window as herdrWindow, run, setShared } from "herdr";
+import { SIZE, TYPE, TYPE_SCALE, LINE, SPACE, CONTROL, CHIP, DOT, GLYPH, ICON, clickable, looping } from "./look.js";
 import { actionButton } from "./button.js";
 import { colors } from "./theme.js";
 import { PAGES, HOLD, activePage, showPage } from "./pages.js";
 import { OPEN_COUNTS } from "./signals.js";
-import { alpha } from "./working.js";
+import { alpha, breatheFor } from "./working.js";
+import { KEYMAP_OPEN } from "./keymap.js";
+import { bhJson, projectDir } from "./bh.js";
 
 const HOLD_MS = 3000;
 /** herdr's own tabs (mods/tabs) are 29px tall; the page switch's tabs match them. */
@@ -46,6 +48,14 @@ export function segmented(c, { id, items, onPick, grow = false, height = null, p
     .when(Boolean(bar), (el) => bar(el))
     .when(!bar && choice, (el) => el.rounded(SIZE.control).bg(c.well))
     .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+    // A tab list's own keys while one of its tabs holds the keyboard: the arrows, Home and End
+    // pick the neighbouring, first or last tab (the tabs themselves are tab stops).
+    .on_key_down((e, cx) => {
+      const next = tabStep(e?.key, items.findIndex((item) => item.on), items.length);
+      if (next < 0) return;
+      cx.stop_propagation();
+      onPick(items[next].id, cx);
+    })
     .children(items.map((item, i) =>
       clickable(
         div()
@@ -76,7 +86,20 @@ export function segmented(c, { id, items, onPick, grow = false, height = null, p
           .when(item.count != null, (el) => el.child(div().text_size(TYPE_SCALE.metadata).font_semibold().text_color(item.on && !choice ? c.accent : c.textMuted).child(String(item.count)))),
         c,
         `${id}-${item.id}`,
+        { edge: true },
       )));
+}
+
+/** The tab a tab list's arrow key picks from `at` among `n` (wrapping), or -1 for any other key. */
+export function tabStep(key, at, n) {
+  if (!(n > 0)) return -1;
+  const k = String(key ?? "").toLowerCase();
+  const from = at < 0 ? 0 : at;
+  if (k === "right" || k === "arrow-right") return (from + 1) % n;
+  if (k === "left" || k === "arrow-left") return (from - 1 + n) % n;
+  if (k === "home") return 0;
+  if (k === "end") return n - 1;
+  return -1;
 }
 
 /**
@@ -93,7 +116,7 @@ export function pill(c, label, tone, { pulse = false, id = null } = {}) {
     .text_size(TYPE_SCALE.metadata)
     .font_medium()
     .text_color(tone)
-    .when(pulse, (x) => x.child(div().size(DOT).rounded_full().bg(tone).loop("opacity", { from: 0.35, to: 1, period: 1400, easing: "ease-in-out" })))
+    .when(pulse, (x) => x.child(looping(div().size(DOT).rounded_full().bg(tone), "opacity", { from: 0.35, to: 1, period: 1400, easing: "ease-in-out" })))
     .child(label);
   return id ? el.id(id) : el;
 }
@@ -127,14 +150,15 @@ export function filterChip(c, { id, label, count = null, on = false, onClick }) 
       .child(text),
     c,
     id,
-    { fill: c.hover },
+    { edge: true, fill: c.hover },
   );
 }
 
 /** An agent's avatar: its initial on a wash of its colour, ringed in it. */
-export function avatar(c, name, tone, size = 28) {
+export function avatar(c, name, tone, size = 28, { working = false } = {}) {
   const initial = String(name ?? "?").replace(/^@/, "").charAt(0).toUpperCase() || "?";
-  return div()
+  const breathe = breatheFor(working);
+  const el = div()
     .flex_none()
     .size(size)
     .rounded_full()
@@ -148,6 +172,8 @@ export function avatar(c, name, tone, size = 28) {
     .font_semibold()
     .text_color(tone)
     .child(initial);
+  // It breathes (opacity 0.7 to 1.0) only while its agent works; still under Reduce motion.
+  return breathe ? looping(el, "opacity", breathe) : el;
 }
 
 /** A section's heading: its icon on a tinted tile, the title, and a line about it under. */
@@ -195,12 +221,11 @@ export function stateView(c, { id, title, line = null, action = null, loading = 
       ? h_flex()
         .gap(SPACE[3])
         .items_center()
-        .child(div()
+        .child(looping(div()
           .size(DOT)
           .rounded_full()
           .bg(c.accent)
-          .opacity(0.5)
-          .loop("opacity", { from: 0.25, to: 1, period: 1200, easing: "ease-in-out" }))
+          .opacity(0.5), "opacity", { from: 0.25, to: 1, period: 1200, easing: "ease-in-out" }))
         .child(heading)
       : heading)
     .when(Boolean(line), (el) => el.child(
@@ -214,14 +239,35 @@ export function stateView(c, { id, title, line = null, action = null, loading = 
 export class Switch {
   init(_props, cx) {
     this.where = null;
-    // ctrl+shift+m (keys.json: "bot-herdr.focus") opens Threads and puts the keyboard in it.
+    // ctrl+shift+m (keys.json: "bot-herdr.focus") opens Threads and puts the keyboard in it;
+    // ? opens the map on any page; ctrl+. pauses or resumes the current goal.
     cx.spawn(async (cx) => {
       for (;;) {
         const command = await nextCommand();
         if (command === "focus" || command === "chat") showPage("chat");
+        else if (command === "map") setShared(KEYMAP_OPEN, true);
+        else if (command === "goal") this.goal(cx);
         else if (PAGES.some((p) => p.id === command)) showPage(command);
+        else {
+          // herdr's own tab.select:N (keys.json: ctrl-1..ctrl-5) picks the five layout tabs,
+          // which are the five destinations: Home, Threads, Agents, Library and Settings.
+          const tab = /^tab\.select:(\d+)$/.exec(String(command ?? ""));
+          if (tab) showPage(PAGES[Math.max(0, Number(tab[1]) - 1)]?.id ?? "home");
+        }
         cx.notify();
       }
+    });
+  }
+
+  /** Ctrl+.: pause or resume the in-flight goal (the fleet's goals from `bh home`). */
+  async goal(cx) {
+    const got = await bhJson(["home"], { cwd: projectDir() });
+    const g = (got?.fleet?.goals ?? []).find((x) => x?.task && !x.stopped && x.state !== "reached" && x.state !== "done");
+    if (!g) return;
+    const resume = Boolean(g.paused || g.state === "paused");
+    cx.spawn(async (cx) => {
+      await bhJson(["goal", resume ? "resume" : "pause", g.task, "--json"], { cwd: projectDir() });
+      cx.notify();
     });
   }
 
@@ -270,7 +316,7 @@ export class Switch {
         .min_w(0)
         .items_center()
         .gap(SPACE[1])
-        .children(tabs.map((p, i) => pageTab(c, { ...p, i, n: PAGES.length, height: HERDR_TAB, on: p.id === active, count: countOf(p.id), onClick: () => showPage(p.id) })))
+        .children(tabs.map((p, i) => pageTab(c, { ...p, i, n: PAGES.length, height: HERDR_TAB, on: p.id === active, count: countOf(p.id), pulse: p.id === "home", onClick: () => showPage(p.id) })))
         .child(div().flex_1())
         .child(pageTab(c, { ...gear, label: null, i: PAGES.length - 1, n: PAGES.length, height: HERDR_TAB, on: gear.id === active, a11y: gear.label, padX: SPACE[3], onClick: () => showPage(gear.id) })))
       // The window's own buttons are controls, not destinations: outside the tab list, at the end.
@@ -302,7 +348,7 @@ function windowButtons(c) {
  * with the same underline kept transparent otherwise so nothing moves when the pick changes
  * (Tabs and selection). An icon-only tab — the Settings gear — carries its name as its label.
  */
-function pageTab(c, { id, label = null, icon = null, on, count = null, i = 0, n = 1, height = HERDR_TAB, padX = SPACE[4], a11y = null, onClick }) {
+function pageTab(c, { id, label = null, icon = null, on, count = null, i = 0, n = 1, height = HERDR_TAB, padX = SPACE[4], a11y = null, pulse = false, onClick }) {
   return clickable(
     div()
       .role("tab")
@@ -325,8 +371,11 @@ function pageTab(c, { id, label = null, icon = null, on, count = null, i = 0, n 
       .on_click(onClick)
       .when(Boolean(icon), (el) => el.child(svg(ICON(icon)).flex_none().size(GLYPH.sm)))
       .when(Boolean(label), (el) => el.child(label))
-      .when(count != null, (el) => el.child(div().text_size(TYPE_SCALE.metadata).font_semibold().text_color(on ? c.accent : c.textMuted).child(String(count)))),
+      // The Home tab's badge pulses while needs-you exists on the app; under Reduce motion
+      // `looping` rests it at full opacity instead of fading.
+      .when(pulse && count != null, (el) => el.child(looping(div().text_size(TYPE_SCALE.metadata).font_semibold().text_color(on ? c.accent : c.textMuted).child(String(count)), "opacity", { from: 0.35, to: 1, period: 1400, easing: "ease-in-out" })))
+      .when(!pulse && count != null, (el) => el.child(div().text_size(TYPE_SCALE.metadata).font_semibold().text_color(on ? c.accent : c.textMuted).child(String(count)))),
     c,
-    `bh-pages-${id}`,
+    `bh-pages-${id}`, { edge: true },
   );
 }

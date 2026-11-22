@@ -13,7 +13,7 @@
 import { div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextView, InputState, Input } from "gpui-base";
 import { settings, shared, terminals } from "herdr";
-import { SIZE, ICON, TYPE, TYPE_SCALE, LINE, SPACE, CONTROL, CHIP, GLYPH, MARK, DOT, PIP, HAIR, MOTION, STATE, agentInk, stateTone, clickable, pressable, focusable } from "./look.js";
+import { SIZE, ICON, TYPE, TYPE_SCALE, LINE, SPACE, CONTROL, CHIP, GLYPH, MARK, DOT, PIP, HAIR, MOTION, STATE, agentInk, stateTone, clickable, pressable, focusable, foldRegion, looping } from "./look.js";
 import { actionButton } from "./button.js";
 import { segmented, stateView, pill, filterChip, chipHasResults } from "./switch.js";
 import { commentRow, openFirst, openPlan, sectionLabel, COMMENT_LINKS, arm, armed, startMenuTrigger, startMenuPanel, issueChips } from "./plandoc.js";
@@ -287,8 +287,7 @@ const SEAT_STATE = { working: "working", done: "done", none: "not started" };
 /** A seat's state from its terminal: a breathing dot at work (no lower than 0.75, so it keeps 3:1), a check once it answered, a quiet ring before it starts. */
 function seatMark(c, state) {
   if (state === "working") {
-    return div().flex_none().size(DOT).rounded_full().bg(stateTone(c, "working"))
-      .loop("opacity", { from: 0.75, to: 1, period: 1600, easing: "ease-in-out" });
+    return looping(div().flex_none().size(DOT).rounded_full().bg(stateTone(c, "working")), "opacity", { from: 0.75, to: 1, period: 1600, easing: "ease-in-out" });
   }
   if (state === "done") return svg(ICON("check")).flex_none().size(GLYPH.xs).text_color(stateTone(c, "done"));
   return div().flex_none().size(DOT).rounded_full().border_1().border_color(stateTone(c, "idle"));
@@ -1207,7 +1206,7 @@ export class Work {
           .when(Boolean(worked), (el) => el.child(div().flex_none().child(`· ${worked}`)))),
       c,
       `bh-task-${t.id}`,
-      { fill: on ? c.hover : null },
+      { edge: true, fill: on ? c.hover : null },
     );
   }
 
@@ -1989,7 +1988,7 @@ export class Work {
             .child(div().flex_1().min_w(0).truncate().text_size(TYPE.md).text_color(c.faint).child(label))
             .child(div().flex_none().text_size(TYPE.xs).font_medium().text_color(c.accent).child("↵ Send")),
           c,
-          "bh-task-composer-bar",
+          "bh-task-composer-bar", { edge: true },
         ));
     }
     const compW = Math.min(SIZE.maxWidth, Math.max(320, inner));
@@ -2147,8 +2146,8 @@ export class Work {
       .gap(SPACE[2])
       .when(rail, (el) => el.child(this.planRail(c, p, { horizontal: true })))
       // The conversation ends above the pinned box and its tab: the last round scrolls clear of them.
-      .child(v_flex().flex_1().min_h(0).overflow_y_scroll().gap(SPACE[4]).pb(SIZE.foot + box + tab + SPACE[4])
-        .on_mouse_down("left", (_e, cx) => this.foldPlanBox(cx))
+      .child(foldRegion(v_flex().id(`bh-plan-talk-${p.id}`).flex_1().min_h(0).overflow_y_scroll().gap(SPACE[4]).pb(SIZE.foot + box + tab + SPACE[4])
+        .on_mouse_down("left", (_e, cx) => this.foldPlanBox(cx)), `Plan conversation: ${p.title ?? p.id}`, (cx) => this.foldPlanBox(cx))
         .child(this.planTitle(c, p))
         .child(this.planConversation(c, p, w)))
       // The box at the page's foot, as the chat draws its composer: its pane and toast grow up over the page.
@@ -2205,7 +2204,7 @@ export class Work {
         .child(svg(ICON("file")).size(GLYPH.md))
         .child("View plan"),
       c,
-      "bh-view-plan",
+      "bh-view-plan", { edge: true },
     );
   }
 
@@ -2431,7 +2430,7 @@ export class Work {
         .when(!ready, (el) => el.child(this.mockupStatus(c, y, key)))
         .on_click(() => { if (ready) openLightbox({ items, at }); }),
       c,
-      `bh-plan-mock-${key}`,
+      `bh-plan-mock-${key}`, { edge: true },
     );
   }
 
@@ -2621,7 +2620,7 @@ export class Work {
                 .child(a.charAt(0).toUpperCase() + a.slice(1)),
             ),
             `bh-know-chip-${a}`,
-            c,
+            c, { edge: true },
           );
         })))
         .child(actionButton(c, "bh-know-new-open", "New note", () => openNoteForm({
@@ -2689,7 +2688,9 @@ export class Work {
             pressable(
               div().size(CHIP).flex().items_center().justify_center().rounded(SIZE.nested).text_color(c.faint).hover((s) => s.bg(c.hover).text_color(c.ink))
                 .on_click((_ev, cx) => { cx.stop_propagation?.(); this.agent = agent; this.knownText = (this.knowAll?.find((x) => x.agent === agent)?.text ?? ""); this.editor.set_value(this.knownText); this.editing = true; cx.notify(); })
-                .child(svg(ICON("external-link")).size(GLYPH.sm)),
+                .child(svg(ICON("external-link")).size(GLYPH.sm))
+                .role("button")
+                .accessibility_label(`Edit ${agent}'s knowledge`),
             ),
             `bh-know-edit-${agent}-${e.line}`,
             c,
@@ -2702,7 +2703,9 @@ export class Work {
               pressable(
                 div().size(CHIP).flex().items_center().justify_center().rounded(SIZE.nested).text_color(c.faint).hover((s) => s.bg(c.well).text_color(c.danger))
                   .on_click((_ev, cx) => { cx.stop_propagation(); this.confirmDelete = `${agent}:${e.line}`; this.agent = agent; cx.notify(); })
-                  .child(svg(ICON("trash")).size(GLYPH.sm)),
+                  .child(svg(ICON("trash")).size(GLYPH.sm))
+                  .role("button")
+                  .accessibility_label(`Delete this ${agent} entry`),
               ),
               `bh-know-del-${agent}-${e.line}`,
               c,
@@ -2711,7 +2714,7 @@ export class Work {
         .when(notes.length > 0, (el) => el.child(v_flex().gap(SPACE[2]).children(notes.map((n) => this.commentNote(c, { id: n.at, text: n.note, open: true }, this.noteActions(agent, e, n))))))
         .when(on, (el) => el.child(this.inlineBox(c).ml(0).mr(0))),
       c,
-      `bh-know-card-${agent}-${e.line}`,
+      `bh-know-card-${agent}-${e.line}`, { edge: true },
     );
   }
 }

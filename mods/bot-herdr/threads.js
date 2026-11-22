@@ -10,7 +10,7 @@
 import { div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { settings, shared, run } from "herdr";
-import { SIZE, TYPE_SCALE, LINE, SPACE, CONTROL, RADIUS, STATE, stateTone, clickable } from "./look.js";
+import { SIZE, TYPE_SCALE, LINE, SPACE, CONTROL, RADIUS, STATE, stateTone, clickable, looping } from "./look.js";
 import { Chat } from "./chat.js";
 import { Work } from "./work.js";
 import { safeRender } from "./render-safe.js";
@@ -350,13 +350,15 @@ export class Threads {
     const s = STATE[t.state] ?? STATE.idle;
     const meta = [t.steps, t.age].filter(Boolean).join(" · ");
     const picked = at === this.pick;
+    // The needs-you glyph pulses: one amber pulse, nothing else (and nothing while reduced).
+    const glyph = div().flex_none().text_size(TYPE_SCALE.title).text_color(stateTone(c, t.state)).child(s.glyph);
     return clickable(
       rowShell(c, picked).accessibility_label(`${s.word}: ${t.title}`)
         .on_click((_e, cx) => {
           this.pick = at;
           this.openThread(t.id, cx);
         })
-        .child(div().flex_none().text_size(TYPE_SCALE.title).text_color(stateTone(c, t.state)).child(s.glyph))
+        .child(t.state === "needsYou" ? looping(glyph, "opacity", { from: 0.35, to: 1, period: 1400, easing: "ease-in-out" }) : glyph)
         .child(v_flex().flex_1().min_w(0).gap(SPACE[1])
           .child(div().truncate().text_size(TYPE_SCALE.body).text_color(c.textPrimary).child(t.title))
           .when(Boolean(t.summary), (el) => el.child(div().id(`bh-row-summary-thread-${t.id}`).truncate().text_size(TYPE_SCALE.metadata).text_color(c.textSecondary).child(t.summary))))
@@ -463,7 +465,7 @@ export class Threads {
       if (this.expanded.has(e.key)) this.expanded.delete(e.key);
       else this.expanded.add(e.key);
       cx.notify();
-    }), c, `bh-thread-entry-${e.key}`, { fill: c.hover });
+    }), c, `bh-thread-entry-${e.key}`, { edge: true, fill: c.hover });
   }
 
   /** A board entry whose body is JSON, a stack trace or a path: one muted mono line that unfolds. */

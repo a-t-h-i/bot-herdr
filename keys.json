@@ -1,5 +1,7 @@
 {
   "global": {
-    "ctrl-shift-m": "bot-herdr.focus"
+    "ctrl-shift-m": "bot-herdr.focus",
+    "ctrl-.": "goal",
+    "?": "map"
   }
 }

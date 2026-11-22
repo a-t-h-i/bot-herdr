@@ -7,7 +7,7 @@
 import { div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { props, settings, setShared, closeOverlay, run } from "herdr";
-import { ICON, TYPE, LINE, SPACE, GLYPH, MOTION, clickable } from "./look.js";
+import { ICON, TYPE, LINE, SPACE, GLYPH, MOTION, clickable, timed } from "./look.js";
 import { colors } from "./theme.js";
 import { activePage } from "./pages.js";
 import { TOAST_KEY, noteText } from "./toasts.js";
@@ -62,7 +62,7 @@ export class Toast {
         .bg(c.fill)
         .overflow_hidden()
         .opacity(this.out ? 0 : 1)
-        .transition("opacity", { ...MOTION.toastOut, delay: TOAST_OUT_DELAY })
+        .transition("opacity", timed({ ...MOTION.toastOut, delay: TOAST_OUT_DELAY }))
         .on_click(() => {
           if (action) run(action.name, action.args ?? {});
           this.close();
@@ -80,7 +80,7 @@ export class Toast {
             .gap(SPACE[3])
             .items_center()
             .opacity(this.up ? 1 : 0)
-            .transition("opacity", this.out ? MOTION.toastTextOut : { ...MOTION.tool, delay: 120 })
+            .transition("opacity", timed(this.out ? MOTION.toastTextOut : { ...MOTION.tool, delay: 120 }))
             .text_color(c.ink)
             .child(svg(ICON(TOAST_ICONS[kind])).flex_none().size(GLYPH.lg).text_color(toneOf(c, kind)))
             .child(div().flex_1().min_w(0).max_h(LINE.md * 3).overflow_hidden().text_size(TYPE.md).line_height(`${LINE.md}px`).child(noteText(p))),
