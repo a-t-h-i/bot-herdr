@@ -7,7 +7,7 @@
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { settings, shared, setShared } from "herdr";
-import { SIZE, TYPE_SCALE, LINE, SPACE, CONTROL, RADIUS, STATE, MOTION, HIGHLIGHT_MS, stateTone, clickable, reducedMotion } from "./look.js";
+import { SIZE, TYPE_SCALE, LINE, SPACE, CONTROL, RADIUS, STATE, MOTION, HIGHLIGHT_MS, stateTone, threadTone, clickable, reducedMotion } from "./look.js";
 import { stateView } from "./switch.js";
 import { sectionLabel } from "./plandoc.js";
 import { colors } from "./theme.js";
@@ -336,15 +336,6 @@ export class Home {
     const label = `${kindWord(item?.kind)}: ${String(item?.title ?? "Needs you")}`;
     const needKey = `${item?.kind ?? "need"}:${item?.thread ?? ""}:${item?.ref ?? item?.title ?? at}`;
     const pulsing = this.pulsingNeeds.has(needKey) && !reducedMotion();
-    // One amber pulse on arrival, then still (and no pulse under Reduce motion).
-    const glyph = div()
-      .id(`bh-home-need-glyph-${item?.thread ?? item?.ref ?? at}`)
-      .flex_none()
-      .text_size(TYPE_SCALE.title)
-      .text_color(stateTone(c, "needsYou"))
-      .opacity(pulsing ? 0.35 : 1)
-      .transition("opacity", MOTION.arrive)
-      .child(STATE.needsYou.glyph);
     return clickable(
       h_flex()
         .role("list_item")
@@ -362,9 +353,9 @@ export class Home {
           if (item?.kind === "approval" && !item?.thread) this.peek.toggle({ kind: "approval", id: item.ref, thread: null, item }, cx);
           else openThread(item?.thread);
         })
-        .child(glyph)
+        // The title in the needs-you colour, no glyph before it; one pulse on arrival, then still.
         .child(v_flex().flex_1().min_w(0).gap(SPACE[1])
-          .child(div().truncate().text_size(TYPE_SCALE.body).font_semibold().text_color(c.textPrimary).child(String(item?.title ?? "Needs you")))
+          .child(div().id(`bh-home-need-title-${item?.thread ?? item?.ref ?? at}`).truncate().text_size(TYPE_SCALE.body).font_semibold().text_color(threadTone(c, "needsYou")).opacity(pulsing ? 0.35 : 1).transition("opacity", MOTION.arrive).child(String(item?.title ?? "Needs you")))
           .when(Boolean(item?.text), (el) => el.child(div().id(`bh-row-summary-need-${item?.thread ?? item?.ref ?? at}`).truncate().text_size(TYPE_SCALE.metadata).text_color(c.textSecondary).child(String(item.text)))))
         .child(div().flex_none().text_size(TYPE_SCALE.metadata).text_color(c.textMuted).child(kindWord(item?.kind)))
         .when(Boolean(who), (el) => el.child(div().flex_none().text_size(TYPE_SCALE.metadata).font_medium().text_color(mentionTone(c, who)).child(String(who)))),
@@ -396,8 +387,7 @@ export class Home {
         .when(picked, (el) => el.bg(c.hover))
         .on_click(() => openThread(t?.id))
         .when(Boolean(hl), (el) => el.child(doneOverlay(c, `bh-home-thread-hl-${t.id}`, hl)))
-        .child(div().flex_none().text_size(TYPE_SCALE.title).text_color(stateTone(c, state)).child(STATE[state].glyph))
-        .child(div().flex_1().min_w(0).truncate().text_size(TYPE_SCALE.body).text_color(c.textPrimary).child(String(t?.title ?? "Thread")))
+        .child(div().flex_1().min_w(0).truncate().text_size(TYPE_SCALE.body).font_medium().text_color(threadTone(c, state)).child(String(t?.title ?? "Thread")))
         .when(Boolean(meta), (el) => el.child(div().flex_none().text_size(TYPE_SCALE.metadata).text_color(c.textMuted).child(meta))),
       c,
       `bh-home-thread-${t?.id ?? at}`,
@@ -461,13 +451,11 @@ export class Home {
         .when(picked, (el) => el.bg(c.hover))
         .on_click(() => openThread(g?.task))
         .when(Boolean(hl), (el) => el.child(doneOverlay(c, `bh-home-goal-hl-${g.task}`, hl)))
-        // The state is glyph, colour and word, as on an agent row (never colour or glyph alone).
-        .child(h_flex().flex_none().gap(SPACE[1]).items_center().text_color(stateTone(c, state))
-          .child(div().text_size(TYPE_SCALE.title).child(STATE[state].glyph))
-          .child(div().text_size(TYPE_SCALE.metadata).child(STATE[state].word)))
+        // The title in its state's colour, its state word at the end (no glyph before the name).
         .child(v_flex().flex_1().min_w(0).gap(SPACE[1])
-          .child(div().truncate().text_size(TYPE_SCALE.body).font_semibold().text_color(c.textPrimary).child(String(g?.title ?? g?.task ?? "Goal")))
+          .child(div().truncate().text_size(TYPE_SCALE.body).font_semibold().text_color(threadTone(c, state)).child(String(g?.title ?? g?.task ?? "Goal")))
           .when(Boolean(g?.summary), (el) => el.child(div().id(`bh-row-summary-goal-${g?.task ?? at}`).truncate().text_size(TYPE_SCALE.metadata).text_color(c.textSecondary).child(String(g.summary)))))
+        .child(div().flex_none().text_size(TYPE_SCALE.metadata).text_color(stateTone(c, state)).child(STATE[state].word))
         .when(Boolean(gate), (el) => el.child(div().flex_none().text_size(TYPE_SCALE.metadata).text_color(c.textMuted).child(gate)))
         .when(Boolean(spend), (el) => el.child(div().flex_none().text_size(TYPE_SCALE.metadata).text_color(c.textMuted).child(spend))),
       c,

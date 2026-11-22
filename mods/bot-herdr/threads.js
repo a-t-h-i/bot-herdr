@@ -11,7 +11,7 @@
 import { div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { terminals, settings, shared, setShared, run } from "herdr";
-import { SIZE, TYPE_SCALE, LINE, SPACE, CONTROL, RADIUS, STATE, MOTION, HIGHLIGHT_MS, stateTone, clickable, activates, reducedMotion } from "./look.js";
+import { SIZE, TYPE_SCALE, LINE, SPACE, CONTROL, RADIUS, STATE, MOTION, HIGHLIGHT_MS, stateTone, threadTone, clickable, activates, reducedMotion } from "./look.js";
 import { Chat } from "./chat.js";
 import { Work } from "./work.js";
 import { safeRender } from "./render-safe.js";
@@ -493,15 +493,6 @@ export class Threads {
     const picked = at === this.pick;
     const pulsing = t.state === "needsYou" && this.pulsingNeeds.has(t.id) && !reducedMotion();
     const hl = this.finishing.get(t.id);
-    // One amber pulse on arrival, then still (and no pulse under Reduce motion).
-    const glyph = div()
-      .id(`bh-thread-glyph-${t.id}`)
-      .flex_none()
-      .text_size(TYPE_SCALE.title)
-      .text_color(stateTone(c, t.state))
-      .opacity(pulsing ? 0.35 : 1)
-      .transition("opacity", MOTION.arrive)
-      .child(s.glyph);
     return clickable(
       rowShell(c, picked).accessibility_label(`${s.word}: ${t.title}`)
         .on_click((_e, cx) => {
@@ -516,9 +507,9 @@ export class Threads {
           .bg(stateTone(c, "done"))
           .opacity(hl === "on" ? 0.14 : 0)
           .transition("opacity", MOTION.highlight)))
-        .child(glyph)
+        // The title in its state's colour (no glyph before it); one pulse on arrival, then still.
         .child(v_flex().flex_1().min_w(0).gap(SPACE[1])
-          .child(div().truncate().text_size(TYPE_SCALE.body).text_color(c.textPrimary).child(t.title))
+          .child(div().id(`bh-thread-title-${t.id}`).truncate().text_size(TYPE_SCALE.body).font_medium().text_color(threadTone(c, t.state)).opacity(pulsing ? 0.35 : 1).transition("opacity", MOTION.arrive).child(t.title))
           .when(Boolean(t.summary), (el) => el.child(div().id(`bh-row-summary-thread-${t.id}`).truncate().text_size(TYPE_SCALE.metadata).text_color(c.textSecondary).child(t.summary))))
         .when(Boolean(meta), (el) => el.child(div().flex_none().text_size(TYPE_SCALE.metadata).text_color(c.textMuted).child(meta))),
       c,

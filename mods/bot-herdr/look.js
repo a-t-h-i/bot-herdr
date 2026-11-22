@@ -36,6 +36,15 @@ export function stateTone(c, key) {
   return c?.[STATE[key]?.token] ?? c?.muted ?? null;
 }
 
+/**
+ * A thread's title colour: the colour says its state, so no glyph sits before the name (the
+ * user's call). Idle titles stay in plain text; the state's word is still the row's label.
+ */
+export function threadTone(c, key) {
+  if (!STATE[key] || key === "idle") return c?.textPrimary ?? c?.ink ?? null;
+  return stateTone(c, key);
+}
+
 /** The seven agents' identity hues: an avatar and one presence dot, never chips, fills or bars. */
 export const AGENT_NAMES = ["orchestrator", "dev", "design", "qa", "research", "scout", "advisor"];
 const AGENT_HUES = { dev: "#5b8def", design: "#d6825a", qa: "#3fa877", research: "#a47bd6", scout: "#3ea3b5", advisor: "#c4973b" };
