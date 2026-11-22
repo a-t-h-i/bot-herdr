@@ -107,7 +107,7 @@ export class Scripts {
         id: "bh-scripts-empty",
         title: "No script yet.",
         line: "A step the team does twice can become a script every agent runs; it appears here.",
-        action: { label: "Open Threads", on: () => showPage("threads") },
+        action: { label: "Open Chat", on: () => showPage("chat") },
       });
     }
     return v_flex().w_full().gap(SPACE[1]).children(list.map((s) => this.row(c, s)));

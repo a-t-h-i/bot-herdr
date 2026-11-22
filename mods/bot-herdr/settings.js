@@ -14,7 +14,7 @@
 
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, TextareaState, Textarea } from "gpui-base";
-import { agents, panes, spaces, settings, shared, setShared, knownAgents, notify, props, closeOverlay, openOverlay } from "herdr";
+import { agents, panes, spaces, settings, shared, setShared, knownAgents, notify, props, closeOverlay, openOverlay, run } from "herdr";
 import { SIZE, ICON, TYPE, LINE, SPACE, CONTROL, CHIP, TARGET, MARK, PIP, HAIR, GLYPH, clickable, pressable, focusable, textWidth, activatesOn, reducedMotion, springing, REDUCE_MOTION_KEY } from "./look.js";
 import { actionButton } from "./button.js";
 import { stateView, pill, avatar, segmented } from "./switch.js";
@@ -506,7 +506,7 @@ export class Settings {
     return state;
   }
 
-  /** View-local app keys: Ctrl+1..5 switch destinations, `?` opens the keymap when not typing. */
+  /** View-local app keys: Ctrl+1..6 switch destinations, `?` opens the keymap when not typing. */
   keys(e, cx) {
     const app = appKeyAction(e, { typing: this.typingCount > 0 });
     if (app?.kind === "page") {
@@ -749,11 +749,16 @@ export class Settings {
     const space = currentSpace()?.id ?? null;
     const rows = [];
     for (let i = 0; i < list.length; i += cols) rows.push(list.slice(i, i + cols));
-    const tabs = this.tabs(c, section);
+    // herdr's own settings (theme, fonts, machines) sit at the end of the same row, so there is
+    // one Settings to look in.
+    const tabs = h_flex().flex_1().min_w(0).items_center().gap(SPACE[3])
+      .child(this.tabs(c, section))
+      .child(div().flex_1())
+      .child(actionButton(c, "bh-settings-app", "Theme, fonts, machines", () => run("app.settings"), { tone: "quiet", tooltip: "herdr's own settings" }));
     // Usage is the Metrics view: a page of its own under the tabs, not a card in the column.
     const body = section === "usage"
       ? v_flex().size_full().items_center()
-        .child(v_flex().flex_none().w(content).pt(SPACE[5]).pb(SPACE[4]).child(h_flex().items_center().child(tabs)))
+        .child(v_flex().flex_none().w(content).pt(SPACE[5]).pb(SPACE[4]).child(h_flex().w_full().items_center().child(tabs)))
         .child(div().id("bh-settings-usage").relative().flex_1().w_full().min_h(0).child(this.usage(cx)))
       : v_flex()
         .id("bh-settings-scroll")
@@ -768,7 +773,7 @@ export class Settings {
             .py(SPACE[5])
             .gap(GAP)
             // One section at a time, picked from the tabs.
-            .child(h_flex().items_center().child(tabs))
+            .child(h_flex().w_full().items_center().child(tabs))
             .when(Boolean(this.problem), (el) => el.child(div().text_size(TYPE.sm).text_color(c.danger).child(this.problem)))
             .when(!this.problem && Date.now() - (this.saved ?? 0) < SAVED_MS, (el) => el.child(div().text_size(TYPE.xs).text_color(c.muted).child("Saved")))
             .when(section === "agents", (el) => el

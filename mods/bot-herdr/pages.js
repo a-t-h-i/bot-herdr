@@ -1,7 +1,7 @@
-// The pages of the bot-herdr layout: the top bar's five destinations (Home, Threads, Agents,
-// Library, and Settings behind the gear), the sub-tab open inside a destination, and where a view
-// that used to be its own destination is reached from now. Pure helpers plus the two calls that
-// switch, shared by every view.
+// The pages of the bot-herdr layout: the five destinations the sidebar (sidebar.js) moves between
+// (Home, Threads, which holds the Chat, Agents, Library and Settings, plus herdr's Terminals), the
+// sub-tab open inside a destination, and where a view that used to be its own destination is
+// reached from now. Pure helpers plus the calls that switch, shared by every view.
 
 import { layout, run, shared, setShared } from "herdr";
 
@@ -9,7 +9,7 @@ export const STACK = "pages";
 /** The outer stack: the five destinations, or herdr's own terminals (Agents › Terminals). */
 export const STAGE = "stage";
 
-/** The top bar's destinations, in order; Settings is the gear after them. */
+/** The destinations, in order (the sidebar draws its own list: Chat first, Settings at the foot). */
 export const PAGES = [
   { id: "home", icon: "page-home", label: "Home" },
   { id: "threads", icon: "page-chat", label: "Threads" },
@@ -138,8 +138,19 @@ export function showSettings(section = null) {
 
 /** Opens a thread on Threads (its Conversation); with no id, the thread list. */
 export function openThread(id) {
-  if (id) setShared(OPEN_THREAD, { id: String(id), at: Date.now() });
+  setShared(OPEN_THREAD, id ? { id: String(id), at: Date.now() } : { id: null, list: true, at: Date.now() });
   showPage("threads");
+}
+
+/** The thread Threads has open now: "orchestrator" for the chat, an id, or null for the list. */
+export const THREAD_SHOWN = "bot-herdr.thread-shown";
+
+/** What the sidebar marks as open: "chat", "threads" (the list or a thread), "terminals" or a page id. */
+export function shownPlace(root = layout()) {
+  if (activeStage(root) === "terminals") return "terminals";
+  const page = activePage(root);
+  if (page === "threads") return shared(THREAD_SHOWN) === "orchestrator" ? "chat" : "threads";
+  return page;
 }
 
 /** Shows an agent's own terminal on Agents › Terminals. */

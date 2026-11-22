@@ -6,12 +6,17 @@ herdr mods are JavaScript that describe native GPUI elements, so everything here
 
 Agents run **headless** by default: each message runs the harness in its own non-interactive mode (Claude Code `-p`, `codex exec`, pi's JSON mode, or the Agent Client Protocol for Gemini, opencode and Qwen Code), so its answer comes straight back to the chat. Each agent still has its herdr terminal, which shows what it is doing; `/cli` there opens the harness's full CLI on the same conversation.
 
-Its pages are switched from the top bar:
+Everything is reached from one sidebar, and the app opens on Chat:
 
-- **Chat**: one conversation with every agent, the composer, and agents' questions for you.
-- **Terminals**: herdr's own panes, to work in any agent's terminal directly.
-- **Tasks**, **Plans**, **Knowledge**: the task board, the planning panel's drafts and what each agent knows about the project.
-- **Settings**: the team (harness, model and effort per agent), how agents run, harnesses and the classifier.
+- **Chat**: one conversation with the team, the composer, and agents' questions for you.
+- **Home**: what needs you first, then the agents and Goals running now and today's spend.
+- **Agents**: every agent running now and what it is on; click one to open its terminal.
+- **Terminals**: herdr's own panes, to work in any agent's terminal directly (**Tile** shows them side by side).
+- **Library**: what the team knows, what it learned, its shared scripts and the GitHub issues.
+- **Threads**: under those, every task and plan, what needs you on top. **All threads** opens the full list with search.
+- **Settings**, at the foot: the team (harness, model and effort per agent), how agents run, resilience, harnesses and usage. herdr's own settings (theme, fonts, machines) open from there too.
+
+`Ctrl+1` to `Ctrl+6` go to Chat, Home, Agents, Terminals, Library and Settings.
 
 ## Install
 

@@ -1,7 +1,8 @@
 // Threads: one task, its plan and its conversation are one thread. The list (bh thread list)
 // groups them by state, what needs you first, under a filter bar (search + one Filter button);
-// the Orchestrator's chat is pinned on top, and plans that are not tasks yet are threads too.
-// Opening one shows a breadcrumb (Threads › title › sub-tab) and the second row Conversation |
+// plans that are not tasks yet are threads too. The Orchestrator's chat lives here as well: it is
+// the sidebar's Chat, drawn whole with no breadcrumb, and the page opens on it.
+// Opening a thread shows a breadcrumb (Threads › title) and the second row Conversation |
 // Plan | Steps | Changes (bh thread show). Conversation is the board and replies, with the goal
 // row and the composer at its foot; Plan is the plan document (the plan sheet opens from it);
 // Steps is the task page's own step cards; Changes is the diff stat. J / K move, Space peeks,
@@ -15,14 +16,13 @@ import { Chat } from "./chat.js";
 import { Work } from "./work.js";
 import { safeRender } from "./render-safe.js";
 import { colors } from "./theme.js";
-import { stateView, avatar, segmented, filterChip } from "./switch.js";
+import { stateView, segmented, filterChip } from "./switch.js";
 import { actionButton } from "./button.js";
 import { sectionLabel, openPlan, arm, armed } from "./plandoc.js";
 import { markdownWithFoldedCode, machineLine, toggleMachine } from "./machinetext.js";
-import { mentionTone } from "./indicators.js";
 import { bh, bhJson, projectDir } from "./bh.js";
 import { ago } from "./numbers.js";
-import { activeStage, showPage, openTerminal, viewShown, wakeGoal, FOCUS, OPEN_TASK, OPEN_THREAD } from "./pages.js";
+import { activeStage, showPage, openTerminal, viewShown, wakeGoal, FOCUS, OPEN_TASK, OPEN_THREAD, THREAD_SHOWN } from "./pages.js";
 import { appKeyAction, isChord, keyName, nextPick, opensRow } from "./rowkeys.js";
 import { KEYMAP_OPEN } from "./keymap.js";
 import { arrivedIds, newlyDone } from "./signals.js";
@@ -39,7 +39,6 @@ import {
 
 const REFRESH_MS = 10000;
 const MAX = 1140; // the work pages' widest column
-const AVATARS = 3; // how many agents a thread row names before it stops
 const GOAL_H = 60; // the goal row's drawn height: its line and the judge's reason
 
 /** Logs a sub-view that failed to draw; never throws while reporting. */
@@ -75,7 +74,7 @@ export class Threads {
     this.data = null; // the last bh thread list answer
     this.failed = false;
     this.busy = false;
-    this.opened = null; // the open thread's id, ORCHESTRATOR for the chat, null for the list
+    this.opened = ORCHESTRATOR; // the open thread's id, ORCHESTRATOR for the chat, null for the list
     this.sub = "conversation";
     this.detail = null; // bh thread show for the open thread
     this.detailId = null;
@@ -145,9 +144,15 @@ export class Threads {
     this.taskAt = /** @type {{ at?: number } | null} */ (shared(OPEN_TASK))?.at ?? 0;
     this.focusAt = shared(FOCUS) ?? 0;
     this.load(cx);
+    this.publish();
     cx.timer.every(REFRESH_MS, (cx) => {
       if (viewShown("threads") && activeStage() !== "terminals") this.refresh(cx);
     });
+  }
+
+  /** Tells the sidebar what is open here: the chat, a thread, or the list (null). */
+  publish() {
+    if (shared(THREAD_SHOWN) !== this.opened) setShared(THREAD_SHOWN, this.opened);
   }
 
   setSearching(on, cx) {
@@ -242,7 +247,7 @@ export class Threads {
 
   /** The rows J and K walk through: the pinned Orchestrator chat, then the threads as drawn. */
   order() {
-    return [{ id: ORCHESTRATOR, kind: "chat" }, ...drawnOrder(this.groups())];
+    return drawnOrder(this.groups());
   }
 
   /** Opens a thread on a sub-tab (Conversation unless asked), remembering where the list was. */
@@ -273,12 +278,14 @@ export class Threads {
     } else {
       cx.timer.after(1, () => this.chat.composer.focus());
     }
+    this.publish();
     cx.notify();
   }
 
   /** Back to the list, its pick where it was. */
   back(cx) {
     this.opened = null;
+    this.publish();
     this.pick = this.listPick;
     this.handle.focus();
     this.load(cx);
@@ -293,6 +300,7 @@ export class Threads {
     if (want?.at > this.openAt) {
       this.openAt = want.at;
       if (want.id) cx.timer.after(1, (cx) => this.openThread(String(want.id), cx));
+      else if (/** @type {any} */ (want).list && this.opened) cx.timer.after(1, (cx) => this.back(cx));
     }
     if (task?.at > this.taskAt) {
       this.taskAt = task.at;
@@ -342,7 +350,8 @@ export class Threads {
       cx.stop_propagation();
       return cx.notify();
     }
-    if (key === "escape" && this.opened && !this.chat.composer.focused) {
+    // Esc goes back from a thread to the list; the chat is a page of its own, so it stays.
+    if (key === "escape" && this.opened && this.opened !== ORCHESTRATOR && !this.chat.composer.focused) {
       this.back(cx);
       return cx.stop_propagation();
     }
@@ -419,7 +428,6 @@ export class Threads {
     return div().size_full().relative()
       .child(v_flex().id("bh-threads-scroll").absolute().top(0).bottom(0).left(0).right(this.peek.isOpen() ? PEEK_WIDTH : 0).overflow_y_scroll().items_center()
         .child(v_flex().flex_none().w(content).py(SPACE[5]).gap(SPACE[4])
-          .child(div().text_size(TYPE_SCALE.title).font_semibold().text_color(c.textPrimary).child("Threads"))
           .child(this.filterBar(c))
           .child(this.listBody(c))))
       .when(this.peek.isOpen(), (el) => el.child(this.peek.render(c)));
@@ -457,41 +465,25 @@ export class Threads {
 
   /** The pinned chat, then each state's group; skeletons while reading; an empty state that teaches. */
   listBody(c) {
-    const pinned = this.chatRow(c);
     if (!this.data && this.failed) {
-      return v_flex().gap(SPACE[4]).child(pinned).child(stateView(c, { id: "bh-threads-list-error", title: "Couldn't read the threads", line: "bh thread list did not answer. Try again, or check that bh is installed.", action: { label: "Try again", on: (_e, cx) => this.load(cx) } }));
+      return v_flex().gap(SPACE[4]).child(stateView(c, { id: "bh-threads-list-error", title: "Couldn't read the threads", line: "bh thread list did not answer. Try again, or check that bh is installed.", action: { label: "Try again", on: (_e, cx) => this.load(cx) } }));
     }
-    if (!this.data) return v_flex().gap(SPACE[2]).child(pinned).child(skeleton(c)).child(skeleton(c));
+    if (!this.data) return v_flex().gap(SPACE[2]).child(skeleton(c)).child(skeleton(c));
     const groups = this.groups();
     if (!groups.length) {
       const filtered = Boolean(this.stateFilter || this.search.value().trim());
-      return v_flex().gap(SPACE[4]).child(pinned).child(stateView(c, filtered
+      return v_flex().gap(SPACE[4]).child(stateView(c, filtered
         ? { id: "bh-threads-none", title: "No thread matches.", line: "Clear the search or the filter to see every thread." }
-        : { id: "bh-threads-empty", title: "No threads yet.", line: "Ask the Orchestrator for a plan or a task, and its thread appears here." }));
+        : { id: "bh-threads-empty", title: "No threads yet.", line: "Ask in Chat for a plan or a task, and its thread appears here.", action: { label: "Open Chat", on: () => showPage("chat") } }));
     }
-    let at = 1; // the pinned chat is row 0
-    return v_flex().role("list").gap(SPACE[4]).child(pinned).children(groups.map((g) => {
+    let at = 0;
+    return v_flex().role("list").gap(SPACE[4]).children(groups.map((g) => {
       const start = at;
       at += g.rows.length;
       return v_flex().id(`bh-threads-group-${g.state}`).gap(SPACE[1])
         .child(sectionLabel(c, g.label))
         .children(g.rows.map((t, i) => this.threadRow(c, t, start + i)));
     }));
-  }
-
-  /** The Orchestrator's chat, pinned: no capability of the old chat page is more than a row away. */
-  chatRow(c) {
-    const picked = this.pick === 0;
-    return clickable(
-      rowShell(c, picked).accessibility_label("Orchestrator: your chat with the team")
-        .on_click((_e, cx) => this.openThread(ORCHESTRATOR, cx))
-        .child(avatar(c, "Orchestrator", mentionTone(c, "Orchestrator"), 20))
-        .child(div().flex_1().min_w(0).truncate().text_size(TYPE_SCALE.body).font_semibold().text_color(c.textPrimary).child("Orchestrator"))
-        .child(div().flex_none().text_size(TYPE_SCALE.metadata).text_color(c.textMuted).child("Pinned")),
-      c,
-      "bh-thread-row-orchestrator",
-      { fill: c.hover },
-    );
   }
 
   /** A thread at a glance: state glyph, title, its one-line summary, agents, steps and age. */
@@ -528,7 +520,6 @@ export class Threads {
         .child(v_flex().flex_1().min_w(0).gap(SPACE[1])
           .child(div().truncate().text_size(TYPE_SCALE.body).text_color(c.textPrimary).child(t.title))
           .when(Boolean(t.summary), (el) => el.child(div().id(`bh-row-summary-thread-${t.id}`).truncate().text_size(TYPE_SCALE.metadata).text_color(c.textSecondary).child(t.summary))))
-        .child(h_flex().flex_none().gap(SPACE[1]).children(t.agents.slice(0, AVATARS).map((name) => avatar(c, name, mentionTone(c, name), 20))))
         .when(Boolean(meta), (el) => el.child(div().flex_none().text_size(TYPE_SCALE.metadata).text_color(c.textMuted).child(meta))),
       c,
       `bh-thread-row-${t.id}`,
@@ -547,7 +538,7 @@ export class Threads {
 
   /** Threads › title › sub-tab; "Threads" goes back, and so does Esc. */
   crumbs(c, sub) {
-    const parts = breadcrumb(this.title(), sub);
+    const parts = breadcrumb(this.title(), null);
     return h_flex().id("bh-thread-crumbs").role("navigation").accessibility_label(parts.join(" › ")).flex_none().gap(SPACE[2]).items_center().min_w(0)
       .child(clickable(div().role("link").text_size(TYPE_SCALE.metadata).text_color(c.textSecondary).on_click((_e, cx) => this.back(cx)).child(parts[0]), c, "bh-thread-crumb-back"))
       .children(parts.slice(1).flatMap((p, i) => [
@@ -560,7 +551,6 @@ export class Threads {
   chatPage(c, cx) {
     const { node, error } = safeRender(this.chat, cx, { view: "threads-chat", onError: (rec) => report(rec.view, rec.message) });
     return v_flex().size_full()
-      .child(h_flex().flex_none().h(CONTROL + SPACE[4]).px(SIZE.gutter).items_center().child(this.crumbs(c, null)))
       .child(div().flex_1().min_h(0).relative().child(error ? stateView(c, { id: "bh-threads-chat-error", title: "The chat could not be drawn", line: error.detail }) : node));
   }
 
