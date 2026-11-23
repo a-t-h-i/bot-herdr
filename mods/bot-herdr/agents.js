@@ -13,6 +13,7 @@ import { actionButton } from "./button.js";
 import { colors } from "./theme.js";
 import { viewShown, openTerminal, openThread, showAgentsTab, showPage, showSettings } from "./pages.js";
 import { threadRows, groupThreads, drawnOrder } from "./threadview.js";
+import { ROSTER_KEY, roster, roleOf, slug } from "./roster.js";
 import { sectionLabel } from "./plandoc.js";
 import { bhJson, projectDir } from "./bh.js";
 import { mentionTone, agentStateMark } from "./indicators.js";
@@ -27,6 +28,38 @@ const MAX = 1140; // the work pages' widest column
 const GAP = SPACE[4];
 /** The thread states that count as being worked on. */
 const ACTIVE = new Set(["working", "needsYou", "review"]);
+/** The team table's row height and its fixed columns, so rows line up like a table. */
+const ROW_H = 36;
+const NAME_W = 120;
+const STATUS_W = 130;
+const TASK_W = 200;
+const META_W = 120;
+
+/** Whether a running agent is this roster entry: its name, its role, or a child of it ("dev-2"). */
+function matchesRole(a, entry) {
+  const name = slug(String(a?.name ?? ""));
+  const keys = [slug(entry.name), slug(entry.role ?? "")].filter(Boolean);
+  return keys.some((k) => name === k || name.startsWith(`${k}-`));
+}
+
+/** What an agent is doing, said plainly: a shell command apart (drawn in mono), else its line. */
+function doingOf(r) {
+  if (!r.running) return { text: roleOf(r.role)?.does ?? "" };
+  const line = String(r.summary ?? "").trim();
+  if (!line || ["Working", "Idle", "Needs you"].includes(line)) return { text: "" };
+  const cmd = line.match(/^(?:Run|Running|Ran|\$)\s+(.+)$/i);
+  return cmd ? { command: cmd[1] } : { text: line };
+}
+
+/** The user's monospace face, or null. */
+function monoFont() {
+  try {
+    const f = settings()?.font_family;
+    return typeof f === "string" && f ? f : null;
+  } catch {
+    return null;
+  }
+}
 
 /** The two sub-tabs, as one segmented control. */
 const SUB_TABS = [
@@ -97,7 +130,7 @@ export class Agents {
     if (isChord(e)) return;
     if (this.peek?.keys(e, cx)) return cx.stop_propagation();
     if (this.peek?.typing) return;
-    const list = this.agents();
+    const list = this.team();
     const next = nextPick(keyName(e), this.pick, list.length);
     if (next >= 0 && next !== this.pick) {
       this.pick = next;
@@ -193,15 +226,33 @@ export class Agents {
     });
   }
 
-  /** "Agents" and how many are running: "3 agents". */
+  /** How many are at work, and the way to the team's settings. */
   header(c) {
-    const n = this.agents().length;
+    const n = this.agents().filter((a) => a?.state && a.state !== "idle").length;
     return h_flex().items_center().gap(SPACE[3])
-      .child(div().flex_1().text_size(TYPE_SCALE.metadata).text_color(c.textSecondary).child(n > 0 ? `${count(n, "agent")} running. Click an agent for its terminal, or its task to open it.` : ""))
+      .child(div().flex_1().text_size(TYPE_SCALE.metadata).text_color(c.textSecondary).child(n > 0 ? `${count(n, "agent")} at work` : "Nobody is at work right now"))
       .child(actionButton(c, "bh-agents-team", "Edit team", () => showSettings("agents"), { tone: "quiet", tooltip: "Harness, model and effort per agent" }));
   }
 
-  /** The board: agents at work as cards, the tasks in progress, then who is idle. */
+  /**
+   * The team as one compact table: every agent of the roster, plus any other agent terminal that
+   * is running, each on one row. At work first, then waiting on you, then idle, then the ones not running (Ready).
+   */
+  team() {
+    const fleet = this.agents();
+    const list = roster(shared(ROSTER_KEY), []);
+    const used = new Set();
+    const rows = list.map((entry) => {
+      const found = fleet.find((a) => !used.has(a) && matchesRole(a, entry));
+      if (found) used.add(found);
+      return { ...(found ?? {}), role: entry.role, label: entry.name, running: Boolean(found), state: found?.state ?? "idle" };
+    });
+    for (const a of fleet) if (!used.has(a)) rows.push({ ...a, label: String(a?.name ?? "Agent"), running: true, state: a?.state ?? "idle" });
+    const rank = (r) => (!r.running ? 3 : r.state === "working" ? 0 : r.state === "needsYou" ? 1 : 2);
+    return rows.map((r, i) => ({ r, i })).sort((a, b) => rank(a.r) - rank(b.r) || a.i - b.i).map((x) => x.r);
+  }
+
+  /** The board: the team table, then the tasks in progress. */
   body(c, content) {
     if (!this.data && this.failed) {
       return stateView(c, { id: "bh-agents-error", title: "Couldn't read the team", line: "bh home did not answer. Try again, or check that bh is installed.", action: { label: "Try again", on: (_e, cx) => this.load(cx) } });
@@ -211,34 +262,23 @@ export class Agents {
         .child(skeletonRow(c, content - SPACE[5], content * 0.4))
         .child(skeletonRow(c, content * 0.6, content * 0.3));
     }
-    const list = this.agents();
-    const busy = list.filter((a) => a?.state && a.state !== "idle");
-    const idle = list.filter((a) => !a?.state || a.state === "idle");
-    const tasks = this.tasksInProgress(list);
-    if (!list.length && !tasks.length) {
-      return stateView(c, {
-        id: "bh-agents-empty",
-        title: "No agent is running.",
-        line: "Ask something in Chat and the agents working on it appear here, with what each is doing and the task it is on.",
-        action: { label: "Open Chat", on: () => showPage("chat") },
-      });
-    }
-    const cols = content >= 880 ? 3 : content >= 560 ? 2 : 1;
-    const cardW = Math.floor((content - GAP * (cols - 1)) / cols);
-    const rows = [];
-    for (let i = 0; i < busy.length; i += cols) rows.push(busy.slice(i, i + cols));
-    return v_flex().w_full().gap(SPACE[5] + SPACE[3])
-      .child(v_flex().gap(SPACE[3])
-        .child(sectionLabel(c, busy.length ? `At work · ${busy.length}` : "At work"))
-        .when(!busy.length, (el) => el.child(div().text_size(TYPE_SCALE.body).text_color(c.textSecondary).child("Nobody is working right now.")))
-        .children(rows.map((row, r) => h_flex().id(`bh-agents-cards-${r}`).gap(GAP).items_stretch()
-          .children(row.map((a, k) => this.card(c, a, r * cols + k, cardW))))))
+    const rows = this.team();
+    const tasks = this.tasksInProgress(this.agents());
+    const wide = content >= 760;
+    return v_flex().w_full().gap(SPACE[5] + SPACE[2])
+      .child(v_flex()
+        .id("bh-agents-team")
+        .role("list")
+        .w_full()
+        .rounded(RADIUS.card)
+        .bg(c.fill)
+        .border_1()
+        .border_color(c.edge)
+        .overflow_hidden()
+        .children(rows.map((r, i) => this.teamRow(c, r, i, wide, i === rows.length - 1))))
       .when(tasks.length > 0, (el) => el.child(v_flex().gap(SPACE[2])
         .child(sectionLabel(c, `Tasks in progress · ${tasks.length}`))
-        .children(tasks.map((t) => this.taskRow(c, t, list)))))
-      .when(idle.length > 0, (el) => el.child(v_flex().gap(SPACE[2])
-        .child(sectionLabel(c, `Idle · ${idle.length}`))
-        .child(h_flex().flex_wrap().gap(SPACE[2]).children(idle.map((a, k) => this.idleChip(c, a, busy.length + k))))));
+        .children(tasks.map((t) => this.taskRow(c, t, this.agents())))));
   }
 
   /** The threads being worked on (or waiting on you), what needs you first. */
@@ -247,53 +287,61 @@ export class Agents {
     return drawnOrder(groupThreads(this.threads ?? [])).filter((t) => ACTIVE.has(t.state) || live.has(t.id));
   }
 
-  /** The title of the thread an agent is on, or null. */
-  taskTitle(id) {
+  /** The thread an agent is on, or null. */
+  taskOf(id) {
     if (!id) return null;
-    return (this.threads ?? []).find((t) => t.id === id) ?? { id, title: id, state: "working" };
+    return (this.threads ?? []).find((t) => t.id === id) ?? null;
   }
 
-  /** An agent at work: who, what it is doing now, the task it is on, and its harness. */
-  card(c, a, i, w) {
-    const state = STATE[a?.state] ? a.state : "idle";
-    const name = String(a?.name ?? "Agent");
+  /**
+   * One agent on one 36px line: its name in its colour, its state (the working cycle and verb while
+   * it works), what it is doing (a command in the mono face), and, when wide, its task and harness.
+   * Idle and not-started agents are drawn quieter, so the ones at work stand out.
+   */
+  teamRow(c, r, i, wide, last) {
+    const state = STATE[r.state] ? r.state : "idle";
     const picked = i === this.pick;
-    const task = this.taskTitle(a?.task);
-    const when = ago(a?.at);
-    const doing = a?.summary && a.summary !== "Working" ? String(a.summary) : STATE[state].word;
-    const meta = [a?.harness, when].filter(Boolean).join(" · ");
+    const quiet = !r.running || state === "idle";
+    const doing = doingOf(r);
+    const task = this.taskOf(r.task);
+    const meta = r.running ? [r.harness, ago(r.at)].filter(Boolean).join(" · ") : "";
+    const mono = monoFont();
+    const status = !r.running
+      ? div().flex_none().w(STATUS_W).text_size(TYPE_SCALE.metadata).text_color(c.textMuted).child("Ready")
+      : state === "working"
+        ? div().flex_none().w(STATUS_W).overflow_hidden().child(agentStateMark(c, r, state, `bh-agent-activity-${String(r.address ?? i)}`))
+        : div().flex_none().w(STATUS_W).text_size(TYPE_SCALE.metadata).text_color(state === "idle" ? c.textMuted : stateTone(c, state)).child(STATE[state].word);
     return clickable(
-      v_flex()
+      h_flex()
         .role("list_item")
-        .accessibility_label(`${name}: ${doing}`)
+        .accessibility_label(`${r.label}: ${r.running ? STATE[state].word : "ready"}`)
         .aria_selected(picked)
-        .w(w)
-        .flex_none()
-        .p(SPACE[4])
-        .gap(SPACE[3])
-        .rounded(RADIUS.card)
-        .bg(picked ? c.hover : c.fill)
-        .border_1()
-        .border_color(state === "needsYou" ? stateTone(c, "needsYou") : c.edge)
-        .on_click(() => a?.address && openTerminal(a.address))
-        .child(h_flex().gap(SPACE[3]).items_center()
-          .child(div().flex_1().min_w(0).truncate().text_size(TYPE_SCALE.title).font_semibold().text_color(mentionTone(c, name)).child(name))
-          .child(agentStateMark(c, a, state, `bh-agent-activity-${String(a?.address ?? i)}`)))
-        .child(div().h(LINE.md * 2).overflow_hidden().text_size(TYPE_SCALE.body).line_height(`${LINE.md}px`).text_color(c.textPrimary).child(doing))
-        .child(div().h(1).w_full().bg(c.edge))
-        .child(task
-          ? clickable(h_flex().role("link").gap(SPACE[2]).items_center().rounded(SIZE.nested)
+        .w_full()
+        .h(ROW_H)
+        .px(SPACE[4])
+        .gap(SPACE[4])
+        .items_center()
+        .when(!last, (el) => el.border_b(1).border_color(c.edge))
+        .when(picked, (el) => el.bg(c.hover))
+        .on_click(() => r.address && openTerminal(r.address))
+        .child(div().flex_none().w(NAME_W).truncate().text_size(TYPE_SCALE.body).font_semibold().text_color(mentionTone(c, r.label)).opacity(quiet ? 0.6 : 1).child(r.label))
+        .child(status)
+        .child(div().flex_1().min_w(0).truncate().text_size(TYPE_SCALE.metadata)
+          .text_color(quiet ? c.textMuted : c.textSecondary)
+          .when(Boolean(doing.command && mono), (el) => el.font_family(mono))
+          .child(doing.command ? `$ ${doing.command}` : doing.text))
+        .when(wide, (el) => el.child(task
+          ? clickable(div().role("link").flex_none().w(TASK_W).truncate().text_size(TYPE_SCALE.metadata).font_medium().text_color(threadTone(c, task.state))
             .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
             .on_click((_e, cx) => {
               cx.stop_propagation();
               openThread(task.id);
             })
-            .child(div().flex_none().text_size(TYPE_SCALE.metadata).text_color(c.textMuted).child("On"))
-            .child(div().flex_1().min_w(0).truncate().text_size(TYPE_SCALE.body).font_medium().text_color(threadTone(c, task.state)).child(task.title)), c, `bh-agent-task-${String(a?.address ?? i)}`, { edge: true })
-          : div().text_size(TYPE_SCALE.metadata).text_color(c.textMuted).child("Not on a task"))
-        .when(Boolean(meta), (el) => el.child(div().truncate().text_size(TYPE_SCALE.metadata).text_color(c.textMuted).child(meta))),
+            .child(task.title), c, `bh-agent-task-${String(r.address ?? i)}`, { edge: true })
+          : div().flex_none().w(TASK_W)))
+        .when(wide, (el) => el.child(div().flex_none().w(META_W).truncate().text_right().text_size(TYPE_SCALE.metadata).text_color(c.textMuted).child(meta))),
       c,
-      `bh-agent-card-${String(a?.address ?? i)}`,
+      `bh-agent-row-${String(r.address ?? r.label)}`,
       { fill: c.hover, edge: true },
     );
   }
@@ -320,31 +368,6 @@ export class Agents {
       c,
       `bh-agents-task-${t.id}`,
       { fill: c.hover },
-    );
-  }
-
-  /** An idle agent, by name: a click opens its terminal. */
-  idleChip(c, a, i) {
-    const name = String(a?.name ?? "Agent");
-    return clickable(
-      div()
-        .role("link")
-        .accessibility_label(`${name}: idle`)
-        .h(CONTROL)
-        .px(SPACE[4])
-        .flex()
-        .items_center()
-        .rounded(SIZE.control)
-        .bg(i === this.pick ? c.hover : c.fill)
-        .border_1()
-        .border_color(c.edge)
-        .text_size(TYPE_SCALE.body)
-        .text_color(mentionTone(c, name))
-        .on_click(() => a?.address && openTerminal(a.address))
-        .child(name),
-      c,
-      `bh-agent-idle-${String(a?.address ?? i)}`,
-      { fill: c.hover, edge: true },
     );
   }
 }
