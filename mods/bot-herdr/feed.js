@@ -109,6 +109,28 @@ export function groupChildren(list, isChild) {
   return out;
 }
 
+/**
+ * Whether an entry folds into a thread: `isChild` says it is a child's reply, but a reply from an
+ * agent your last message was to is a conversation and stays in the feed. Call it in feed order.
+ */
+export function threadFilter(isChild) {
+  let to = new Set();
+  return (e) => {
+    if (e?.kind === "me") to = new Set((e.to ?? []).map(String));
+    return Boolean(isChild(e)) && !to.has(String(e?.from?.name ?? ""));
+  };
+}
+
+/** A thread's messages oldest first: each child reply, then your replies to it, by time. */
+export function threadMessages(children) {
+  const out = [];
+  for (const k of children ?? []) {
+    out.push({ id: k.id, mine: false, at: Number(k.at ?? 0), kid: k });
+    for (const x of k.comments ?? []) out.push({ id: `${k.id}-${x.id}`, mine: true, at: Number(x.at ?? 0), kid: k, text: x.text });
+  }
+  return out.sort((a, b) => a.at - b.at);
+}
+
 let entrySeq = 0;
 
 /** Adds an entry, dropping the oldest beyond KEEP. */

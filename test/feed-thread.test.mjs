@@ -3,7 +3,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fileKey, logEntries, logNew, groupChildren, replyFile } from "../mods/bot-herdr/feed.js";
+import { fileKey, logEntries, logNew, groupChildren, replyFile, threadFilter, threadMessages } from "../mods/bot-herdr/feed.js";
 
 const line = (at, text, name = "Dev") => JSON.stringify({ at, name, text });
 const LOG = [
@@ -78,4 +78,24 @@ test("feed groups: nothing to fold comes back as it was", () => {
   assert.deepEqual(groupChildren(list, child), list);
   assert.deepEqual(groupChildren([], child), []);
   assert.deepEqual(groupChildren(null, child), []);
+});
+
+test("feed groups: a reply from the agent your last message was to stays in the feed, not a thread", () => {
+  const list = [
+    { ...entry("m1", "You", "me"), to: ["Design"] },
+    entry("g1", "Design"),
+    entry("d1", "Dev"),
+    { ...entry("m2", "You", "me"), to: ["Orchestrator"] },
+    entry("g2", "Design"),
+  ];
+  const out = groupChildren(list, threadFilter(child));
+  assert.deepEqual(out.map((e) => e.id), ["m1", "g1", "kids-d1", "m2", "kids-g2"]);
+});
+
+test("feed threads: your replies sit after the child reply they answer, oldest first", () => {
+  const kids = [
+    { id: "d1", at: 10, comments: [{ id: "c1", text: "why?", at: 30 }] },
+    { id: "d2", at: 20 },
+  ];
+  assert.deepEqual(threadMessages(kids).map((m) => [m.id, m.mine]), [["d1", false], ["d2", false], ["d1-c1", true]]);
 });

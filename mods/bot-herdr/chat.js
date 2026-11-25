@@ -21,6 +21,7 @@ import {
   replyFile, replyBody, push, shown, scrollBy, clampScroll, scrollOnAdd, resolveSpace, workerSignature,
   shouldSuppressSilent, isDuplicateMd, isNew, isHandled, outcome, clock, segments, fold, linkFiles, linkTasks,
   taskTarget, addComment, editComment, resolveComment, deleteComment, fileKey, logNew, groupChildren, entryName,
+  threadFilter, threadMessages,
 } from "./feed.js";
 import { openFile, openLink } from "./viewer.js";
 import { projectDir } from "./bh.js";
@@ -33,9 +34,8 @@ import { commentRow } from "./plandoc.js";
 import { openLightbox } from "./lightbox.js";
 import { OpenQuestions, publishCounts } from "./questions.js";
 
-/** An agent's round initial, in its hue: a folded child row's badge. `size` is the circle's. */
-function agentBadge(c, name, size = CONTROL) {
-  const tone = agentInk(c, name);
+/** An agent's round initial, in its hue (or `tone`): a thread's badge. `size` is the circle's. */
+function agentBadge(c, name, size = CONTROL, tone = agentInk(c, name)) {
   return div()
     .flex_none()
     .size(size)
@@ -219,6 +219,9 @@ export class Chat {
     this.pendingIds = new Set(); // optimistically sent message ids muted until the engine acks them
     this.commenting = null; // the reply with its comment box open: { entry, edit: cid | null }
     this.commentBoxes = new Map(); // agent name → its comment box (a placeholder is fixed when made)
+    this.threadTo = new Map(); // thread id → the child reply its reply box answers (picked with Reply)
+    this.threadBoxes = new Map(); // thread id → its reply box (made when the thread opens, never while drawing)
+    this.threadItems = new Map(); // thread id → the thread as last drawn (so Send finds the child it answers)
     this.typingCount = 0; // focused reply comment boxes (so view-local keys stand down)
     this.composer = new Composer({
       sent: (message, cx) => this.sent(message, cx),
@@ -857,7 +860,7 @@ export class Chat {
     const at = this.feedCache;
     if (at && at.space === space && at.entries === this.entries && at.last === lastId(this.entries) && sameAddresses(at.byAddress, byAddress)) return at.items;
     const mine = this.entries.filter((x) => (x.space ?? null) === (space ?? null));
-    const items = groupChildren(mine, (e) => this.childEntry(e, byAddress));
+    const items = groupChildren(mine, threadFilter((e) => this.childEntry(e, byAddress)));
     this.feedCache = { space, entries: this.entries, last: lastId(this.entries), byAddress, items };
     return items;
   }
@@ -1117,43 +1120,45 @@ export class Chat {
       .when(Boolean(e.address), (el) => el.child(this.link(c, `bh-open-${e.id}`, "Open terminal", () => openTerminal(e.address))));
   }
 
-  /** A run of child replies folded into one row: whose they were, how many, and a click that opens them. */
+  /** A thread of child replies, as a chat app draws one: a summary line, opened in place with a reply box. */
   kids(c, e) {
     const open = this.kidsOpen.has(e.id);
     return v_flex()
       .id(`bh-e-${e.id}`)
       .flex_none()
-      .gap(SPACE[3])
+      .gap(SPACE[2])
       .child(this.kidsHead(c, e, open))
       .child(this.kidsBody(c, e, open));
   }
 
-  /** The folded row: the children's badges and names, how many reports, and the chevron. */
-  kidsHead(c, e, open) {
-    const n = e.children.length;
-    const names = [...new Set(e.children.map((k) => k.from?.name ?? "Agent"))].join(", ");
+  /** The thread's summary as plain text: who replied in their role's colour, how many replies, the last one's time, View thread. */
+  kidsHead(c, e, open, team = this.composer.roster()) {
+    const msgs = threadMessages(e.children);
+    const names = [...new Set(e.children.map((k) => k.from?.name ?? "Agent"))];
+    const n = msgs.length;
     return clickable(
       h_flex()
-        .gap(SPACE[2])
+        .self_start()
+        .max_w_full()
+        .gap(SPACE[1])
         .items_center()
-        .px(SPACE[3])
-        .py(SPACE[2])
-        .rounded(SIZE.radius)
-        .bg(c.fill)
-        .border_1()
-        .border_color(c.edge)
+        .px(SPACE[2])
+        .py(SPACE[1])
+        .rounded(SIZE.nested)
+        .accessibility_label(`${open ? "Hide" : "View"} thread: ${n} ${n === 1 ? "reply" : "replies"} from ${names.join(", ")}`)
         .on_click((_ev, cx) => this.openKids(e.id, cx))
-        .children(e.children.slice(0, KID_BADGES).map((k) => agentBadge(c, k.from?.name ?? "Agent", CHIP)))
-        .when(n > KID_BADGES, (el) => el.child(div().text_size(TYPE.xs).text_color(c.faint).child(`+${n - KID_BADGES}`)))
-        .child(div().flex_none().text_size(TYPE.sm).font_medium().text_color(c.ink).child(`${n} child thread${n === 1 ? "" : "s"}`))
-        .child(div().flex_1().min_w(0).truncate().text_size(TYPE.sm).text_color(c.muted).child(`· ${names}`))
+        .children(names.slice(0, KID_BADGES).map((name, i) => div().flex_none().text_size(TYPE.sm).font_medium()
+          .text_color(mentionTone(c, name, team)).child(i < Math.min(names.length, KID_BADGES) - 1 ? `${name},` : name)))
+        .when(names.length > KID_BADGES, (el) => el.child(div().flex_none().text_size(TYPE.sm).text_color(c.muted).child(`+${names.length - KID_BADGES}`)))
+        .child(div().min_w(0).truncate().text_size(TYPE.sm).text_color(c.muted).child(`· ${n} ${n === 1 ? "reply" : "replies"} · Last reply ${clock(msgs[n - 1]?.at)}`))
+        .child(div().flex_none().text_size(TYPE.sm).text_color(c.faint).child(open ? "Hide thread" : "View thread"))
         .child(svg(ICON(open ? "chevron-down" : "chevron-right")).flex_none().size(GLYPH.sm).text_color(c.faint)),
       c,
-      `bh-kids-${e.id}`, { edge: true },
+      `bh-kids-${e.id}`,
     );
   }
 
-  /** The group's reports, in a box whose height grows to what they measured and folds to nothing. */
+  /** The opened thread: its messages behind a rule, then the reply box; the box grows to what they measured. */
   kidsBody(c, e, open) {
     const hKey = heightKey(e);
     return div()
@@ -1162,12 +1167,17 @@ export class Chat {
       .h(open ? this.kidsHeights.get(hKey) || e.children.length * 120 : 0)
       .transition("height", MOTION.row)
       .transition("opacity", MOTION.row)
-      .child(v_flex()
+      .when(open, (el) => el.child(v_flex()
         .id(`bh-kids-body-${e.id}`)
-        .gap(SPACE[3])
+        .ml(SPACE[3])
         .pl(SPACE[4])
+        .pb(SPACE[1])
+        .gap(SPACE[4])
+        .border_l_2()
+        .border_color(c.edge)
         .on_size_change((size, cx) => this.measureKids(hKey, size, cx))
-        .children(e.children.map((k) => this.kidReport(c, k))));
+        .children(threadMessages(e.children).map((m) => this.threadMessage(c, e, m)))
+        .child(this.threadReply(c, e))));
   }
 
   /** Records a group's drawn height, so opening it starts from the size it ends at. */
@@ -1180,24 +1190,43 @@ export class Chat {
 
   openKids(id, cx) {
     if (this.kidsOpen.has(id)) this.kidsOpen.delete(id);
-    else this.kidsOpen.add(id);
+    else {
+      this.kidsOpen.add(id);
+      this.threadBox(id); // input state can't be made during render, so the reply box is made here
+    }
     cx.notify();
   }
 
-  /** One child's report in an opened group: who, when, its first lines and Show all. */
-  kidReport(c, k) {
+  /** One message in a thread: the sender's badge, name and time, the text; a child's has Reply. */
+  threadMessage(c, e, m) {
+    const name = m.mine ? "You" : m.kid.from?.name ?? "Agent";
+    const tone = m.mine ? c.accent : mentionTone(c, name, this.composer.roster());
+    return h_flex()
+      .id(`bh-kid-${m.id}`)
+      .flex_none()
+      .items_start()
+      .gap(SPACE[3])
+      .on_hover((hovered, cx) => this.hover(m.id, hovered, cx))
+      .child(agentBadge(c, name, CONTROL, tone))
+      .child(v_flex().flex_1().min_w(0).gap(SPACE[1])
+        .child(h_flex().gap(SPACE[3]).items_center()
+          .child(div().text_size(TYPE.sm).font_semibold().text_color(tone).child(name))
+          .child(div().text_size(TYPE.xs).text_color(c.faint).child(clock(m.at)))
+          .child(div().flex_1())
+          .when(!m.mine, (el) => el.child(this.link(c, `bh-kid-reply-${m.id}`, "Reply", (_ev, cx) => this.replyTo(e, m.kid, cx), this.hovered === m.id))))
+        .child(m.mine
+          ? div().text_size(TYPE.sm).line_height(`${LINE.sm}px`).text_color(c.ink).child(selectable(`bh-kid-you-${m.id}`, plainMarkdown(m.text)))
+          : this.kidText(c, m.kid)));
+  }
+
+  /** A child's reply: its first lines and Show all, or whole. */
+  kidText(c, k) {
     const kv = kidView(k);
     const open = this.unfolded.has(k.id);
     const md = open || !kv.more
       ? (kv.fullMd ??= linkTasks(linkFiles(kv.text)))
       : (kv.shortMd ??= linkTasks(linkFiles(kv.shortText)));
-    return v_flex()
-      .id(`bh-kid-${k.id}`)
-      .flex_none()
-      .gap(SPACE[1])
-      .child(h_flex().gap(SPACE[3]).items_center()
-        .child(div().text_size(TYPE.sm).font_semibold().text_color(agentInk(c, k.from?.name ?? "Agent")).child(k.from?.name ?? "Agent"))
-        .child(div().text_size(TYPE.xs).text_color(c.faint).child(clock(k.at))))
+    return v_flex().gap(SPACE[1])
       .child(div().text_size(TYPE.sm).line_height(`${LINE.sm}px`)
         .child(TextView.markdown(`bh-kid-md-${k.id}-${open ? "o" : "c"}`, md).selectable(true).on_link_click(openFeedLink)))
       .when(kv.more, (el) => el.child(
@@ -1209,6 +1238,71 @@ export class Chat {
   showKidFull(id, cx) {
     if (this.unfolded.has(id)) this.unfolded.delete(id);
     else this.unfolded.add(id);
+    cx.notify();
+  }
+
+  /** The id under the pointer, so its quiet actions light. */
+  hover(id, hovered, cx) {
+    if (hovered === (this.hovered === id)) return;
+    this.hovered = hovered ? id : null;
+    cx.notify();
+  }
+
+  /** The child the thread's reply box writes to: the one picked with Reply, or the last to reply. */
+  threadKid(e) {
+    const id = this.threadTo.get(e.id);
+    return e.children.find((k) => k.id === id) ?? e.children[e.children.length - 1];
+  }
+
+  /** Points the thread's reply box at one child's reply and puts the cursor there. */
+  replyTo(e, k, cx) {
+    this.threadTo.set(e.id, k.id);
+    this.threadBox(e.id).focus();
+    cx.notify();
+  }
+
+  /** A thread's reply box: Enter sends to the child it answers. Only made in handlers (openKids, replyTo). */
+  threadBox(threadId) {
+    let box = this.threadBoxes.get(threadId);
+    if (!box) {
+      box = InputState.new({ placeholder: "Reply in thread…" });
+      box.on("focus", () => { this.typingCount++; });
+      box.on("blur", () => { this.typingCount = Math.max(0, this.typingCount - 1); });
+      box.on("submit", (_e, cx) => this.sendThread(threadId, cx));
+      this.threadBoxes.set(threadId, box);
+    }
+    return box;
+  }
+
+  /** The foot of an opened thread: your badge, the reply box and Send. */
+  threadReply(c, e) {
+    const k = this.threadKid(e);
+    const box = this.threadBoxes.get(e.id); // made by openKids; never made here, during render
+    if (!box) return div();
+    this.threadItems.set(e.id, e);
+    return h_flex()
+      .flex_none()
+      .gap(SPACE[3])
+      .items_center()
+      .child(agentBadge(c, "You", CONTROL, c.accent))
+      .child(div().flex_1().min_w(0).h(CONTROL).px(SPACE[3]).flex().items_center()
+        .rounded(SIZE.control).bg(c.fill).border_1().border_color(c.edge)
+        .child(Input.new(box).w_full().h_full().text_size(TYPE.sm).text_color(c.ink)))
+      .child(actionButton(c, `bh-kid-send-${e.id}`, null, (_ev, cx) => this.sendThread(e.id, cx), { icon: "send", tone: "quiet", tooltip: `Send to ${k.from?.name ?? "Agent"}` }));
+  }
+
+  /** Your reply in a thread: kept under the child's reply it answers and sent to that child. */
+  sendThread(threadId, cx) {
+    const e = this.threadItems.get(threadId); // the thread as last drawn
+    const kid = e && this.threadKid(e);
+    const k = kid && this.entries.find((x) => x.id === kid.id);
+    const box = this.threadBoxes.get(threadId);
+    const text = box?.value().trim();
+    if (!k || !text) return;
+    box.set_value("");
+    this.setFeed(addComment(this.entries, k.id, text, Date.now()));
+    const quote = String(k.text ?? "").replace(/\s+/g, " ").trim().slice(0, 80);
+    this.tellAuthor(k, `Reply in your thread ("${quote}…"): ${text}`, cx);
     cx.notify();
   }
 
