@@ -152,7 +152,7 @@ test("migrateLayout: the user's window choices are carried, not the redesign's d
   assert.deepEqual(findNode(migrated, "sidebar").size, { px: 300 });
   assert.deepEqual(findNode(migrated, "spaces").size, { weight: 2 });
   assert.deepEqual(findNode(migrated, "topbar").size, { px: 44 });
-  assert.deepEqual(findNode(migrated, "switch").size, { px: 800 });
+  assert.deepEqual(findNode(migrated, "switch").size, findNode(newLayout, "switch").size, "the bar's only child fills it; an old width is not carried");
   assert.deepEqual(findNode(migrated, "panel").size, { px: 420 });
   assert.deepEqual(findNode(migrated, "status").size, { px: 30 });
   assert.deepEqual(migrated.theme, { light: "bot-herdr-light", dark: "bot-herdr-dark" });

@@ -285,7 +285,8 @@ const APPEARANCE_KEYS = ["theme", "titlebar", "toast", "traffic_lights", "backgr
 
 /** Nodes whose geometry is the person's (the rail, the panel, the bars), not the redesign's. */
 // ("agents" is left out: it named a sidebar block once and names a page now.)
-const SHARED_SIZES = ["sidebar", "brand", "sidebar-lists", "spaces", "sidebar-footer", "topbar", "switch", "panel", "status"];
+// Not "switch": it is the top bar's only child now and fills it, so an old width would pin it short.
+const SHARED_SIZES = ["sidebar", "brand", "sidebar-lists", "spaces", "sidebar-footer", "topbar", "panel", "status"];
 
 /** The old destinations the redesign replaces: its new pages hold what these held. */
 const LEGACY_PAGES = new Set(["home", "chat", "tasks", "plans", "issues", "knowledge", "learning", "scripts", "metrics", "usage", "settings", "approvals", "review", "files", "changes", "agents", "library", "terminals"]);
