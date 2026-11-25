@@ -27,8 +27,7 @@ import { alpha } from "./working.js";
 import { mentionTone } from "./indicators.js";
 import { MarkdownEditor } from "./mdedit.js";
 import { openNoteForm, NOTE_ADDED } from "./noteform.js";
-import { Composer } from "./composer.js";
-import { messageText } from "./route.js";
+import { pageComposer, resetComposer } from "./composer.js";
 import { mockupFile, openInBrowser } from "./media.js";
 import { openLightbox } from "./lightbox.js";
 import { openFile, openLink } from "./viewer.js";
@@ -126,31 +125,6 @@ const day = (iso) => {
 };
 
 const firstLine = (r) => (r.stderr || r.stdout || "").trim().split("\n")[0];
-
-/** A composer for a page's box: `onSend(text, cx)` gets what was written, with each attached file's path on a line of its own as the chat sends them, after the box is cleared; `onAnswer(q, answers, cx)` gets what was answered on its question cards. */
-function pageComposer(given, cx, { minRows, placeholder, onSend, onAnswer }) {
-  const comp = new Composer({});
-  comp.init(given, cx);
-  comp.minRows = minRows;
-  comp.placeholder = placeholder;
-  comp.hooks.answered = onAnswer ? (q, answers, cx) => onAnswer(q, answers, cx) : undefined;
-  comp.send = (cx) => {
-    const text = messageText(comp.input.value().trim(), comp.files.map((f) => f.path));
-    if (comp.sending || !text) return;
-    resetComposer(comp);
-    cx.notify();
-    onSend(text, cx);
-  };
-  return comp;
-}
-
-/** Clears a composer's draft: its text, its files and the pane it had open. */
-function resetComposer(comp) {
-  comp.files = [];
-  comp.input.set_value("");
-  comp.text = "";
-  comp.pane = null;
-}
 
 /** Which state a task's status draws as (look.js STATE has the one glyph and tone per state). */
 const STATUS_STATE = { done: "done", active: "working", now: "working", paused: "paused", blocked: "needsYou", abandoned: "idle", skipped: "idle" };
@@ -378,8 +352,10 @@ export class Work {
     this.comment.on("submit", (_e, cx) => this.sendComment(cx));
     // A comment on one line of a plan, or one step of a task: { kind: "plan" | "task", id, at }.
     this.commenting = null;
-    this.inline = track(InputState.new({ placeholder: "Comment" }));
-    this.inline.on("submit", (_e, cx) => this.sendInline(cx));
+    this.inlineComposer = pageComposer(given, cx, { minRows: 2, placeholder: "Comment", onSend: (text, cx) => this.sendInline(cx, text) });
+    // A second focus/blur handler replaces the first: keep the composer's own and count typing too.
+    this.inlineComposer.input.on("focus", (_e, cx) => { this.typingCount++; this.inlineComposer.setFocused(true, cx); });
+    this.inlineComposer.input.on("blur", (_e, cx) => { this.typingCount = Math.max(0, this.typingCount - 1); this.inlineComposer.setFocused(false, cx); });
     this.editor = new MarkdownEditor({ value: "", placeholder: "The file itself, as Markdown" });
     this.editor.on("change", (_value, cx) => cx.notify());
     this.knowSearch = track(InputState.new({ placeholder: "Search notes" }));
@@ -765,16 +741,17 @@ export class Work {
   startInline(kind, id, at, cx) {
     const same = this.commenting && !this.commenting.edit && this.commenting.kind === kind && this.commenting.id === id && this.commenting.at === at;
     this.commenting = same ? null : { kind, id, at };
-    this.inline.set_value("");
-    if (!same) this.inline.focus();
+    resetComposer(this.inlineComposer);
+    if (!same) this.inlineComposer.focus();
     cx.notify();
   }
 
   /** Edit: the comment's text goes into the inline box under it; sending changes it. */
   editInline(kind, id, at, cid, text, cx) {
     this.commenting = { kind, id, at, edit: cid };
-    this.inline.set_value(text);
-    this.inline.focus();
+    resetComposer(this.inlineComposer);
+    this.inlineComposer.input.set_value(text);
+    this.inlineComposer.focus();
     cx.notify();
   }
 
@@ -798,11 +775,10 @@ export class Work {
     };
   }
 
-  sendInline(cx) {
-    const text = this.inline.value().trim();
+  /** `text` comes from the inline composer, already cleared: the comment, then each attached file's path on its own line. */
+  sendInline(cx, text) {
     const where = this.commenting;
     if (!text || !where) return;
-    this.inline.set_value("");
     this.commenting = null;
     if (where.edit && where.kind !== "knowledge") {
       const args = [where.kind, "comment", where.id, "--edit", where.edit, "--data", enc(text)];
@@ -1339,6 +1315,7 @@ export class Work {
     if (!open) return this.pickPrompt(c, width, height);
     const detail = this.taskDetailId === open.id && this.taskDetail ? this.taskDetail : open;
     const inner = narrow ? width : Math.max(0, width - SPACE[5]);
+    this.inlineW = inner; // a step comment's box sits in this column
     const targetTitle = this.commentStep ? `step ${this.commentStep.n}` : (detail.title || detail.id);
     this.taskComposer.placeholder = `Comment on ${targetTitle}…`;
     return v_flex()
@@ -2157,20 +2134,26 @@ export class Work {
     return actions.editing ? v_flex().flex_none().child(row).child(this.inlineBox(c).ml(indent).mr(SPACE[3])) : row;
   }
 
-  /** The single-line box for a comment under a step, a task, or a knowledge entry, with Comment and Cancel. */
+  /**
+   * The comment box under a step, a task, or a knowledge entry: the chat's composer (it grows, takes
+   * files), with Cancel above it. `this.inlineW` is the width of the column it sits in; the
+   * composer takes its gutters off that, which leaves room for the card's padding and indent.
+   */
   inlineBox(c) {
-    return h_flex()
+    const pageW = this.inlineW ?? this.width;
+    const w = Math.max(320, Math.min(SIZE.maxWidth, pageW - SIZE.gutter * 2));
+    return v_flex()
       .flex_none()
       .mt(SPACE[2])
       .mb(SPACE[3])
-      .gap(SPACE[3])
-      .items_center()
-      .child(this.inputBox(c, this.inline))
-      .child(actionButton(c, "bh-inline-send", "Comment", (_e, cx) => this.sendInline(cx), { tone: "primary" }))
-      .child(actionButton(c, "bh-inline-cancel", "Cancel", (_e, cx) => {
+      .gap(SPACE[2])
+      .items_start()
+      .child(h_flex().w(w).justify_end().child(actionButton(c, "bh-inline-cancel", "Cancel", (_e, cx) => {
         this.commenting = null;
+        resetComposer(this.inlineComposer);
         cx.notify();
-      }));
+      }, { tone: "quiet" })))
+      .child(this.inlineComposer.render(this.cx, pageW, this.height));
   }
 
   inputBox(c, state) {
@@ -2709,6 +2692,7 @@ export class Work {
       .filter((card) => !q || `${card.agent} ${card.section ?? ""} ${card.title} ${card.text}`.toLowerCase().includes(q));
     const cols = width >= 900 ? 3 : width >= 620 ? 2 : 1;
     const columns = Array.from({ length: cols }, () => []);
+    this.inlineW = (width - SPACE[4] * (cols - 1)) / cols; // a note's box sits in one card column
     cards.forEach((card, i) => columns[i % cols].push(card));
     const bodyH = Math.max(300, this.height - 170);
     if (this.editing) {

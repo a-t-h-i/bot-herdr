@@ -3,7 +3,7 @@
 // The header holds Start task, Archive, Discard and Close (Esc); the body scrolls under it.
 
 import { div, svg } from "gpui-kit";
-import { v_flex, h_flex, TextareaState, Textarea, TextView } from "gpui-base";
+import { v_flex, h_flex, TextView } from "gpui-base";
 import { props, settings, closeOverlay, openOverlay } from "herdr";
 import { SIZE, ICON, TYPE, LINE, SPACE, CONTROL, PIP, DOT, CHIP, HAIR, GLYPH, SCRIM, MOTION, isLight, clickable } from "./look.js";
 import { actionButton } from "./button.js";
@@ -12,6 +12,7 @@ import { colors } from "./theme.js";
 import { blocks } from "./doc.js";
 import { bh, enc, projectDir } from "./bh.js";
 import { sendFromChat, startPlanGoal, startPlanTask } from "./pages.js";
+import { pageComposer, resetComposer } from "./composer.js";
 import { GOAL_START_PRESETS } from "./tasksview.js";
 
 /** Compact `#12` chips for bundled GitHub issues on a plan or task. */
@@ -192,8 +193,8 @@ export class PlanDoc {
     this.p = given ?? props() ?? {};
     this.plan = this.p.plan ?? null;
     this.width = 0; // the window's width, as it is drawn
+    this.height = 0; // and its height
     this.commenting = null; // { line, edit: comment id | null }
-    this.focusing = false; // the comment's text area has the keyboard: its edge is the accent
     this.armed = null; // Discard, once clicked, waits for a second click
     this.startOpen = false; // Compact Start ▾ menu popover
     this.problem = null;
@@ -201,22 +202,11 @@ export class PlanDoc {
     this.in = false; // the sheet has slid in (the first frame draws it off the right edge)
     this.sized = false; // the window is measured: the slide can start
     this.leaving = false; // Close: the sheet slides out, then the overlay goes
-    this.inline = TextareaState.new({ placeholder: "Your comment", rows: 2 });
-    // Enter sends; Shift+Enter is a new line (as the composer does).
-    this.inline.on("submit", (e, cx) => {
-      if (e?.shift || e?.secondary) return;
-      this.sendInline(cx);
-    });
-    this.inline.on("focus", (_e, cx) => this.focusChanged(true, cx));
-    this.inline.on("blur", (_e, cx) => this.focusChanged(false, cx));
+    // The chat's composer: it grows as you type and takes files (attach, paste, drop).
+    this.inlineComposer = pageComposer(given, cx, { minRows: 2, placeholder: "Your comment", onSend: (text, cx) => this.sendInline(cx, text) });
     this.handle = cx.focus_handle();
     this.handle.focus();
     this.reload(cx);
-  }
-
-  focusChanged(on, cx) {
-    this.focusing = on;
-    cx.notify();
   }
 
   /** Close: the sheet slides back out, then the overlay goes (Esc and the scrim take this path too). */
@@ -259,34 +249,33 @@ export class PlanDoc {
   startInline(line, cx) {
     const same = this.commenting?.line === line && !this.commenting.edit;
     this.commenting = same ? null : { line, edit: null };
-    this.inline.set_value("");
-    if (!same) this.inline.focus();
+    resetComposer(this.inlineComposer);
+    if (!same) this.inlineComposer.focus();
     cx.notify();
   }
 
   cancelComment(cx) {
     this.commenting = null;
-    this.inline.set_value("");
+    resetComposer(this.inlineComposer);
     cx.notify();
   }
 
   /** A click on the page behind the sheet: an empty comment box goes first, then the sheet; a box
-   *  with text stays, so a stray click never throws away what was typed. */
+   *  with text or files stays, so a stray click never throws away what was written. */
   scrimClick(cx) {
     if (this.startOpen) {
       this.startOpen = false;
       return cx.notify();
     }
     if (!this.commenting) return this.closeSelf(cx);
-    if (!this.inline.value().trim()) this.cancelComment(cx);
+    if (!this.inlineComposer.input.value().trim() && !this.inlineComposer.files.length) this.cancelComment(cx);
   }
 
-  sendInline(cx) {
-    const text = this.inline.value().trim();
+  /** `text` comes from the composer, already cleared: the comment, then each attached file's path on its own line. */
+  sendInline(cx, text) {
     const where = this.commenting;
     const plan = this.plan;
     if (!text || !where || !plan) return;
-    this.inline.set_value("");
     this.commenting = null;
     this.act(["plan", "comment", plan.id, "--line", String(where.line), "--data", enc(text)], cx, (r) => {
       if (r.code === 0) sendFromChat(`The user commented on line ${where.line} of plan ${plan.id} ("${plan.title}"): ${text}\n\nRevise the draft (bh plan show ${plan.id}) or say why it needs no change.`);
@@ -302,8 +291,9 @@ export class PlanDoc {
       reopen: (cx) => this.act(["plan", "comment", this.plan.id, "--edit", x.id, "--data", enc(x.text)], cx),
       edit: (cx) => {
         this.commenting = { line: x.line ?? null, edit: x.id };
-        this.inline.set_value(x.text ?? "");
-        this.inline.focus();
+        resetComposer(this.inlineComposer);
+        this.inlineComposer.input.set_value(x.text ?? "");
+        this.inlineComposer.focus();
         cx.notify();
       },
       delete: (cx) => this.act(["plan", "comment", this.plan.id, "--delete", x.id], cx),
@@ -331,7 +321,8 @@ export class PlanDoc {
     return Math.max(SPACE[4], this.width - this.sheetW() - SPACE[4]);
   }
 
-  render() {
+  render(cx) {
+    this.cx = cx;
     const c = colors();
     const p = this.plan;
     if (!p) return div().size_full().bg(c.ground).child(div().p(SPACE[5]).text_size(TYPE.md).text_color(c.muted).child("This plan is gone."));
@@ -342,6 +333,7 @@ export class PlanDoc {
       .on_key_down((e, cx) => this.onKey(e, cx))
       .on_size_change((size, cx) => {
         this.width = size.width / (Number(settings().zoom) || 1);
+        this.height = size.height / (Number(settings().zoom) || 1);
         if (!this.sized) this.slideIn(cx);
         cx.notify();
       })
@@ -587,7 +579,7 @@ export class PlanDoc {
     return actions.editing ? v_flex().flex_none().child(row).child(this.commentBox(c).mt(SPACE[2])) : row;
   }
 
-  /** The box for a comment: its label and a cancel, the text area (accent edge while it has the keyboard), the keys, and Add comment. */
+  /** The box for a comment: its label and a cancel over the composer (its send key adds the comment). */
   commentBox(c) {
     return v_flex()
       .flex_none()
@@ -598,10 +590,7 @@ export class PlanDoc {
       .border_1()
       .border_color(c.edge)
       .child(this.commentHead(c))
-      .child(this.commentField(c))
-      .child(h_flex().gap(SPACE[3]).items_center()
-        .child(div().flex_1().min_w(0).text_size(TYPE.xs).text_color(c.muted).child("Enter adds the comment · Esc cancels"))
-        .child(actionButton(c, "bh-plan-doc-send", "Add comment", (_e, cx) => this.sendInline(cx), { tone: "primary", icon: "send" })));
+      .child(this.commentField(c));
   }
 
   /** "Your comment" and the close that cancels it. */
@@ -611,14 +600,13 @@ export class PlanDoc {
       .child(actionButton(c, "bh-plan-doc-cancel", null, (_e, cx) => this.cancelComment(cx), { icon: "x", tone: "quiet", tooltip: "Cancel" }));
   }
 
-  /** The text area: its edge is the accent while it has the keyboard. */
-  commentField(c) {
-    return div()
-      .rounded(SIZE.control)
-      .bg(c.fill)
-      .border_1()
-      .border_color(this.focusing ? c.accent : c.edge)
-      .p(SPACE[2])
-      .child(Textarea.new(this.inline).w_full().h(LINE.md * 2).text_size(TYPE.md).text_color(c.ink));
+  /**
+   * The composer, as wide as the box's content: the sheet less the body's and the box's padding and
+   * edges (render takes its gutters off what it is given, so they go back on). Its panes (attach,
+   * files) may grow up to the sheet's height.
+   */
+  commentField(_c) {
+    const content = this.sheetW() - SPACE[5] * 2 - SPACE[3] * 2 - 2;
+    return this.inlineComposer.render(this.cx, content + SIZE.gutter * 2, Math.max(0, this.height - SPACE[4] * 2));
   }
 }

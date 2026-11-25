@@ -2670,3 +2670,32 @@ export class Composer {
     );
   }
 }
+
+/** A composer for a page's box: `onSend(text, cx)` gets what was written, with each attached file's path on a line of its own as the chat sends them, after the box is cleared; `onAnswer(q, answers, cx)` gets what was answered on its question cards.
+ * @param {any} given
+ * @param {any} cx
+ * @param {{ minRows?: number, placeholder?: string, onSend: (text: string, cx: any) => void, onAnswer?: (q: any, answers: any, cx: any) => void }} opts
+ */
+export function pageComposer(given, cx, { minRows, placeholder, onSend, onAnswer }) {
+  const comp = new Composer({});
+  comp.init(given, cx);
+  comp.minRows = minRows;
+  comp.placeholder = placeholder;
+  comp.hooks.answered = onAnswer ? (q, answers, cx) => onAnswer(q, answers, cx) : undefined;
+  comp.send = (cx) => {
+    const text = messageText(comp.input.value().trim(), comp.files.map((f) => f.path));
+    if (comp.sending || !text) return;
+    resetComposer(comp);
+    cx.notify();
+    onSend(text, cx);
+  };
+  return comp;
+}
+
+/** Clears a composer's draft: its text, its files and the pane it had open. */
+export function resetComposer(comp) {
+  comp.files = [];
+  comp.input.set_value("");
+  comp.text = "";
+  comp.pane = null;
+}
