@@ -53,14 +53,6 @@ const SECTIONS = [
   { id: "resilience", label: "Resilience", icon: "shield-check" },
   { id: "harnesses", label: "Harnesses", icon: "page-terminals" },
 ];
-/** herdr's own Settings sections (its app screen, opened at that section): one Settings to look in. */
-const HERDR_SECTIONS = [
-  { id: "look", label: "Look" },
-  { id: "machines", label: "Machines" },
-  { id: "alerts", label: "Alerts" },
-  { id: "updates", label: "Updates" },
-  { id: "privacy", label: "Privacy" },
-];
 const SECTION_KEY = "bot-herdr.settings-section";
 /** The tab last open, kept for next time (a convenience: it may not be kept). */
 const remembered = () => {
@@ -757,11 +749,11 @@ export class Settings {
     const space = currentSpace()?.id ?? null;
     const rows = [];
     for (let i = 0; i < list.length; i += cols) rows.push(list.slice(i, i + cols));
-    // herdr's own settings sections sit at the end of the same row, so there is one Settings to look in.
+    // herdr's own settings: one button at the end of the same row, so there is one Settings to look in.
     const tabs = h_flex().flex_1().min_w(0).flex_wrap().items_center().gap(SPACE[3])
       .child(this.tabs(c, section))
       .child(div().flex_1())
-      .child(this.herdrTabs(c));
+      .child(actionButton(c, "bh-settings-app", "Herdr settings", () => run("app.settings"), { tone: "quiet", tooltip: "herdr's own settings: look, machines, alerts, updates, privacy" }));
     // Usage is the Metrics view: a page of its own under the tabs, not a card in the column.
     const body = section === "usage"
       ? v_flex().size_full().items_center()
@@ -832,17 +824,6 @@ export class Settings {
         cx.notify();
       },
     });
-  }
-
-  /** herdr's own settings, one entry per section: each opens herdr's Settings at that section. */
-  herdrTabs(c) {
-    return h_flex().items_center().gap(SPACE[2])
-      .child(div().text_size(TYPE.xs).text_color(c.muted).child("Herdr"))
-      .child(segmented(c, {
-        id: "bh-settings-herdr",
-        items: HERDR_SECTIONS.map((x) => ({ ...x, on: false })),
-        onPick: (id) => run("app.settings", { section: id }),
-      }));
   }
 
   /** Settings › Usage: the Metrics view (hero numbers, details on demand), quiet under the tabs. */
