@@ -7,7 +7,7 @@
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { agents as reported, terminals, layout, run, settings, shared, setShared } from "herdr";
-import { SIZE, TYPE_SCALE, LINE, SPACE, CONTROL, RADIUS, STATE, stateTone, threadTone, clickable } from "./look.js";
+import { SIZE, TYPE_SCALE, LINE, SPACE, CONTROL, RADIUS, STATE, stateTone, threadTone, clickable, baseName, reducedMotion } from "./look.js";
 import { segmented, stateView } from "./switch.js";
 import { actionButton } from "./button.js";
 import { colors } from "./theme.js";
@@ -15,16 +15,27 @@ import { viewShown, openTerminal, openThread, showAgentsTab, showPage, showSetti
 import { threadRows, groupThreads, drawnOrder } from "./threadview.js";
 import { ROSTER_KEY, roster, roleOf, slug } from "./roster.js";
 import { sectionLabel } from "./plandoc.js";
-import { bhJson, projectDir } from "./bh.js";
+import { bh, bhJson, projectDir } from "./bh.js";
 import { mentionTone, agentStateMark } from "./indicators.js";
-import { count, ago } from "./numbers.js";
+import { count, ago, compact } from "./numbers.js";
 import { appKeyAction, isChord, keyName, nextPick, opensRow } from "./rowkeys.js";
 import { KEYMAP_OPEN } from "./keymap.js";
 import { OPEN_COUNTS, HOME_NEEDS, needsYouCount, needsYouIds, withHomeCount, isTiledLayout, withTiledPanes, tileAddresses } from "./signals.js";
 import { PeekDrawer, PEEK_WIDTH } from "./peek.js";
+import { graphCard, detailPanel, PANEL_W } from "./agentsgraph.js";
+import { chainOf, graphLayout } from "./agentsgraphlayout.js";
 
 const REFRESH_MS = 10000;
 const MAX = 1140; // the work pages' widest column
+const GRAPH_MAX = 1600; // the graph view's widest column: the chains need the room
+/** The shared (persisted) key of the List | Graph choice; Graph when unset. */
+const VIEW_KEY = "bot-herdr.agents-view";
+/** Under this page width the panel drops below the graph and the chains stack. */
+const NARROW = 900;
+/** The travelling dots' tick. */
+const DOT_MS = 50;
+/** At most this many tasks have their detail (steps) read for the graph. */
+const DETAIL_MAX = 4;
 const GAP = SPACE[4];
 /** The thread states that count as being worked on. */
 const ACTIVE = new Set(["working", "needsYou", "review"]);
@@ -78,6 +89,10 @@ export class Agents {
     this.shown = false;
     this.width = 900;
     this.pick = 0; // the row Enter opens
+    this.panel = true; // the graph's detail panel; Esc or its × closes it, a pick opens it again
+    this.tick = 0; // the travelling dots' phase
+    this.ticker = null; // the dots' timer, running only while the graph shows work moving
+    this.details = new Map(); // task id → its bh task show answer (steps for the pills)
     this.handle = cx.focus_handle();
     if (this.sub === "terminals") return;
     this.peek = new PeekDrawer(); // Space opens it for the picked agent: harness, model, output, reply
@@ -94,6 +109,7 @@ export class Agents {
     cx.spawn(async (cx) => {
       const [got, threads] = await Promise.all([bhJson(["home"], { cwd: projectDir() }), bhJson(["thread", "list"], { cwd: projectDir() })]);
       if (threads) this.threads = threadRows(threads);
+      if (got && this.view() === "graph") await this.loadDetails(got);
       this.busy = false;
       this.loading = false;
       this.failed = !got;
@@ -105,6 +121,18 @@ export class Agents {
       }
       cx.notify();
     });
+  }
+
+  /** The steps of the tasks in progress, for the graph's pills and done-when line. */
+  async loadDetails(home) {
+    const ids = this.tasksInProgress(home?.fleet?.agents ?? []).filter((t) => t.kind === "task").slice(0, DETAIL_MAX).map((t) => t.id);
+    const got = await Promise.all(ids.map((id) => bhJson(["task", "show", id], { cwd: projectDir() })));
+    this.details = new Map(ids.map((id, i) => [id, got[i]?.task ?? got[i]]).filter(([, d]) => d));
+  }
+
+  /** List or Graph, as last chosen. */
+  view() {
+    return shared(VIEW_KEY) === "list" ? "list" : "graph";
   }
 
   /** The agents the page draws: the ones at work (or waiting on you) first, then the idle ones. */
@@ -130,10 +158,16 @@ export class Agents {
     if (isChord(e)) return;
     if (this.peek?.keys(e, cx)) return cx.stop_propagation();
     if (this.peek?.typing) return;
+    if (keyName(e) === "escape" && this.view() === "graph" && this.panel) {
+      this.panel = false;
+      cx.stop_propagation();
+      return cx.notify();
+    }
     const list = this.team();
     const next = nextPick(keyName(e), this.pick, list.length);
     if (next >= 0 && next !== this.pick) {
       this.pick = next;
+      this.panel = true;
       cx.stop_propagation();
       cx.notify();
       return;
@@ -151,7 +185,8 @@ export class Agents {
   render(cx) {
     const c = colors();
     const peeking = Boolean(this.peek?.isOpen());
-    const content = Math.max(320, Math.min(MAX, this.width - (peeking ? PEEK_WIDTH : 0) - SIZE.gutter * 2));
+    const graph = this.view() === "graph";
+    const content = Math.max(320, Math.min(graph ? GRAPH_MAX : MAX, this.width - (peeking ? PEEK_WIDTH : 0) - SIZE.gutter * 2));
     // The terminals stage: the strip only; herdr draws the panes below it.
     if (this.sub === "terminals") {
       const tiled = isTiledLayout(layout());
@@ -174,6 +209,7 @@ export class Agents {
     const open = viewShown("agents");
     if (open && !this.shown) cx.timer.after(1, (cx) => this.load(cx));
     this.shown = open;
+    this.tickWhileMoving(open && graph, cx);
     return div()
       .id("bh-agents")
       .relative()
@@ -198,7 +234,8 @@ export class Agents {
         .items_center()
         .child(v_flex().flex_none().w(content).py(SPACE[5]).gap(GAP)
           .child(this.header(c))
-          .child(this.body(c, content))))
+          .child(this.summary(c))
+          .child(graph && this.data ? this.graph(c, content) : this.body(c, content))))
       .when(peeking, (el) => el.child(this.peek.render(c)));
   }
 
@@ -226,12 +263,141 @@ export class Agents {
     });
   }
 
-  /** How many are at work, and the way to the team's settings. */
+  /** `<project> / Team`, then List | Graph and the way to the team's settings. */
   header(c) {
-    const n = this.agents().filter((a) => a?.state && a.state !== "idle").length;
+    const view = this.view();
     return h_flex().items_center().gap(SPACE[3])
-      .child(div().flex_1().text_size(TYPE_SCALE.metadata).text_color(c.textSecondary).child(n > 0 ? `${count(n, "agent")} at work` : "Nobody is at work right now"))
-      .child(actionButton(c, "bh-agents-team", "Edit team", () => showSettings("agents"), { tone: "quiet", tooltip: "Harness, model and effort per agent" }));
+      .child(h_flex().flex_1().min_w(0).items_baseline()
+        .child(div().truncate().text_size(TYPE_SCALE.title).font_semibold().text_color(c.textPrimary).child(baseName(projectDir()) || "Project"))
+        .child(div().flex_none().text_size(TYPE_SCALE.title).text_color(c.textMuted).child(" / Team")))
+      .child(segmented(c, {
+        id: "bh-agents-view",
+        choice: true,
+        items: [{ id: "list", label: "List", on: view === "list" }, { id: "graph", label: "Graph", on: view === "graph" }],
+        onPick: (id, cx) => this.setView(id, cx),
+      }))
+      .child(actionButton(c, "bh-agents-team", "Edit team", () => showSettings("agents"), { tone: "secondary", tooltip: "Harness, model and effort per agent" }));
+  }
+
+  /** Remembers List or Graph; the graph reads its tasks' steps on the way in. */
+  setView(id, cx) {
+    if (id === this.view()) return;
+    setShared(VIEW_KEY, id);
+    if (id === "graph") cx.timer.after(1, (cx) => this.load(cx));
+    cx.notify();
+  }
+
+  /** "N agents at work · N tasks · N on the bench". */
+  summary(c) {
+    const fleet = this.agents();
+    const n = fleet.filter((a) => a?.state && a.state !== "idle").length;
+    const tasks = this.tasksInProgress(fleet).length;
+    const benched = this.bench().length;
+    return h_flex().items_baseline().flex_wrap()
+      .child(div().text_size(TYPE_SCALE.hero).font_semibold().text_color(c.textPrimary).child(n > 0 ? `${count(n, "agent")} at work` : "Nobody at work"))
+      .child(div().text_size(TYPE_SCALE.body).text_color(c.textMuted).child(` · ${count(tasks, "task")} · ${compact(benched)} on the bench`));
+  }
+
+  /** On the bench: roster agents not running, then running terminals sitting idle. */
+  bench() {
+    const rows = this.team();
+    return [...rows.filter((r) => r.running && r.state === "idle"), ...rows.filter((r) => !r.running)];
+  }
+
+  /** Runs the dots' 50ms tick while the graph is shown and something works; stops it otherwise. */
+  tickWhileMoving(on, cx) {
+    const moving = on && !reducedMotion() && this.agents().some((a) => a?.state === "working");
+    if (moving && !this.ticker) {
+      this.ticker = cx.timer.every(DOT_MS, (cx) => {
+        this.tick += 1;
+        cx.notify();
+      });
+    } else if (!moving && this.ticker) {
+      this.ticker.cancel();
+      this.ticker = null;
+    }
+    return moving;
+  }
+
+  /** The graph view: the chains and bench, and the picked agent's panel beside (or under) it. */
+  graph(c, content) {
+    const narrow = this.width < NARROW;
+    const fleet = this.agents();
+    const chains = this.tasksInProgress(fleet).map((t) => chainOf(t, fleet, this.details.get(t.id)));
+    const rows = this.team();
+    const picked = rows[this.pick] ?? null;
+    const side = this.panel && picked && !narrow;
+    const width = side ? content - PANEL_W - GAP : content;
+    const g = {
+      chains,
+      layout: graphLayout(chains, width, { stack: narrow }),
+      bench: this.bench(),
+      tick: this.tick,
+      reduced: reducedMotion(),
+      moving: Boolean(this.ticker),
+      picked: picked ? String(picked.name ?? picked.label) : null,
+      mono: monoFont(),
+      onPick: (a, cx) => this.pickAgent(a, cx),
+      onOpenTask: (t) => openThread(t.id),
+    };
+    const card = graphCard(c, width, g);
+    const panel = this.panel && picked ? detailPanel(c, narrow ? content : PANEL_W, this.panelModel(picked, chains)) : null;
+    return narrow
+      ? v_flex().w_full().gap(GAP).child(card).when(Boolean(panel), (el) => el.child(panel))
+      : h_flex().w_full().items_stretch().gap(GAP).child(card).when(Boolean(panel), (el) => el.child(panel));
+  }
+
+  /** Picks the agent a node or bench card is (by name or address) and opens the panel on it. */
+  pickAgent(a, cx) {
+    const rows = this.team();
+    const at = rows.findIndex((r) => (a.address && r.address === a.address) || String(r.name ?? r.label) === String(a.name ?? a.label));
+    if (at < 0) return;
+    this.pick = at;
+    this.panel = true;
+    cx.notify();
+  }
+
+  /** What the panel shows for an agent: its task, the lead above it, its live lines and actions. */
+  panelModel(r, chains) {
+    const name = String(r.name ?? r.label);
+    const chain = chains.find((ch) => ch.names.includes(name)) ?? null;
+    const task = this.taskOf(r.task) ?? chain?.task ?? null;
+    const parent = chain?.lead && chain.lead.name !== name ? chain.lead : null;
+    const top = /^orchestrator$/i.test(String(r.role ?? r.label ?? ""));
+    return {
+      agent: r,
+      task,
+      parent,
+      top,
+      root: projectDir(),
+      lines: this.liveLines(r),
+      mono: monoFont(),
+      onClose: (_e, cx) => {
+        this.panel = false;
+        cx.notify();
+      },
+      onOpen: () => r.address && openTerminal(r.address),
+      onMessage: (_e, cx) => r.address && this.peek?.toggle({ kind: "agent", agent: r }, cx),
+      onPause: (_e, cx) => task && this.pause(task.id, cx),
+    };
+  }
+
+  /** Up to three activity lines: its summary now, then earlier output when the peek has read it. */
+  liveLines(r) {
+    if (!r.running) return [];
+    const now = String(r.summary ?? "").trim();
+    const first = now ? [{ text: now, when: ago(r.at) }] : [];
+    const peeked = this.peek?.isOpen() && this.peek.target?.agent?.address === r.address ? this.peek.model().output ?? [] : [];
+    const earlier = [...peeked].reverse().map((o) => ({ text: String(o.text ?? "").split(/\r?\n/)[0], when: ago(o.at) })).filter((o) => o.text && o.text !== now);
+    return [...first, ...earlier].slice(0, 3);
+  }
+
+  /** Pauses a task (bh task status <id> paused), then reads the team again. */
+  pause(id, cx) {
+    cx.spawn(async (cx) => {
+      await bh(["task", "status", id, "paused"], { cwd: projectDir() });
+      this.load(cx);
+    });
   }
 
   /**

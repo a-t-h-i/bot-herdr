@@ -12,6 +12,7 @@ import { DATA, UsageError, appendJsonl, bodyText, listDir, myAddress, need, now,
 import * as Q from "./ask.mjs";
 import * as T from "./tasks.mjs";
 import * as team from "./team.mjs";
+import { terminalName } from "./home.mjs";
 import { runGit, taskCwd } from "./workspace.mjs";
 
 /** The seven states of the design language's state table, in the order Home ranks them. */
@@ -84,7 +85,8 @@ function terminalIndex(terminals) {
   const byName = new Map();
   const byAddress = new Map();
   for (const t of terminals) {
-    if (t.name) byName.set(String(t.name).toLowerCase(), t);
+    const name = terminalName(t);
+    if (name !== t.address) byName.set(String(name).toLowerCase(), t);
     byAddress.set(t.address, t);
   }
   return { byName, byAddress };
@@ -553,7 +555,7 @@ function replyTargetOf(show, terminals) {
   const name = asked ?? show.activeAgents[0] ?? (show.kind === "plan" ? show.agents[0] : null);
   if (!name) return null;
   const terminal = index.byName.get(String(name).toLowerCase()) ?? index.byAddress.get(String(name)) ?? null;
-  return { name: terminal?.name ?? name, address: terminal?.address ?? null };
+  return { name: terminal ? terminalName(terminal) : name, address: terminal?.address ?? null };
 }
 
 /** The peek: recent output lines, any open question, and who a reply goes to. */

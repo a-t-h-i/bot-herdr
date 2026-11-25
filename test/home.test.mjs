@@ -303,3 +303,22 @@ test("the checks table sync: a document without a Checks section gains one, and 
   assert.match(crlf, /\r\n## QA\r\nPASS\./);
   assert.ok(!/[^\r]\n/.test(crlf), "a Windows file keeps its line endings");
 });
+
+test("fleet names: spawn name, then a non-numeric tab title, then the address; role from the roster", () => {
+  const live = (t) => ({ agent: "claude-code", state: "live", status: "idle", cwd: EMPTY, ...t });
+  const agents = H.fleetAgents(
+    [
+      live({ address: "t60", name: "design-comments", where: "bot-herdr / Design" }),
+      live({ address: "t63", where: "bot-herdr / Orchestrator" }),
+      live({ address: "t70", where: "bot-herdr / 1" }),
+    ],
+    [],
+  );
+  const by = Object.fromEntries(agents.map((a) => [a.address, a]));
+  assert.equal(by.t60.name, "design-comments", "a name field wins over the tab title");
+  assert.equal(by.t60.role, "design");
+  assert.equal(by.t63.name, "Orchestrator");
+  assert.equal(by.t63.role, "orchestrator");
+  assert.equal(by.t70.name, "t70", "a numeric tab falls back to the address");
+  assert.equal(by.t70.role, null);
+});

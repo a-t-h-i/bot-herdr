@@ -4,7 +4,7 @@
 // issue reaches Home from the local cache only. A badge missing from a store draws nothing.
 
 import { join } from "node:path";
-import { HEADLESS } from "../../roster.js";
+import { HEADLESS, findAgent } from "../../roster.js";
 import { DATA, UsageError, listDir, readJson, readJsonl, store } from "./core.mjs";
 import { fileKey } from "./agent.mjs";
 import * as AP from "./approvals.mjs";
@@ -12,6 +12,7 @@ import * as GH from "./github.mjs";
 import * as MX from "./metrics.mjs";
 import * as Q from "./ask.mjs";
 import * as T from "./tasks.mjs";
+import { team } from "./team.mjs";
 import { compactNumber, liveTerminals, logSkipped, oneLine, threadLine, listThreads } from "./thread.mjs";
 
 const asList = (value) => (Array.isArray(value) ? value : []);
@@ -117,19 +118,35 @@ function taskOf(terminal, threads) {
   return threads.find((t) => t.path && cwd.startsWith(String(t.path).replace(/\\/g, "/")))?.id ?? null;
 }
 
+/** A terminal's readable name: its spawn name, else its herdr tab's title (not a bare number), else its address. */
+export function terminalName(t) {
+  if (typeof t.name === "string" && t.name.trim()) return t.name;
+  const where = String(t.where ?? "");
+  const tab = where.slice(where.lastIndexOf(" / ") + 3).trim();
+  return where.includes(" / ") && tab && !/^\d+$/.test(tab) ? tab : t.address;
+}
+
+/** The roster role a name maps to ("design-comments" → "design", "Orchestrator" → "orchestrator"), else null. */
+export function roleOfName(name, agents = team().agents) {
+  const word = String(name ?? "").toLowerCase();
+  return (findAgent(agents, word) ?? findAgent(agents, word.replace(/-[^-]+$/, "")))?.role ?? null;
+}
+
 /** The agents running now: who, what they are doing, and which thread it belongs to. */
 export function fleetAgents(terminals, threads, needsYou = []) {
   const needed = new Set(needsYou.map((n) => String(n.from ?? "").toLowerCase()).filter(Boolean));
+  const agents = team().agents;
   return terminals
     .filter((t) => t.state === "live" && isAgentTerminal(t))
     .map((t) => {
-      const name = t.name ?? t.address;
+      const name = terminalName(t);
       const activity = readJson(join(DATA, "activity", `${fileKey(t.address)}.json`), null);
       const state = needed.has(String(name).toLowerCase()) ? "needsYou" : t.status === "working" ? "working" : "idle";
       return {
         name: String(name),
         address: t.address,
         harness: t.agent ?? null,
+        role: roleOfName(name, agents),
         state,
         status: t.status ?? null,
         summary: activity?.line ? oneLine(activity.line) : state === "working" ? "Working" : state === "needsYou" ? "Needs you" : "Idle",
